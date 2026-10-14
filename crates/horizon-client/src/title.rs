@@ -129,9 +129,9 @@ pub struct Title {
     backup_shown: Cell<bool>,
     toast: Option<(std::time::Instant, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
-    /// The mode last drawn and when it appeared (Horizon's screen fades).
-    shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
-    /// The launcher-style opening (Horizon style, first title of the session).
+    /// The mode last drawn and its navigation start (none for the initial page).
+    shown: std::cell::Cell<(std::mem::Discriminant<Mode>, Option<std::time::Instant>)>,
+    /// The backdrop loading screen (Horizon style, first title of the session).
     pub opening: std::cell::Cell<Option<crate::front::Opening>>,
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
@@ -194,7 +194,7 @@ impl Title {
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
-            shown: std::cell::Cell::new((std::mem::discriminant(&mode), now)),
+            shown: std::cell::Cell::new((std::mem::discriminant(&mode), None)),
             mode,
             saves,
             started: now,
@@ -399,14 +399,14 @@ impl Title {
             }
         }
     }
-    /// When the current mode first appeared.
-    pub fn entered(&self) -> std::time::Instant {
+    /// When navigation reached the current mode; the initial page has no transition.
+    pub fn entered(&self) -> Option<std::time::Instant> {
         let now = std::mem::discriminant(&self.mode);
         let (mode, at) = self.shown.get();
         if mode == now {
             return at;
         }
-        let at = std::time::Instant::now();
+        let at = Some(std::time::Instant::now());
         self.shown.set((now, at));
         at
     }

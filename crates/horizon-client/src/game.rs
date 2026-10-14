@@ -9482,7 +9482,7 @@ pub fn run() -> Result<()> {
         }
         None => {
             let title = Title::new(std::env::current_dir()?.join("saves"));
-            // The launcher's opening, once per session and only in Horizon's style.
+            // The backdrop loading screen, once per session and only in Horizon's style.
             if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
                 title
                     .opening

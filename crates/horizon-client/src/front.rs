@@ -42,35 +42,16 @@ const FIELD_B: u64 = id("mp.field", 1);
 const DONE: u64 = id("mp.done", 0);
 const CANCEL_RETRY: u64 = id("mp.cancel_retry", 0);
 
-/// The launcher's opening (`launcher/src/main.rs`): the wordmark holds over
-/// the backdrop, then the interface comes in. A click or a key skips ahead.
+/// A static loading screen while the backdrop starts; input dismisses it immediately.
 #[derive(Clone, Copy, Debug)]
-pub struct Opening {
-    started: Instant,
-    reveal: Option<Instant>,
-}
+pub struct Opening;
 impl Opening {
     pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            reveal: None,
-        }
+        Self
     }
-    /// The reveal's progress, 0 to 1; `ready` says the backdrop is showing.
+    /// The interface becomes visible on the first frame that observes readiness.
     fn phase(&mut self, ready: bool) -> f32 {
-        let held = self.started.elapsed();
-        if self.reveal.is_none()
-            && ((held >= horizon_theme::OPENING_HOLD && ready)
-                || held >= horizon_theme::OPENING_MAX)
-        {
-            self.reveal = Some(Instant::now());
-        }
-        self.reveal.map_or(0.0, |at| {
-            at.elapsed().as_secs_f32() / horizon_theme::OPENING_REVEAL.as_secs_f32()
-        })
-    }
-    pub fn skip(&mut self) {
-        self.reveal.get_or_insert_with(Instant::now);
+        if ready { 1.0 } else { 0.0 }
     }
 }
 impl Default for Opening {
@@ -115,7 +96,7 @@ impl Title {
         if backdrop < 1.0 {
             ui.cold_background(1.0 - backdrop);
         }
-        let shade = t::ease_out_cubic(reveal);
+        let shade = reveal;
         // The world stays in view on the home page; deeper pages veil it more.
         let veil = if matches!(self.mode, Mode::Main) {
             horizon_theme::HOME_VEIL
@@ -128,21 +109,17 @@ impl Title {
             color::FAINT
         };
         ui.atmosphere(veil, shade);
-        let side = t::ease_out_cubic((reveal - 0.2) / 0.7);
-        let main = t::ease_out_cubic((reveal - 0.35) / 0.65);
-
-        // The sidebar slides in from the left.
-        ui.opacity = side;
-        ui.offset = (-16.0 * (1.0 - side), 0.0);
-        if side > 0.0 {
+        ui.opacity = reveal;
+        if reveal > 0.0 {
             self.sidebar(ui);
         }
-        // The content rises; each new page fades in and rises 8 over MOVE.
-        let entered = self.entered();
-        let p = t::ease_out_quint(entered.elapsed().as_secs_f32() / t::move_());
-        ui.opacity = main * p;
-        ui.offset = (0.0, 16.0 * (1.0 - main) + 8.0 * (1.0 - p));
-        if main > 0.0 {
+        // Later navigation retains its motion; the initial page appears immediately.
+        let p = self.entered().map_or(1.0, |at| {
+            t::ease_out_quint(at.elapsed().as_secs_f32() / t::move_())
+        });
+        ui.opacity = reveal * p;
+        ui.offset = (0.0, 8.0 * (1.0 - p));
+        if reveal > 0.0 {
             let x = SIDEBAR + 48.0;
             let w = (ui.w - x - 48.0).min(760.0);
             match &self.mode {
@@ -171,9 +148,7 @@ impl Title {
         ui.opacity = 1.0;
         ui.offset = (0.0, 0.0);
         if reveal < 1.0 {
-            // The wordmark rises and fades as the interface comes in.
-            let word = 1.0 - t::ease_out_cubic(reveal / 0.6);
-            ui.opacity = word;
+            // A static wordmark while the backdrop loads.
             let tw = ui.measure(Face::Display, t::WORDMARK, "horizon");
             let line = (t::WORDMARK * 1.2).round();
             ui.text_line(
@@ -181,7 +156,7 @@ impl Title {
                 t::WORDMARK,
                 line,
                 ((ui.w - tw) / 2.0).round(),
-                (ui.h - line) / 2.0 - 28.0 * (1.0 - word),
+                (ui.h - line) / 2.0,
                 color::TEXT,
                 "horizon",
             );
@@ -194,16 +169,9 @@ impl Title {
         self.opening.set(opening.filter(|_| phase < 1.0));
         phase.min(1.0)
     }
-    /// A click or key during the opening jumps to the reveal; true if it did.
+    /// A click or key dismisses the loading screen; true if it did.
     pub fn skip_opening(&self) -> bool {
-        let mut opening = self.opening.get();
-        let skipped = opening.as_mut().is_some_and(|o| {
-            let holding = o.reveal.is_none();
-            o.skip();
-            holding
-        });
-        self.opening.set(opening);
-        skipped
+        self.opening.take().is_some()
     }
     fn sidebar(&self, ui: &mut Ui) {
         let (h, muted) = (ui.h, ui.muted);

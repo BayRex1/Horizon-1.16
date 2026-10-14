@@ -57,22 +57,9 @@ struct Crash {
     copied: bool,
 }
 
-/// The opening: the wordmark holds at least `OPENING_HOLD` (until the release
-/// list is in, at most `OPENING_MAX`), then the launcher appears over `OPENING_REVEAL`.
-const OPENING_HOLD: Duration = horizon_theme::OPENING_HOLD;
-const OPENING_MAX: Duration = horizon_theme::OPENING_MAX;
-const OPENING_REVEAL: Duration = horizon_theme::OPENING_REVEAL;
-
-/// The phase of the opening at one moment: how far the reveal has gone, 0 to 1.
+/// The loading screen stays up until the release request succeeds, fails or is skipped.
 struct Opening {
-    /// Set on the first frame, so a slow start does not eat into the hold.
-    started: Option<Instant>,
-    reveal: Option<Instant>,
     focus: FocusHandle,
-}
-
-fn ease_out_cubic(x: f32) -> f32 {
-    horizon_theme::ease_out_cubic(x)
 }
 
 /// How often the launcher looks for new releases while it is open.
@@ -193,11 +180,7 @@ impl Launcher {
             opening: (!settings.skip_opening).then(|| {
                 let focus = cx.focus_handle();
                 window.focus(&focus);
-                Opening {
-                    started: None,
-                    reveal: None,
-                    focus,
-                }
+                Opening { focus }
             }),
             updates: Updates::default(),
             checked: None,
@@ -1892,7 +1875,7 @@ impl Launcher {
                     ))
                     .child(index_row(
                         n + 2,
-                        "Show the opening",
+                        "Show loading screen",
                         Some(plain("The wordmark, while the release list loads.")),
                         Some(opening.into_any_element()),
                         &t,
@@ -2591,19 +2574,20 @@ impl Render for Launcher {
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
-        // The new page fades in and rises a few pixels.
-        let content = div()
-            .relative()
-            .w_full()
-            .max_w(px(1152.))
-            .child(content)
-            .with_animation(
-                ElementId::named_usize("page", self.switches),
-                Animation::new(theme::ENTER).with_easing(ease_out_quint()),
-                |d, p| d.opacity(p).top(px(theme::RISE * (1. - p))),
-            );
-        let (reveal, held) = self.opening_phase(window);
-        let ui = ease_out_cubic((reveal - 0.3) / 0.7);
+        // Only later navigation fades in and rises; the initial page is immediate.
+        let content = div().relative().w_full().max_w(px(1152.)).child(content);
+        let content = if self.switches > 0 {
+            content
+                .with_animation(
+                    ElementId::named_usize("page", self.switches),
+                    Animation::new(theme::ENTER).with_easing(ease_out_quint()),
+                    |d, p| d.opacity(p).top(px(theme::RISE * (1. - p))),
+                )
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
+        let reveal = self.opening_phase();
         let mut root = div()
             .relative()
             .flex()
@@ -2619,8 +2603,7 @@ impl Render for Launcher {
                     .flex()
                     .flex_col()
                     .size_full()
-                    .opacity(ui)
-                    .top(px(theme::RISE * (1. - ui)))
+                    .opacity(reveal)
                     .child(self.topbar(cx))
                     .child(
                         div()
@@ -2641,24 +2624,14 @@ impl Render for Launcher {
                     .child(self.footer(cx)),
             );
         if let Some(opening) = &self.opening {
-            // The wordmark arrives letter by letter, then gives way to the launcher; a click or
-            // a key skips ahead.
-            let gone = 1. - ease_out_cubic(reveal / 0.6);
+            // A static wordmark while loading; a click or key dismisses it immediately.
             let word = div()
                 .flex()
                 .text_size(px(theme::WORDMARK.px * 0.6))
                 .line_height(px(theme::WORDMARK.px * 0.6))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(t.ink)
-                .children("horizon".chars().enumerate().map(|(i, c)| {
-                    let at = held - i as f32 * theme::STAGGER.as_secs_f32() * 1.5;
-                    let p = ease_out_cubic(at / theme::ENTER.as_secs_f32());
-                    div()
-                        .relative()
-                        .opacity(p)
-                        .top(px(theme::RISE * 2. * (1. - p)))
-                        .child(c.to_string())
-                }));
+                .child("horizon");
             root = root.child(
                 div()
                     .id("opening")
@@ -2670,27 +2643,17 @@ impl Render for Launcher {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(t.page.opacity(gone))
-                    .when(reveal == 0., |d| d.cursor_pointer())
-                    .child(
-                        div()
-                            .relative()
-                            .top(px(-24. * (1. - gone)))
-                            .opacity(gone)
-                            .child(word),
-                    )
-                    .when(reveal == 0., |d| {
-                        d.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.skip_opening();
-                            cx.notify();
-                        }))
-                        .on_key_down(cx.listener(
-                            |this, _: &KeyDownEvent, _, cx| {
-                                this.skip_opening();
-                                cx.notify();
-                            },
-                        ))
-                    }),
+                    .bg(t.page)
+                    .cursor_pointer()
+                    .child(word)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.skip_opening();
+                        cx.notify();
+                    }))
+                    .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                        this.skip_opening();
+                        cx.notify();
+                    })),
             );
         }
         root
@@ -2698,32 +2661,20 @@ impl Render for Launcher {
 }
 
 impl Launcher {
-    /// Where the opening is: the reveal's progress (1 when there is no opening) and how long
-    /// the wordmark has been showing, in seconds.
-    fn opening_phase(&mut self, window: &mut Window) -> (f32, f32) {
-        let loaded = !matches!(self.releases, Load::Loading);
-        let Some(opening) = &mut self.opening else {
-            return (1., 10.);
-        };
-        let held = opening.started.get_or_insert_with(Instant::now).elapsed();
-        if opening.reveal.is_none() && ((held >= OPENING_HOLD && loaded) || held >= OPENING_MAX) {
-            opening.reveal = Some(Instant::now());
-        }
-        let reveal = opening.reveal.map_or(0., |at| {
-            at.elapsed().as_secs_f32() / OPENING_REVEAL.as_secs_f32()
-        });
-        if reveal >= 1. {
+    /// Readiness makes controls visible immediately; a refresh does not reopen the screen.
+    fn opening_phase(&mut self) -> f32 {
+        if !matches!(self.releases, Load::Loading) {
             self.opening = None;
-            return (1., 10.);
         }
-        window.request_animation_frame();
-        (reveal, held.as_secs_f32())
+        if self.opening.is_some() {
+            0.0
+        } else {
+            1.0
+        }
     }
 
     fn skip_opening(&mut self) {
-        if let Some(opening) = &mut self.opening {
-            opening.reveal.get_or_insert_with(Instant::now);
-        }
+        self.opening = None;
     }
 }
 

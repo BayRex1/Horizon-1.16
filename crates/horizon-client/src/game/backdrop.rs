@@ -45,13 +45,13 @@ fn seed() -> i64 {
         .unwrap_or(SEED)
 }
 impl Game<'_> {
-    /// How visible the live backdrop is (0 until its first chunks are drawn).
+    /// The live backdrop appears immediately once its first chunks are drawn.
     pub(super) fn backdrop_fade(&self) -> f32 {
-        let Some(at) = self.backdrop.ready else {
-            return 0.0;
-        };
-        let x = (at.elapsed().as_secs_f32() / 1.6).clamp(0.0, 1.0);
-        x * x * (3.0 - 2.0 * x)
+        if self.backdrop.ready.is_some() {
+            1.0
+        } else {
+            0.0
+        }
     }
     /// Whether the frame should draw the backdrop world instead of the panorama.
     pub(super) fn backdrop_live(&self) -> bool {
