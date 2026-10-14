@@ -19,7 +19,6 @@ pub use tokens::{
 pub const QUICK: Duration = tokens::QUICK.duration();
 pub const MOVE: Duration = tokens::MOVE.duration();
 pub const ENTER: Duration = tokens::ENTER.duration();
-pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {

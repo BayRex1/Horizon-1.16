@@ -1,8 +1,8 @@
 //! The front-end screens in Horizon's menu style (`ui_theme`), laid out like
 //! the launcher: a 200-wide sidebar with the sliding selection (Home,
 //! Singleplayer, Multiplayer, Options), content pages with a page header,
-//! settings rows and 1px dividers, and the launcher's opening (the wordmark,
-//! then the interface). They drive the same state as the classic layouts in
+//! settings rows and 1px dividers, and a static loading wordmark followed by
+//! the interface. They drive the same state as the classic layouts in
 //! `title` and `multiplayer`; only drawing and hit testing differ. The pause
 //! menu's Horizon layout is `pause`, below.
 use crate::{

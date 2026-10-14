@@ -137,7 +137,8 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   first line under it), the client/server segmented control, the version picker and Play, then
   an index list of Resources, Minecraft folder (and the server rows). Versions and Patch notes
   are index lists with the release name as the title; Settings is an index list of switches and
-  values. The opening is the faint wordmark drawn letter by letter, then the interface arrives.
+  values. While releases load, the opening shows a static wordmark; the interface appears
+  fully on the first ready frame. Input can dismiss the loading screen immediately.
   The sunset photograph is gone: the window is the page colour, light or dark with the system.
 - **Website** (`website/`): the same page structure as before (what it is, screenshots,
   parity, launcher, patch notes, community), each section a `micro` mono label, a `display`
