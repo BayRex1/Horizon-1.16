@@ -9045,9 +9045,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
-                    if event.state == ElementState::Pressed
-                        && self.title.as_ref().is_some_and(|t| !t.skip_opening())
-                    {
+                    if event.state == ElementState::Pressed {
                         if let Some(shortcut) = self.edit_shortcut(&event) {
                             self.title_shortcut(shortcut);
                             return Ok(());
@@ -9807,12 +9805,6 @@ pub fn run() -> Result<()> {
                 std::env::current_dir()?.join("saves"),
                 &game.options.resources,
             );
-            // The backdrop loading screen, once per session and only in Horizon's style.
-            if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
-                title
-                    .opening
-                    .set(Some(horizon_client::front::Opening::new()));
-            }
             game.title = Some(title);
         }
     }

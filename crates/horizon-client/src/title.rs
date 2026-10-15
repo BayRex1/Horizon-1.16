@@ -138,9 +138,7 @@ pub struct Title {
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     /// The mode last drawn and its navigation start (none for the initial page).
     shown: std::cell::Cell<(std::mem::Discriminant<Mode>, Option<std::time::Instant>)>,
-    /// The backdrop loading screen (Horizon style, first title of the session).
     splash: Option<String>,
-    pub opening: std::cell::Cell<Option<crate::front::Opening>>,
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
 }
@@ -249,7 +247,6 @@ impl Title {
                     .subsec_nanos() as usize,
                 (today.month(), today.day()),
             ),
-            opening: std::cell::Cell::new(None),
             recent: std::cell::RefCell::new(None),
         }
     }

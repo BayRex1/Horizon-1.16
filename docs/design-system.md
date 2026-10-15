@@ -149,7 +149,8 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
 - **Game menus** (Horizon style): the title backdrop under a page-colour veil; text sidebar;
   index lists for worlds and servers; options pages as index lists of rows (label left, value
   in mono, the control right). The pause menu is a centred column of plain rows over a darker
-  veil.
+  veil. The title controls appear on the first rendered frame while the backdrop loads;
+  there is no opening wordmark or initial-page transition.
 
 ## The mark
 
