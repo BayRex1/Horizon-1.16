@@ -188,8 +188,16 @@ impl StateModels {
             variants.iter().map(|(name, _, _)| name.clone()).collect(),
         )?;
         let mut baked = BTreeMap::new();
+        // Several variants reference the same model with different rotations.
+        // Inheritance, texture aliases and geometry are identical for those
+        // variants; resolve them once per resource preparation. Keeping this
+        // cache local also makes pack/model reloads invalidate it naturally.
+        let mut resolved = BTreeMap::new();
         for (name, turns, lock) in variants {
-            let model = library.resolve(&name)?;
+            if !resolved.contains_key(&name) {
+                resolved.insert(name.clone(), library.resolve(&name)?);
+            }
+            let model = &resolved[&name];
             let faces: Vec<BakedFace> =
                 bake_block_model(&model, BlockModelTransform::new(turns, lock))?
                     .into_iter()

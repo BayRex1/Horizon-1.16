@@ -201,6 +201,36 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn rotated_variants_rebuild_geometry_after_model_change() -> Result<()> {
+        let fixture = Fixture::new(1)?;
+        let (first, _) = fixture.load(true)?;
+        let id = BlockStateId(0);
+        let position = BlockPos::new(12, 4, -9);
+        let old = first.collect(id, position)?;
+        assert!(old.len() >= 1);
+        let original = old
+            .iter()
+            .map(|(_, model)| model.faces[0].quad.clone())
+            .collect::<Vec<_>>();
+        // Replacing the model under the same resource root must not reuse the
+        // resolved geometry cached during the previous preparation.
+        fs::write(
+            fixture
+                .root
+                .join("assets/minecraft/models/block/fixture.json"),
+            r##"{"textures":{"all":"minecraft:block/fixture"},"elements":[{"from":[0,0,0],"to":[8,8,8],"faces":{"north":{"texture":"#all","cullface":"north"}}}]}"##,
+        )?;
+        let (reloaded, _) = fixture.load(true)?;
+        let new = reloaded.collect(id, position)?;
+        assert_eq!(old.len(), new.len());
+        assert!(
+            new.iter()
+                .zip(original)
+                .any(|((_, model), quad)| model.faces[0].quad != quad)
+        );
+        Ok(())
+    }
+    #[test]
     fn shared_facts_match_load_and_preserve_errors() -> Result<()> {
         let fixture = Fixture::new(1)?;
         fixture.verify()?;
