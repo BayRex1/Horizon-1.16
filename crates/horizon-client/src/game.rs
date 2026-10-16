@@ -194,7 +194,7 @@ use horizon_world::{
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use winit::{
@@ -677,7 +677,7 @@ pub struct Resources {
     ambient: horizon_client::ambience::AmbientTables,
     nether_environment: Environment,
     end_environment: Environment,
-    behaviours: Behaviours,
+    behaviours: DeferredBehaviours,
     collision: BlockCollisionRegistry<'static>,
     motion: MotionResources,
     threads: usize,
@@ -685,6 +685,87 @@ pub struct Resources {
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
+}
+struct DeferredBehaviours {
+    loaded: OnceLock<std::result::Result<Behaviours, String>>,
+    task: Mutex<Option<std::thread::JoinHandle<std::io::Result<Behaviours>>>>,
+}
+
+impl std::ops::Deref for DeferredBehaviours {
+    type Target = Behaviours;
+
+    fn deref(&self) -> &Behaviours {
+        self.loaded
+            .get()
+            .expect("block behaviours must be ready before entering a world")
+            .as_ref()
+            .expect("block behaviours failed to load")
+    }
+}
+
+impl DeferredBehaviours {
+    /// Join the startup load before any level simulation can access its tables.
+    /// The task reads the selected pack/mod root and builds the tables once.
+    fn ready_behaviours(&self) -> Result<()> {
+        if let Some(result) = self.loaded.get() {
+            return result.as_ref().map(|_| ()).map_err(|e| e.clone().into());
+        }
+        let task = self.task.lock().unwrap().take();
+        if let Some(task) = task {
+            let result = task
+                .join()
+                .map_err(|_| "block behaviour loader panicked".to_owned())
+                .and_then(|result| result.map_err(|e| e.to_string()));
+            let _ = self.loaded.set(result);
+        }
+        self.loaded
+            .get()
+            .expect("behaviour loader task missing")
+            .as_ref()
+            .map(|_| ())
+            .map_err(|e| e.clone().into())
+    }
+}
+
+impl Resources {
+    fn ready_behaviours(&self) -> Result<()> {
+        self.behaviours.ready_behaviours()
+    }
+    fn behaviours(&self) -> &Behaviours {
+        &self.behaviours
+    }
+}
+
+#[cfg(test)]
+mod deferred_behaviours_tests {
+    use super::*;
+
+    #[test]
+    fn failed_background_load_is_reported_on_each_world_entry() {
+        let deferred = DeferredBehaviours {
+            loaded: OnceLock::new(),
+            task: Mutex::new(Some(std::thread::spawn(|| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid pack data",
+                ))
+            }))),
+        };
+        assert!(
+            deferred
+                .ready_behaviours()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid pack data")
+        );
+        assert!(
+            deferred
+                .ready_behaviours()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid pack data")
+        );
+    }
 }
 /// What a resource pack reload replaces (`Minecraft.reloadResourcePacks`):
 /// block models and sprites with their meshing tables, item models,
@@ -1751,7 +1832,7 @@ impl Game<'_> {
             player_box,
             biomes: &self.res.biomes,
             seed: self.level.seed,
-            behaviours: &self.res.behaviours,
+            behaviours: self.res.behaviours(),
             items: &self.res.items,
             loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.pack.assets.registry,
@@ -1760,7 +1841,7 @@ impl Game<'_> {
             pending: &mut self.pending,
             spill: &mut self.spill,
         };
-        let result = f(&self.res.behaviours, &mut level, &mut self.block_ticks);
+        let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
         result
     }
@@ -6131,6 +6212,7 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        self.res.ready_behaviours()?;
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
@@ -10210,6 +10292,13 @@ pub fn run() -> Result<()> {
     let animate =
         horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let fog = horizon_client::fog::FogTables::load(&root, &biomes);
+    let behaviour_task = std::thread::Builder::new()
+        .name("block-behaviours".into())
+        .spawn({
+            let root = root.clone();
+            let registry_owner = registry_owner.clone();
+            move || Behaviours::load(registry_owner.registry, &root)
+        })?;
     let resources = Arc::new(Resources {
         stations,
         facts,
@@ -10231,7 +10320,10 @@ pub fn run() -> Result<()> {
         ambient: horizon_client::ambience::AmbientTables::load(&root),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
-        behaviours: Behaviours::load(registry_owner.registry, &root)?,
+        behaviours: DeferredBehaviours {
+            loaded: OnceLock::new(),
+            task: Mutex::new(Some(behaviour_task)),
+        },
         mob_types: MobTypes::load(&root)?
             .types
             .into_iter()
@@ -10301,16 +10393,20 @@ pub fn run() -> Result<()> {
         );
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
+        game.res.ready_behaviours()?;
         return game.dispense_fixture(&spec);
     }
     if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
+        game.res.ready_behaviours()?;
         return game.sculk_fixture(&spec);
     }
     if game.options.dedicated.is_some() {
+        game.res.ready_behaviours()?;
         return game.run_dedicated();
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {
+            game.res.ready_behaviours()?;
             let (address, name) = (
                 game.options.server.clone().unwrap_or_default(),
                 game.options.player_name(),

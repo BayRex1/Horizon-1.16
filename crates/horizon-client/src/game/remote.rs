@@ -169,6 +169,7 @@ impl Game<'_> {
         name: &str,
         local: Option<horizon_protocol::connection::Pipe>,
     ) -> Result<()> {
+        self.res.ready_behaviours()?;
         self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
