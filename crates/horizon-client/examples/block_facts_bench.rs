@@ -2,7 +2,7 @@
 //! cargo run --profile fast -p horizon-client --example block_facts_bench -- ROOT [SAMPLES]
 //! Use SAMPLES=1 with an OS peak-RSS wrapper; `digest` checks all facts
 //! and the shape sharing partition (including sharing between outlines and edges).
-use horizon_client::blocks::BlockFacts;
+use horizon_block_facts::BlockFacts;
 use horizon_world::{DATA_VERSION, nbt::Tag, registry::BlockRegistry};
 use serde_json::Value;
 use std::{
@@ -13,7 +13,7 @@ use std::{
     path::Path,
     time::Instant,
 };
-type Result<T> = horizon_client::Result<T>;
+type Result<T> = horizon_block_facts::Result<T>;
 
 fn tag(value: &Value) -> Result<Tag> {
     Ok(match value {
@@ -46,7 +46,7 @@ fn registry(root: &Path) -> Result<BlockRegistry> {
         ("defaults", tag(&facts["defaults"])?),
     ]))?)
 }
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let root = Path::new(
         args.first()
@@ -58,6 +58,12 @@ fn main() -> Result<()> {
         "registry_setup_ms={:.3}",
         setup.elapsed().as_secs_f64() * 1000.0
     );
+    if args.get(1).is_some_and(|s| s == "prepare") {
+        let start = Instant::now();
+        BlockFacts::prepare_cache(root)?;
+        println!("prepare_ms={:.3}", start.elapsed().as_secs_f64() * 1000.0);
+        return Ok(());
+    }
     if args.get(1).is_some_and(|s| s == "digest") {
         let facts = BlockFacts::load(root, &registry)?;
         let mut hash = DefaultHasher::new();

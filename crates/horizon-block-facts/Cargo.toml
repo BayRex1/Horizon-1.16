@@ -1,0 +1,16 @@
+[package]
+name = "horizon-block-facts"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Prepared block-state facts and their authoritative JSON fallback"
+
+[dependencies]
+horizon-world = { path = "../horizon-world" }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+postcard = { version = "1", features = ["alloc"] }
+
+[lints]
+workspace = true

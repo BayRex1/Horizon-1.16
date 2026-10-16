@@ -11,6 +11,7 @@ description = "Horizon native development client"
 horizon-assets = { path = "../horizon-assets" }
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
+horizon-block-facts = { path = "../horizon-block-facts" }
 horizon-protocol = { path = "../horizon-protocol" }
 # server.properties, eula.txt and the user lists, shared with horizon-server.
 horizon-server-files = { path = "../horizon-server-files" }

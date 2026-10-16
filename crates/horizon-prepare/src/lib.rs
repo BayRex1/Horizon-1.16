@@ -454,6 +454,8 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
         log,
     };
     steps(&run, &lock, &oracle, options.minecraft_dir.as_deref())?;
+    horizon_block_facts::BlockFacts::prepare_cache(&resources)
+        .map_err(|e| format!("precomputing block-state facts: {e}"))?;
     log(&format!(
         "Prepared Horizon native-client resources: {}",
         resources.display()
