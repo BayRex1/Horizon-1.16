@@ -2,11 +2,12 @@ use crate::Result;
 use horizon_world::{
     DATA_VERSION,
     heightmap::HeightmapState,
-    nbt::Tag,
+    nbt::{self, Tag},
     registry::{BlockRegistry, BlockStateId},
     worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::{self, File},
@@ -92,6 +93,51 @@ fn tag(value: &Value) -> Result<Tag> {
         _ => return Err(invalid("unsupported registry value").into()),
     })
 }
+/// Cache the validated NBT representation alongside the source facts. A digest
+/// of the complete source makes modified content roots and stale caches safe.
+fn registry_nbt(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<Tag> {
+    let digest = Sha256::digest(facts_bytes);
+    let cache = root.join("block-registry-cache.nbt");
+    if let Ok(bytes) = fs::read(&cache)
+        && let Ok((saved, used)) = nbt::read_network(&bytes, nbt::Limits::default())
+        && used == bytes.len()
+        && saved.get("source_sha256") == Some(&Tag::ByteArray(digest.to_vec()))
+        && let Some(registry) = saved.get("registry")
+        && BlockRegistry::from_nbt(registry).is_ok()
+    {
+        return Ok(registry.clone());
+    }
+    let states = facts["states"]
+        .as_array()
+        .ok_or_else(|| invalid("missing registry state facts"))?;
+    let registry = Tag::compound([
+        ("DataVersion", Tag::Int(DATA_VERSION)),
+        (
+            "states",
+            Tag::List(
+                states
+                    .iter()
+                    .map(|state| tag(&state[4]))
+                    .collect::<Result<_>>()?,
+            ),
+        ),
+        ("defaults", tag(&facts["defaults"])?),
+    ]);
+    // Cache only after the same validation used on the uncached path.
+    BlockRegistry::from_nbt(&registry)?;
+    let saved = Tag::compound([
+        ("source_sha256", Tag::ByteArray(digest.to_vec())),
+        ("registry", registry.clone()),
+    ]);
+    if let Ok(bytes) = nbt::write_network(&saved, nbt::Limits::default()) {
+        let temporary = root.join(format!("block-registry-cache-{}.tmp", std::process::id()));
+        if fs::write(&temporary, bytes).is_ok() {
+            let _ = fs::rename(&temporary, &cache);
+        }
+        let _ = fs::remove_file(&temporary);
+    }
+    Ok(registry)
+}
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
@@ -100,23 +146,12 @@ impl Assets {
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Horizon's pinned data version").into());
         }
-        let facts: Value = serde_json::from_slice(&fs::read(root.join("facts.json"))?)?;
+        let facts_bytes = fs::read(root.join("facts.json"))?;
+        let facts: Value = serde_json::from_slice(&facts_bytes)?;
         let states = facts["states"]
             .as_array()
             .ok_or_else(|| invalid("missing registry state facts"))?;
-        let registry = BlockRegistry::from_nbt(&Tag::compound([
-            ("DataVersion", Tag::Int(DATA_VERSION)),
-            (
-                "states",
-                Tag::List(
-                    states
-                        .iter()
-                        .map(|state| tag(&state[4]))
-                        .collect::<Result<_>>()?,
-                ),
-            ),
-            ("defaults", tag(&facts["defaults"])?),
-        ]))?;
+        let registry = BlockRegistry::from_nbt(&registry_nbt(root, &facts_bytes, &facts)?)?;
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -257,5 +292,34 @@ impl Assets {
             sprite_mips: sprites.mips,
             blocks_fluid_flow,
         })
+    }
+}
+
+#[cfg(test)]
+mod registry_cache_tests {
+    use super::*;
+
+    #[test]
+    fn cache_preserves_registry_ids_and_invalidates_modified_facts() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-registry-cache-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let first = br#"{"states":[["minecraft:stone",false,false,0,{"id":"minecraft:stone"}]],"defaults":{"minecraft:stone":0}}"#;
+        let second = br#"{"states":[["minecraft:dirt",false,false,0,{"id":"minecraft:dirt"}]],"defaults":{"minecraft:dirt":0}}"#;
+        for source in [first.as_slice(), first.as_slice(), second.as_slice()] {
+            let facts: Value = serde_json::from_slice(source).unwrap();
+            let registry =
+                BlockRegistry::from_nbt(&registry_nbt(&root, source, &facts).unwrap()).unwrap();
+            let expected = if source == second {
+                "minecraft:dirt"
+            } else {
+                "minecraft:stone"
+            };
+            assert_eq!(registry.default_state(expected), Some(BlockStateId(0)));
+        }
+        let invalid = br#"{"states":[["minecraft:stone",false,false,0,{"id":"minecraft:stone"}]],"defaults":{"minecraft:stone":1}}"#;
+        let facts: Value = serde_json::from_slice(invalid).unwrap();
+        assert!(registry_nbt(&root, invalid, &facts).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }
