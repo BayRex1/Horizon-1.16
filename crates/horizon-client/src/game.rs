@@ -670,7 +670,9 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
     providers: Providers,
-    block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
+    block_entity_render: std::sync::OnceLock<
+        Result<horizon_client::block_entity_render::BlockEntityRenderer, String>,
+    >,
     animate: horizon_client::animate_tick::AnimateTables,
     fog: horizon_client::fog::FogTables,
     music: horizon_client::music::MusicTables,
@@ -5561,20 +5563,29 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            if self.entity_culler.is_some() {
-                for block in visible {
-                    let start = out.len();
-                    self.res
-                        .block_entity_render
-                        .render(&scene, std::iter::once(block), &mut out);
-                    if !off_screen(block.1) {
-                        self.cull_entity_vertices(&mut out, start);
-                    }
+            let block_entity_renderer = self.res.block_entity_render.get_or_init(|| {
+                let loaded = horizon_client::block_entity_render::BlockEntityRenderer::load(
+                    &self.options.resources,
+                    self.pack.assets.registry,
+                )
+                .map_err(|err| err.to_string());
+                if let Err(err) = &loaded {
+                    log::error!("Block entity rendering resources failed: {err}");
                 }
-            } else {
-                self.res
-                    .block_entity_render
-                    .render(&scene, visible, &mut out);
+                loaded
+            });
+            if let Ok(block_entity_renderer) = block_entity_renderer {
+                if self.entity_culler.is_some() {
+                    for block in visible {
+                        let start = out.len();
+                        block_entity_renderer.render(&scene, std::iter::once(block), &mut out);
+                        if !off_screen(block.1) {
+                            self.cull_entity_vertices(&mut out, start);
+                        }
+                    }
+                } else {
+                    block_entity_renderer.render(&scene, visible, &mut out);
+                }
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
@@ -10226,10 +10237,7 @@ pub fn run() -> Result<()> {
         collision,
         motion,
         providers: Providers::load(&root),
-        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
-            &root,
-            registry_owner.registry,
-        )?,
+        block_entity_render: std::sync::OnceLock::new(),
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(&root),
