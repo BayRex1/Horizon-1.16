@@ -707,20 +707,20 @@ impl DeferredBehaviours {
     /// Join the startup load before any level simulation can access its tables.
     /// The task reads the selected pack/mod root and builds the tables once.
     fn ready_behaviours(&self) -> Result<()> {
-        if let Some(result) = self.loaded.get() {
-            return result.as_ref().map(|_| ()).map_err(|e| e.clone().into());
-        }
-        let task = self.task.lock().unwrap().take();
-        if let Some(task) = task {
-            let result = task
-                .join()
-                .map_err(|_| "block behaviour loader panicked".to_owned())
-                .and_then(|result| result.map_err(|e| e.to_string()));
-            let _ = self.loaded.set(result);
-        }
         self.loaded
-            .get()
-            .expect("behaviour loader task missing")
+            .get_or_init(|| {
+                // Only one caller may take the handle. Other callers wait for
+                // this result rather than observing an empty task slot.
+                let task = self
+                    .task
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("loader task missing");
+                task.join()
+                    .map_err(|_| "block behaviour loader panicked".to_owned())
+                    .and_then(|result| result.map_err(|e| e.to_string()))
+            })
             .as_ref()
             .map(|_| ())
             .map_err(|e| e.clone().into())
@@ -739,6 +739,7 @@ impl Resources {
 #[cfg(test)]
 mod deferred_behaviours_tests {
     use super::*;
+    use std::sync::Barrier;
 
     #[test]
     fn failed_background_load_is_reported_on_each_world_entry() {
@@ -765,6 +766,55 @@ mod deferred_behaviours_tests {
                 .to_string()
                 .contains("invalid pack data")
         );
+    }
+
+    #[test]
+    fn simultaneous_world_entries_share_the_failed_load() {
+        let deferred = Arc::new(DeferredBehaviours {
+            loaded: OnceLock::new(),
+            task: Mutex::new(Some(std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "broken behaviour pack",
+                ))
+            }))),
+        });
+        let barrier = Arc::new(Barrier::new(3));
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let deferred = deferred.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    let error = deferred.ready_behaviours().unwrap_err();
+                    assert!(error.to_string().contains("broken behaviour pack"));
+                });
+            }
+            barrier.wait();
+        });
+        assert!(deferred.ready_behaviours().is_err());
+    }
+
+    #[test]
+    fn panicked_background_loader_reports_the_same_error_on_retry() {
+        let deferred = DeferredBehaviours {
+            loaded: OnceLock::new(),
+            task: Mutex::new(Some(std::thread::spawn(
+                || -> std::io::Result<Behaviours> {
+                    panic!("corrupt behaviour data");
+                },
+            ))),
+        };
+        for _ in 0..2 {
+            assert!(
+                deferred
+                    .ready_behaviours()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("panicked")
+            );
+        }
     }
 }
 /// What a resource pack reload replaces (`Minecraft.reloadResourcePacks`):
