@@ -76,6 +76,9 @@ pub enum UnaryOp {
     },
 }
 impl UnaryOp {
+    // Elementwise application; inlining lets the bulk loop hoist the match out
+    // and vectorize (measured several times faster than an out-of-line call).
+    #[inline(always)]
     pub(super) fn apply(self, value: f32, bulk: bool) -> f32 {
         match self {
             Self::Abs => value.abs(),
@@ -138,6 +141,57 @@ impl UnaryOp {
             }
         }
     }
+
+    /// Applies the operation to every element of a volume in place.
+    ///
+    /// Matching on the operation once, outside the loop, lets the compiler emit
+    /// one tight (vectorizable) loop per operation instead of re-dispatching on
+    /// the enum for every element. Element results are identical to
+    /// `apply(value, true)`; `applies_volume_like_elementwise` guards that for
+    /// every operation. The occasional operations fall back to the shared
+    /// elementwise implementation.
+    pub(super) fn apply_volume(self, buffer: &mut [f32]) {
+        match self {
+            Self::Abs => buffer.iter_mut().for_each(|value| *value = value.abs()),
+            Self::Negate => buffer.iter_mut().for_each(|value| *value = -*value),
+            Self::Square => buffer.iter_mut().for_each(|value| *value = *value * *value),
+            Self::Cube => buffer
+                .iter_mut()
+                .for_each(|value| *value = *value * *value * *value),
+            Self::Add(right) => buffer.iter_mut().for_each(|value| *value += right),
+            Self::SubtractFrom(left) => buffer.iter_mut().for_each(|value| *value = left - *value),
+            Self::Multiply(right) => buffer.iter_mut().for_each(|value| *value *= right),
+            Self::DivideInto(left) => buffer.iter_mut().for_each(|value| *value = left / *value),
+            Self::Minimum(right) => buffer.iter_mut().for_each(|value| {
+                if right < *value {
+                    *value = right;
+                }
+            }),
+            Self::Maximum(right) => buffer.iter_mut().for_each(|value| {
+                if right > *value {
+                    *value = right;
+                }
+            }),
+            Self::Clamp { min, max } => buffer
+                .iter_mut()
+                .for_each(|value| *value = clamp(*value, min, max)),
+            Self::ConstantRangeChoice {
+                min_inclusive,
+                max_exclusive,
+                inside,
+                outside,
+            } => buffer.iter_mut().for_each(|value| {
+                *value = if *value >= min_inclusive && *value < max_exclusive {
+                    inside
+                } else {
+                    outside
+                };
+            }),
+            operation => buffer
+                .iter_mut()
+                .for_each(|value| *value = operation.apply(*value, true)),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct UnarySampler {
@@ -162,9 +216,7 @@ impl DensitySampler for UnarySampler {
     ) -> Result<(), SampleError> {
         check_buffer(buffer, volume)?;
         self.input.sample_volume(context, buffer, volume)?;
-        for value in buffer {
-            *value = self.operation.apply(*value, true);
-        }
+        self.operation.apply_volume(buffer);
         Ok(())
     }
 }
@@ -181,6 +233,7 @@ pub enum BinaryOp {
     Maximum { right_max: f32 },
 }
 impl BinaryOp {
+    #[inline(always)]
     fn apply(self, left: f32, right: f32, bulk: bool) -> f32 {
         match self {
             Self::Add => left + right,
@@ -201,6 +254,28 @@ impl BinaryOp {
                     java_max(left, right)
                 }
             }
+        }
+    }
+
+    /// Applies the operation to two equal-length slices, writing into `left`.
+    /// As with [`UnaryOp::apply_volume`], matching once lets each operation
+    /// vectorize; results match `apply(l, r, true)` elementwise.
+    pub(super) fn apply_volume(self, left: &mut [f32], right: &[f32]) {
+        match self {
+            Self::Add => left.iter_mut().zip(right).for_each(|(l, r)| *l += r),
+            Self::Subtract => left.iter_mut().zip(right).for_each(|(l, r)| *l -= r),
+            Self::Multiply => left.iter_mut().zip(right).for_each(|(l, r)| *l *= r),
+            Self::Divide => left.iter_mut().zip(right).for_each(|(l, r)| *l /= r),
+            Self::Minimum { .. } => left.iter_mut().zip(right).for_each(|(l, r)| {
+                if *r < *l {
+                    *l = *r;
+                }
+            }),
+            Self::Maximum { .. } => left.iter_mut().zip(right).for_each(|(l, r)| {
+                if *r > *l {
+                    *l = *r;
+                }
+            }),
         }
     }
 }
@@ -239,10 +314,112 @@ impl DensitySampler for BinarySampler {
         self.left.sample_volume(context, buffer, volume)?;
         context.with_buffer(volume.size(), |context, right| {
             self.right.sample_volume(context, right, volume)?;
-            for (left, right) in buffer.iter_mut().zip(right) {
-                *left = self.operation.apply(*left, *right, true);
-            }
+            self.operation.apply_volume(buffer, right);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unary_operations() -> Vec<UnaryOp> {
+        vec![
+            UnaryOp::Abs,
+            UnaryOp::Negate,
+            UnaryOp::Square,
+            UnaryOp::Cube,
+            UnaryOp::Sqrt,
+            UnaryOp::Log,
+            UnaryOp::PowerBase(2.5),
+            UnaryOp::PowerExponent(1.5),
+            UnaryOp::Reciprocal,
+            UnaryOp::Sign,
+            UnaryOp::Squeeze,
+            UnaryOp::LeakyRelu(0.5),
+            UnaryOp::Add(3.0),
+            UnaryOp::SubtractFrom(5.0),
+            UnaryOp::Multiply(-2.0),
+            UnaryOp::DivideInto(7.0),
+            UnaryOp::Minimum(0.25),
+            UnaryOp::Maximum(-0.5),
+            UnaryOp::ConstantRangeChoice {
+                min_inclusive: -1.0,
+                max_exclusive: 1.0,
+                inside: 4.0,
+                outside: -4.0,
+            },
+            UnaryOp::Clamp {
+                min: -0.5,
+                max: 0.5,
+            },
+        ]
+    }
+
+    const LEFT: [f32; 12] = [
+        f32::NEG_INFINITY,
+        -3.0,
+        -1.0,
+        -0.0,
+        0.0,
+        0.5,
+        1.0,
+        2.0,
+        3.0,
+        0.25,
+        f32::INFINITY,
+        f32::NAN,
+    ];
+    const RIGHT: [f32; 12] = [
+        -2.0,
+        -0.5,
+        0.0,
+        0.0,
+        0.25,
+        1.0,
+        1.0,
+        -1.0,
+        4.0,
+        f32::INFINITY,
+        f32::NAN,
+        3.0,
+    ];
+
+    #[test]
+    fn applies_volume_like_elementwise() {
+        for operation in unary_operations() {
+            let expected: Vec<u32> = LEFT
+                .iter()
+                .map(|&v| operation.apply(v, true).to_bits())
+                .collect();
+            let mut buffer = LEFT;
+            operation.apply_volume(&mut buffer);
+            let got: Vec<u32> = buffer.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(got, expected, "unary {operation:?}");
+        }
+    }
+
+    #[test]
+    fn applies_binary_volume_like_elementwise() {
+        let operations = [
+            BinaryOp::Add,
+            BinaryOp::Subtract,
+            BinaryOp::Multiply,
+            BinaryOp::Divide,
+            BinaryOp::Minimum { right_min: 0.0 },
+            BinaryOp::Maximum { right_max: 0.0 },
+        ];
+        for operation in operations {
+            let expected: Vec<u32> = LEFT
+                .iter()
+                .zip(&RIGHT)
+                .map(|(&l, &r)| operation.apply(l, r, true).to_bits())
+                .collect();
+            let mut buffer = LEFT;
+            operation.apply_volume(&mut buffer, &RIGHT);
+            let got: Vec<u32> = buffer.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(got, expected, "binary {operation:?}");
+        }
     }
 }
