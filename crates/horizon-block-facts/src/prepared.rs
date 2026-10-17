@@ -5,10 +5,12 @@ use crate::Result;
 use horizon_world::{DATA_VERSION, nbt::Tag, registry::BlockRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc, time::UNIX_EPOCH};
+use sha2::{Digest, Sha256};
+use std::{collections::HashMap, fs, io::Read, path::Path, sync::Arc, time::UNIX_EPOCH};
 
 const FILE: &str = "gameplay-facts-prepared.bin";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+const MAGIC: &[u8; 4] = b"HBF2";
 const SOURCES: [&str; 3] = ["facts.json", "gameplay-facts.json", "block-behaviours.json"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +43,7 @@ fn stamps(root: &Path) -> Result<[Stamp; 3]> {
 struct Prepared {
     version: u32,
     stamps: [Stamp; 3],
+    source_hashes: [[u8; 32]; 3],
     air: u32,
     // The shape indices preserve the original sharing partition, including
     // distinct fallback shapes with equal geometry.
@@ -56,6 +59,42 @@ fn source_stamps(root: &Path) -> Option<[Stamp; 3]> {
     stamps(root).ok()
 }
 
+fn source_hashes(root: &Path) -> Result<[[u8; 32]; 3]> {
+    let mut hashes = [[0; 32]; 3];
+    for (index, source) in SOURCES.iter().enumerate() {
+        let mut file = fs::File::open(root.join(source))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0; 1 << 16];
+        loop {
+            let n = file.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+        }
+        hashes[index] = hasher.finalize().into();
+    }
+    Ok(hashes)
+}
+
+fn decode(bytes: &[u8]) -> Option<Prepared> {
+    let body = bytes.strip_prefix(MAGIC)?;
+    let (checksum, payload) = body.split_at_checked(32)?;
+    if Sha256::digest(payload).as_slice() != checksum {
+        return None;
+    }
+    postcard::from_bytes(payload).ok()
+}
+
+fn encode(prepared: &Prepared) -> Result<Vec<u8>> {
+    let payload = postcard::to_allocvec(prepared)?;
+    let mut bytes = Vec::with_capacity(MAGIC.len() + 32 + payload.len());
+    bytes.extend_from_slice(MAGIC);
+    bytes.extend_from_slice(&Sha256::digest(&payload));
+    bytes.extend_from_slice(&payload);
+    Ok(bytes)
+}
+
 pub(super) fn load(root: &Path, registry: &BlockRegistry) -> Result<Option<BlockFacts>> {
     let Some(stamps) = source_stamps(root) else {
         return Ok(None);
@@ -63,11 +102,12 @@ pub(super) fn load(root: &Path, registry: &BlockRegistry) -> Result<Option<Block
     let Ok(bytes) = fs::read(root.join(FILE)) else {
         return Ok(None);
     };
-    let Ok(mut saved) = postcard::from_bytes::<Prepared>(&bytes) else {
+    let Some(mut saved) = decode(&bytes) else {
         return Ok(None);
     };
     if saved.version != VERSION
         || saved.stamps != stamps
+        || saved.source_hashes != source_hashes(root)?
         || saved.states.len() != registry.len()
         || saved.shape_ids.len() != registry.len()
         || saved.air as usize >= registry.len()
@@ -143,8 +183,11 @@ pub(super) fn prepare(root: &Path) -> Result<()> {
     // reconstruct the 35k-state registry just to find an unchanged cache.
     if let Some(current) = source_stamps(root) {
         if let Ok(bytes) = fs::read(root.join(FILE)) {
-            if let Ok(saved) = postcard::from_bytes::<Prepared>(&bytes) {
-                if saved.version == VERSION && saved.stamps == current {
+            if let Some(saved) = decode(&bytes) {
+                if saved.version == VERSION
+                    && saved.stamps == current
+                    && saved.source_hashes == source_hashes(root)?
+                {
                     return Ok(());
                 }
             }
@@ -176,12 +219,13 @@ pub(super) fn prepare(root: &Path) -> Result<()> {
     let prepared = Prepared {
         version: VERSION,
         stamps: stamps(root)?,
+        source_hashes: source_hashes(root)?,
         air: facts.air.0,
         shapes,
         shape_ids,
         states,
     };
-    let data = postcard::to_allocvec(&prepared)?;
+    let data = encode(&prepared)?;
     let temporary = root.join(format!("{FILE}.tmp"));
     fs::write(&temporary, data)?;
     let destination = root.join(FILE);

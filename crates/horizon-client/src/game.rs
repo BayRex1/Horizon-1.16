@@ -205,6 +205,19 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
+// Enabled only for reproducible startup profiling. Uses a single monotonic
+// clock across resource loading, application construction, and first frame.
+static STARTUP_PROFILE_CLOCK: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn startup_mark(name: &str, start: Instant) {
+    if std::env::var_os("HORIZON_STARTUP_PROFILE").is_some() {
+        eprintln!(
+            "HORIZON_STARTUP_PHASE {name} {:.3}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
 #[derive(Clone)]
 struct Options {
     resources: PathBuf,
@@ -9709,6 +9722,9 @@ impl ApplicationHandler for Game<'_> {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
                         self.debug_charts.frame_times.log(elapsed.as_nanos() as i64);
                         if self.frames == 0 {
+                            if let Some(start) = STARTUP_PROFILE_CLOCK.get() {
+                                startup_mark("first_frame", *start);
+                            }
                             // The launcher times Play to this line (launcher/src/perf.rs).
                             log::info!(
                                 "Horizon: first frame after {} ms",
@@ -10136,6 +10152,9 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
     let started = Instant::now();
+    if std::env::var_os("HORIZON_STARTUP_PROFILE").is_some() {
+        let _ = STARTUP_PROFILE_CLOCK.set(started);
+    }
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
@@ -10145,6 +10164,7 @@ pub fn run() -> Result<()> {
         &early_settings.mods.enabled,
         &options.dev_mods,
     );
+    startup_mark("resource_root", started);
     let assets = match Assets::load(&options.resources) {
         Ok(assets) => assets,
         // Minecraft.rollbackResourcePacks: the packs break loading, start
@@ -10163,8 +10183,10 @@ pub fn run() -> Result<()> {
     };
     let root = options.resources.clone();
     let assets = Arc::new(assets);
+    startup_mark("assets", started);
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     let facts = BlockFacts::load(&root, assets.registry)?;
+    startup_mark("block_facts", started);
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
@@ -10192,6 +10214,7 @@ pub fn run() -> Result<()> {
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()
     );
+    startup_mark("resource_tables", started);
     let threads = early_settings.horizon.worker_threads();
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
@@ -10256,6 +10279,7 @@ pub fn run() -> Result<()> {
         settings.render_distance = d;
     }
     let mut game = Game::new(&resources, pack, atlas, options, settings, audio)?;
+    startup_mark("game_constructed", started);
     game.ui.vanilla_root = vanilla_root;
     if game.options.benchmark.is_some() {
         // The same conditions on every machine: no VSync, no frame cap, no

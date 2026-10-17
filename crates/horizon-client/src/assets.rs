@@ -94,6 +94,7 @@ fn tag(value: &Value) -> Result<Tag> {
 }
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
+        let registry_started = std::time::Instant::now();
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
             root.join("horizon-resources.json"),
         )?))?;
@@ -117,6 +118,12 @@ impl Assets {
             ),
             ("defaults", tag(&facts["defaults"])?),
         ]))?;
+        if std::env::var_os("HORIZON_STARTUP_PROFILE").is_some() {
+            eprintln!(
+                "HORIZON_STARTUP_PHASE registry {:.3}",
+                registry_started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();

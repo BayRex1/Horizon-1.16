@@ -1,0 +1,379 @@
+{
+  "methodology": "two optimized binaries, one Xvfb, --frames 1 --offscreen",
+  "cache_cold_definition": "best-effort POSIX_FADV_DONTNEED for listed resources and binary",
+  "cache_warm_definition": "no eviction between trials (separate client processes)",
+  "binary_paths": {
+    "baseline": "/srv/bob-data/horizon/.local/block-facts-baseline-client",
+    "optimized": "/srv/bob-data/horizon/.local/block-facts-optimized-client"
+  },
+  "resources": "/srv/bob-data/horizon/.worktrees/precomputed-block-facts/.local/block-facts-startup-resources",
+  "samples": [
+    {
+      "revision": "baseline",
+      "mode": "cold",
+      "repeat": 0,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 8.861,
+        "registry": 420.409,
+        "assets": 966.886,
+        "block_facts": 1653.729,
+        "resource_tables": 3130.391,
+        "game_constructed": 5704.382,
+        "first_frame": 6797.251
+      },
+      "times_ms": {
+        "registry_ms": 420.409,
+        "resource_root_ms": 8.861,
+        "assets_ms": 958.025,
+        "block_facts_ms": 686.8430000000001,
+        "remaining_resource_ms": 1476.662,
+        "construct_ms": 2573.9909999999995,
+        "first_frame_ms": 6797.251,
+        "process_wall_ms": 7063.808178994805
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "cold",
+      "repeat": 0,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 11.707,
+        "registry": 411.841,
+        "assets": 2312.324,
+        "block_facts": 2659.21,
+        "resource_tables": 5198.004,
+        "game_constructed": 8919.275,
+        "first_frame": 10068.565
+      },
+      "times_ms": {
+        "registry_ms": 411.841,
+        "resource_root_ms": 11.707,
+        "assets_ms": 2300.617,
+        "block_facts_ms": 346.88599999999997,
+        "remaining_resource_ms": 2538.794,
+        "construct_ms": 3721.2709999999997,
+        "first_frame_ms": 10068.565,
+        "process_wall_ms": 10487.678313002107
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "cold",
+      "repeat": 1,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 13.363,
+        "registry": 430.022,
+        "assets": 2773.055,
+        "block_facts": 3283.528,
+        "resource_tables": 12115.498,
+        "game_constructed": 18286.162,
+        "first_frame": 19954.312
+      },
+      "times_ms": {
+        "registry_ms": 430.022,
+        "resource_root_ms": 13.363,
+        "assets_ms": 2759.692,
+        "block_facts_ms": 510.47299999999996,
+        "remaining_resource_ms": 8831.97,
+        "construct_ms": 6170.664000000001,
+        "first_frame_ms": 19954.312,
+        "process_wall_ms": 20413.246904994594
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "cold",
+      "repeat": 1,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 142.471,
+        "registry": 901.393,
+        "assets": 8551.452,
+        "block_facts": 9358.551,
+        "resource_tables": 13170.461,
+        "game_constructed": 16669.515,
+        "first_frame": 17614.786
+      },
+      "times_ms": {
+        "registry_ms": 901.393,
+        "resource_root_ms": 142.471,
+        "assets_ms": 8408.981,
+        "block_facts_ms": 807.0990000000002,
+        "remaining_resource_ms": 3811.91,
+        "construct_ms": 3499.054,
+        "first_frame_ms": 17614.786,
+        "process_wall_ms": 18550.528617000964
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "cold",
+      "repeat": 2,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 31.177,
+        "registry": 438.165,
+        "assets": 3298.944,
+        "block_facts": 4138.173,
+        "resource_tables": 10152.848,
+        "game_constructed": 13132.366,
+        "first_frame": 13644.24
+      },
+      "times_ms": {
+        "registry_ms": 438.165,
+        "resource_root_ms": 31.177,
+        "assets_ms": 3267.767,
+        "block_facts_ms": 839.2289999999998,
+        "remaining_resource_ms": 6014.675,
+        "construct_ms": 2979.518,
+        "first_frame_ms": 13644.24,
+        "process_wall_ms": 14612.613630000851
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "cold",
+      "repeat": 2,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 55.311,
+        "registry": 487.995,
+        "assets": 3507.386,
+        "block_facts": 3849.812,
+        "resource_tables": 4993.092,
+        "game_constructed": 7452.525,
+        "first_frame": 7897.206
+      },
+      "times_ms": {
+        "registry_ms": 487.995,
+        "resource_root_ms": 55.311,
+        "assets_ms": 3452.075,
+        "block_facts_ms": 342.42599999999993,
+        "remaining_resource_ms": 1143.2799999999997,
+        "construct_ms": 2459.433,
+        "first_frame_ms": 7897.206,
+        "process_wall_ms": 8304.273964000458
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "warm",
+      "repeat": 0,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.406,
+        "registry": 323.294,
+        "assets": 686.697,
+        "block_facts": 1123.667,
+        "resource_tables": 2436.659,
+        "game_constructed": 4782.087,
+        "first_frame": 5074.557
+      },
+      "times_ms": {
+        "registry_ms": 323.294,
+        "resource_root_ms": 0.406,
+        "assets_ms": 686.291,
+        "block_facts_ms": 436.9699999999999,
+        "remaining_resource_ms": 1312.9920000000002,
+        "construct_ms": 2345.4280000000003,
+        "first_frame_ms": 5074.557,
+        "process_wall_ms": 5333.457030996215
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "warm",
+      "repeat": 0,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.402,
+        "registry": 314.988,
+        "assets": 654.417,
+        "block_facts": 727.952,
+        "resource_tables": 1754.854,
+        "game_constructed": 4117.369,
+        "first_frame": 4437.687
+      },
+      "times_ms": {
+        "registry_ms": 314.988,
+        "resource_root_ms": 0.402,
+        "assets_ms": 654.015,
+        "block_facts_ms": 73.53499999999997,
+        "remaining_resource_ms": 1026.902,
+        "construct_ms": 2362.5149999999994,
+        "first_frame_ms": 4437.687,
+        "process_wall_ms": 4701.575917002629
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "warm",
+      "repeat": 1,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.431,
+        "registry": 310.062,
+        "assets": 666.899,
+        "block_facts": 750.51,
+        "resource_tables": 1775.464,
+        "game_constructed": 4209.106,
+        "first_frame": 4518.025
+      },
+      "times_ms": {
+        "registry_ms": 310.062,
+        "resource_root_ms": 0.431,
+        "assets_ms": 666.468,
+        "block_facts_ms": 83.61099999999999,
+        "remaining_resource_ms": 1024.954,
+        "construct_ms": 2433.642,
+        "first_frame_ms": 4518.025,
+        "process_wall_ms": 4765.22171599936
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "warm",
+      "repeat": 1,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.452,
+        "registry": 297.477,
+        "assets": 621.076,
+        "block_facts": 1079.471,
+        "resource_tables": 2268.918,
+        "game_constructed": 4536.858,
+        "first_frame": 4889.179
+      },
+      "times_ms": {
+        "registry_ms": 297.477,
+        "resource_root_ms": 0.452,
+        "assets_ms": 620.624,
+        "block_facts_ms": 458.395,
+        "remaining_resource_ms": 1189.4470000000001,
+        "construct_ms": 2267.94,
+        "first_frame_ms": 4889.179,
+        "process_wall_ms": 5320.587845999398
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "warm",
+      "repeat": 2,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.433,
+        "registry": 338.337,
+        "assets": 754.575,
+        "block_facts": 1235.574,
+        "resource_tables": 2806.36,
+        "game_constructed": 5376.79,
+        "first_frame": 5689.181
+      },
+      "times_ms": {
+        "registry_ms": 338.337,
+        "resource_root_ms": 0.433,
+        "assets_ms": 754.142,
+        "block_facts_ms": 480.999,
+        "remaining_resource_ms": 1570.786,
+        "construct_ms": 2570.43,
+        "first_frame_ms": 5689.181,
+        "process_wall_ms": 5953.33073099755
+      }
+    },
+    {
+      "revision": "optimized",
+      "mode": "warm",
+      "repeat": 2,
+      "ok": true,
+      "phases_ms": {
+        "resource_root": 0.427,
+        "registry": 319.491,
+        "assets": 702.921,
+        "block_facts": 790.054,
+        "resource_tables": 1867.289,
+        "game_constructed": 4362.32,
+        "first_frame": 4691.921
+      },
+      "times_ms": {
+        "registry_ms": 319.491,
+        "resource_root_ms": 0.427,
+        "assets_ms": 702.494,
+        "block_facts_ms": 87.13299999999992,
+        "remaining_resource_ms": 1077.2350000000001,
+        "construct_ms": 2495.031,
+        "first_frame_ms": 4691.921,
+        "process_wall_ms": 5188.233888999093
+      }
+    }
+  ],
+  "medians_ms": {
+    "cold_baseline": {
+      "registry_ms": 438.165,
+      "resource_root_ms": 31.177,
+      "assets_ms": 3267.767,
+      "block_facts_ms": 807.099,
+      "remaining_resource_ms": 3811.91,
+      "construct_ms": 2979.518,
+      "first_frame_ms": 13644.24,
+      "process_wall_ms": 14612.614
+    },
+    "cold_optimized": {
+      "registry_ms": 430.022,
+      "resource_root_ms": 13.363,
+      "assets_ms": 2759.692,
+      "block_facts_ms": 346.886,
+      "remaining_resource_ms": 2538.794,
+      "construct_ms": 3721.271,
+      "first_frame_ms": 10068.565,
+      "process_wall_ms": 10487.678
+    },
+    "warm_baseline": {
+      "registry_ms": 323.294,
+      "resource_root_ms": 0.433,
+      "assets_ms": 686.291,
+      "block_facts_ms": 458.395,
+      "remaining_resource_ms": 1312.992,
+      "construct_ms": 2345.428,
+      "first_frame_ms": 5074.557,
+      "process_wall_ms": 5333.457
+    },
+    "warm_optimized": {
+      "registry_ms": 314.988,
+      "resource_root_ms": 0.427,
+      "assets_ms": 666.468,
+      "block_facts_ms": 83.611,
+      "remaining_resource_ms": 1026.902,
+      "construct_ms": 2433.642,
+      "first_frame_ms": 4518.025,
+      "process_wall_ms": 4765.222
+    }
+  },
+  "binary_sha256": {
+    "baseline": "f7f715ec2c3b6e229256a8f8f50fcf05d6f7853b989da717f93ea11f4f599c12",
+    "optimized": "080c2f59914ec54b73edf81af4b016cae50495e00bc4d62dc8830c2f9eeb6473"
+  },
+  "source_sha256": {
+    "facts.json": "1d24883ee807b0b71473f0bbf8ed548ddaf712148caeb3fcc7aa13ab973a97b0",
+    "gameplay-facts.json": "dc5b038007a46acbed8d93dbb8578a67d67a9bad56376af997d5d315076285cd",
+    "block-behaviours.json": "485a4542ac64ef6b1e61111c77f4e11ae4906225319f1ccbdcaf1a3ea5682a7d"
+  },
+  "system": {
+    "platform": "Linux-7.2.8-zen1-2-zen-x86_64-with-glibc2.44",
+    "python": "3.14.7"
+  },
+  "resource_preparation": {
+    "generate": {
+      "registry_setup_ms": 340.5,
+      "cache_prepare_ms": 878.586,
+      "process_wall_ms": 1292.553
+    },
+    "unchanged": {
+      "registry_setup_ms": 324.958,
+      "cache_prepare_ms": 75.169,
+      "process_wall_ms": 445.019
+    }
+  }
+}

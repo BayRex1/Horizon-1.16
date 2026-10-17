@@ -49,6 +49,15 @@ fn tags_merge_without_repeats() {
 }
 
 fn prepared() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("HORIZON_TEST_RESOURCES") {
+        let path = PathBuf::from(value);
+        assert!(
+            path.join("gameplay-facts.json").exists(),
+            "HORIZON_TEST_RESOURCES has no gameplay facts: {}",
+            path.display()
+        );
+        return Some(path);
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
     root.join("gameplay-facts.json").exists().then_some(root)
 }

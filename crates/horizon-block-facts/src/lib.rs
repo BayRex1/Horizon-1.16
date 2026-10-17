@@ -116,7 +116,13 @@ pub struct BlockFacts {
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
         if let Some(facts) = prepared::load(root, registry)? {
+            if std::env::var_os("HORIZON_FACTS_SOURCE").is_some() {
+                eprintln!("HORIZON_FACTS_SOURCE=prepared");
+            }
             return Ok(facts);
+        }
+        if std::env::var_os("HORIZON_FACTS_SOURCE").is_some() {
+            eprintln!("HORIZON_FACTS_SOURCE=json");
         }
         Self::load_json(root, registry)
     }
