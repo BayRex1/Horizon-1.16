@@ -1161,7 +1161,7 @@ impl Game<'_> {
                     .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|n| self.atlas.sprites.get(n))
+                    .and_then(|n| self.gui.atlas.sprites.get(n))
                 else {
                     continue;
                 };
@@ -1235,6 +1235,7 @@ impl Game<'_> {
     pub(super) fn cart_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
         let Some(uv) = self
+            .gui
             .atlas
             .sprites
             .get("entity/minecart/minecart")
@@ -1374,12 +1375,12 @@ impl Game<'_> {
             game_time: self.world.game_time,
             max_y: self.dim.max_y(),
             world: &self.world,
-            sprites: &self.atlas.sprites,
+            sprites: &self.gui.atlas.sprites,
             nether: self.dim == super::Dim::Nether,
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
-            glyph: &|c| self.atlas.glyph_cell(c),
+            glyph: &|c| self.gui.atlas.glyph_cell(c),
         };
         self.res
             .block_entity_render
