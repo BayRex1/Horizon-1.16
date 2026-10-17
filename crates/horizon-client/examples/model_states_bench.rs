@@ -19,8 +19,13 @@ struct Fixture {
 }
 impl Fixture {
     fn new(target_bytes: usize) -> Result<Self> {
-        let root =
-            std::env::temp_dir().join(format!("horizon-model-states-{}", std::process::id()));
+        static NEXT_FIXTURE: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "horizon-model-states-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         fs::create_dir_all(root.join("assets/minecraft/blockstates"))?;
         fs::create_dir_all(root.join("assets/minecraft/models/block"))?;
         let mut possible = Vec::new();
@@ -228,6 +233,65 @@ mod tests {
                 .zip(original)
                 .any(|((_, model), quad)| model.faces[0].quad != quad)
         );
+        Ok(())
+    }
+    #[test]
+    fn inherited_geometry_aliases_and_variant_rotations_match_direct_bakes() -> Result<()> {
+        use horizon_assets::{
+            bake::{BlockModelTransform, bake_block_model},
+            model::CuboidModel,
+            resolve::ModelLibrary,
+        };
+        let fixture = Fixture::new(1)?;
+        fs::write(
+            fixture
+                .root
+                .join("assets/minecraft/models/block/fixture.json"),
+            r##"{"parent":"minecraft:block/parent","textures":{"inner":"#outer","outer":"minecraft:block/glass"},"ambientocclusion":false}"##,
+        )?;
+        fs::write(
+            fixture
+                .root
+                .join("assets/minecraft/models/block/parent.json"),
+            r##"{"textures":{"all":"#inner"},"elements":[{"from":[2,1,3],"to":[14,12,15],"faces":{"north":{"texture":"#all","cullface":"north"},"up":{"texture":"#all"}}}]}"##,
+        )?;
+        let parent = CuboidModel::from_json(&fs::read_to_string(
+            fixture
+                .root
+                .join("assets/minecraft/models/block/parent.json"),
+        )?)?;
+        let child = CuboidModel::from_json(&fs::read_to_string(
+            fixture
+                .root
+                .join("assets/minecraft/models/block/fixture.json"),
+        )?)?;
+        let library = ModelLibrary::new(BTreeMap::from([
+            ("minecraft:block/parent".into(), parent),
+            ("minecraft:block/fixture".into(), child),
+        ]))?;
+        let model = library.resolve("minecraft:block/fixture")?;
+        let (catalog, sprites) = fixture.load(true)?;
+        assert!(sprites.layers.contains_key("minecraft:block/glass"));
+        for state in 0..fixture.registry.len() {
+            for pos in [BlockPos::new(0, 0, 0), BlockPos::new(12, 8, -31)] {
+                let chosen = catalog.collect(BlockStateId(state as u32), pos)?;
+                assert!(!chosen.is_empty());
+                for (variant, baked) in chosen {
+                    let direct = bake_block_model(
+                        &model,
+                        BlockModelTransform::new(variant.rotations, variant.uv_lock),
+                    )?;
+                    assert_eq!(baked.faces.len(), direct.len());
+                    assert!(!baked.ambient_occlusion);
+                    for (face, expected) in baked.faces.iter().zip(direct) {
+                        assert_eq!(face.quad, expected);
+                        assert_eq!(face.layer, sprites.layers["minecraft:block/glass"]);
+                        assert_eq!(face.opaque, sprites.opaque[face.layer as usize]);
+                        assert_eq!(face.translucent, sprites.translucent[face.layer as usize]);
+                    }
+                }
+            }
+        }
         Ok(())
     }
     #[test]
