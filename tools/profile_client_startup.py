@@ -12,6 +12,7 @@ Example:
 import argparse
 import json
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import tempfile
@@ -26,28 +27,33 @@ def main():
     parser.add_argument('--offscreen', action='store_true',
                         help='Render to a texture instead of a presentation surface')
     parser.add_argument('--world', help='Optional world name for first playable frame measurement')
+    parser.add_argument('--cwd', type=Path,
+                        help='Client working directory (default: fresh directory per run)')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error('--repeats must be positive')
     binary = args.binary.resolve()
     resources = args.resources.resolve()
+    cwd = args.cwd.resolve() if args.cwd else None
     results = []
     for repeat in range(args.repeats):
         with tempfile.TemporaryDirectory(prefix='horizon-startup-') as temp:
             report = Path(temp) / 'first-frame.json'
             cmd = [str(binary), '--resources', str(resources),
-                   '--frames', '1', '--smoke-report', str(report),
+                   '--smoke-report', str(report),
                    '--timeout-seconds', '90']
             if args.offscreen:
                 cmd.append('--offscreen')
             if args.world:
                 cmd.extend(['--world', args.world, '--world-frames', '1'])
+            else:
+                cmd.extend(['--frames', '1'])
             if args.vscreen:
                 cmd = ['xvfb-run', '-a', *cmd]
             proc = subprocess.run(cmd, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True,
-                                  timeout=120)
+                                  timeout=120, cwd=cwd or temp)
             if proc.returncode != 0 or not report.is_file():
                 raise RuntimeError(
                     f'run {repeat + 1} failed (exit={proc.returncode}):\n{proc.stdout[-4000:]}'
@@ -55,9 +61,19 @@ def main():
             data = json.loads(report.read_text())
             if data.get('frames', 0) < 1 or data.get('error'):
                 raise RuntimeError(f'run {repeat + 1} never rendered successfully: {data}')
-            results.append(round(data['elapsed_seconds'] * 1000, 3))
+            if args.world:
+                if data.get('player') is None:
+                    raise RuntimeError(f'run {repeat + 1} never reached gameplay: {data}')
+                # The report is emitted on exit after the first playable frame.
+                results.append(round(data['elapsed_seconds'] * 1000, 3))
+            else:
+                markers = re.findall(r'Horizon: first frame after (\d+) ms', proc.stdout)
+                if not markers:
+                    raise RuntimeError(f'run {repeat + 1} lacks first-frame timing')
+                results.append(int(markers[0]))
     result = {
         'binary': str(binary), 'resources': str(resources),
+        'mode': 'first_playable_frame_upper_bound' if args.world else 'first_rendered_frame',
         'first_frame_ms': results,
         'median_ms': round(statistics.median(results), 3),
         'mean_ms': round(statistics.mean(results), 3),
