@@ -5,7 +5,7 @@ use crate::{DATA_VERSION, chunk::BlockState, compression::invalid, nbt::Tag};
 pub use json::BlockStateJsonCodec;
 pub(crate) use json::java_integer;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     io,
 };
 
@@ -14,10 +14,45 @@ pub struct BlockStateId(pub u32);
 
 pub struct BlockRegistry {
     states: Vec<BlockState>,
-    ids: BTreeMap<BlockState, BlockStateId>,
+    ids: HashMap<BlockState, BlockStateId>,
     defaults: BTreeMap<String, BlockStateId>,
 }
 impl BlockRegistry {
+    /// Construct a registry from already-decoded, ordered states and defaults.
+    /// Used by version-pinned precomputed resources; performs the same identity
+    /// and default-state validation as `from_nbt`.
+    pub fn from_parts(
+        states: Vec<BlockState>,
+        defaults: BTreeMap<String, BlockStateId>,
+    ) -> io::Result<Self> {
+        if states.is_empty() || states.len() > i32::MAX as usize {
+            return Err(invalid("invalid registry size"));
+        }
+        let mut ids = HashMap::with_capacity(states.len());
+        for (index, state) in states.iter().enumerate() {
+            if ids
+                .insert(state.clone(), BlockStateId(index as u32))
+                .is_some()
+            {
+                return Err(invalid("duplicate block registry state"));
+            }
+        }
+        for (name, id) in &defaults {
+            if states.get(id.0 as usize).is_none_or(|s| s.name != *name) {
+                return Err(invalid("invalid default block state ID"));
+            }
+        }
+        let names: BTreeSet<_> = states.iter().map(|s| &s.name).collect();
+        if names.len() != defaults.len() || names.iter().any(|name| !defaults.contains_key(*name)) {
+            return Err(invalid("registry is missing block defaults"));
+        }
+        Ok(Self {
+            states,
+            ids,
+            defaults,
+        })
+    }
+
     pub fn from_nbt(tag: &Tag) -> io::Result<Self> {
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("block registry DataVersion mismatch"));
@@ -33,7 +68,7 @@ impl BlockRegistry {
         }
         let mut result = Self {
             states: Vec::with_capacity(entries.len()),
-            ids: BTreeMap::new(),
+            ids: HashMap::with_capacity(entries.len()),
             defaults: BTreeMap::new(),
         };
         for (i, entry) in entries.iter().enumerate() {

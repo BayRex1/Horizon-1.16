@@ -158,7 +158,7 @@ impl PalettedContainer {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockState {
     pub name: String,
     pub properties: BTreeMap<String, String>,
