@@ -6997,6 +6997,18 @@ impl Game<'_> {
         }
         Ok(true)
     }
+    /// `AxeItem.playerHasBlockingItemUseIntent`: with a shield in the off hand,
+    /// right-clicking with an axe raises the shield instead of scraping/stripping,
+    /// unless sneaking. Hoes and shovels still till and make paths directly.
+    fn tool_blocked_by_offhand_shield(
+        item: &str,
+        transformer: &str,
+        shield_equipped: bool,
+        sneaking: bool,
+    ) -> bool {
+        let is_axe = item.ends_with("_axe") || transformer == "minecraft:axe";
+        is_axe && shield_equipped && !sneaking
+    }
     /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
     fn use_block_transformer(
         &mut self,
@@ -7031,14 +7043,17 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
-        // playerHasBlockingItemUseIntent: a shield in the off hand is raised
-        // instead, unless sneaking.
         let shield = self
             .offhand
             .as_ref()
             .and_then(|s| self.res.items.get(&s.item))
             .is_some_and(|i| i.blocks_attacks.is_some());
-        if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
+        if Self::tool_blocked_by_offhand_shield(
+            &stack.item,
+            &id,
+            shield,
+            self.keys.contains(&KeyCode::ShiftLeft),
+        ) {
             return Ok(false);
         }
         let face_name = match face {
@@ -11289,6 +11304,35 @@ mod tests {
                 assert!(!drop_whole_stack(&physical_keys));
                 assert_eq!(toggles.is_down(SPRINT), sprint);
             }
+        }
+    }
+
+    #[test]
+    fn offhand_shield_only_blocks_axes_when_not_sneaking() {
+        for (item, transformer, is_axe) in [
+            ("minecraft:wooden_hoe", "minecraft:hoe", false),
+            ("minecraft:iron_hoe", "minecraft:hoe", false),
+            ("minecraft:netherite_hoe", "minecraft:hoe", false),
+            ("minecraft:iron_shovel", "minecraft:shovel", false),
+            ("minecraft:diamond_axe", "minecraft:axe", true),
+            ("minecraft:iron_axe", "minecraft:axe", true),
+        ] {
+            assert_eq!(
+                Game::tool_blocked_by_offhand_shield(item, transformer, true, false),
+                is_axe
+            );
+            assert!(!Game::tool_blocked_by_offhand_shield(
+                item,
+                transformer,
+                true,
+                true
+            ));
+            assert!(!Game::tool_blocked_by_offhand_shield(
+                item,
+                transformer,
+                false,
+                false
+            ));
         }
     }
 }
