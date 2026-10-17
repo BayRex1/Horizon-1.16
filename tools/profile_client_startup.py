@@ -11,7 +11,6 @@ Example:
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import statistics
 import subprocess
@@ -24,6 +23,9 @@ def main():
     parser.add_argument('--resources', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--vscreen', action='store_true')
+    parser.add_argument('--offscreen', action='store_true',
+                        help='Render to a texture instead of a presentation surface')
+    parser.add_argument('--world', help='Optional world name for first playable frame measurement')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.repeats < 1:
@@ -37,6 +39,10 @@ def main():
             cmd = [str(binary), '--resources', str(resources),
                    '--frames', '1', '--smoke-report', str(report),
                    '--timeout-seconds', '90']
+            if args.offscreen:
+                cmd.append('--offscreen')
+            if args.world:
+                cmd.extend(['--world', args.world, '--world-frames', '1'])
             if args.vscreen:
                 cmd = ['xvfb-run', '-a', *cmd]
             proc = subprocess.run(cmd, stdout=subprocess.PIPE,
