@@ -182,8 +182,11 @@ impl Game<'_> {
         name: &str,
         local: Option<horizon_protocol::connection::Pipe>,
     ) -> Result<()> {
+        // An integrated world's timer began before its server thread launched.
+        if local.is_none() {
+            self.perf.world_opening();
+        }
         self.block_entity_renderer()?;
-        self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())

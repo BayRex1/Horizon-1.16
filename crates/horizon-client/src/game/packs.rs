@@ -107,7 +107,7 @@ impl Game<'_> {
         let pack_root = startup_root(&vanilla, &self.settings.resource_packs);
         let root = super::mods::content_root(
             &pack_root,
-            &self.settings.mods.enabled,
+            &self.active_content_mods,
             &self.options.dev_mods,
         );
         if let Err(e) = self.reload_resources(&root) {

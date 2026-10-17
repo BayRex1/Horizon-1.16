@@ -192,7 +192,7 @@ use horizon_world::{
     registry::BlockStateId,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -841,6 +841,8 @@ struct Game<'a> {
     motion: &'a MotionResources,
     /// This game's resource packs (`reload_packs` replaces them).
     pack: PackResources,
+    /// Registry-affecting mod content is fixed at startup; toggles require a restart.
+    active_content_mods: BTreeSet<String>,
     /// The GUI, font, particle, map and skin atlas.
     atlas: HudAtlas,
     /// `FogRenderer`'s evolving state.
@@ -6220,14 +6222,15 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
-        if self.options.dedicated.is_none() {
-            self.block_entity_renderer()?;
-        }
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
         }
         self.perf.world_opening();
+        // Include renderer preparation in measured world-entry latency.
+        if self.options.dedicated.is_none() {
+            self.block_entity_renderer()?;
+        }
         horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         self.session_lock = None;
@@ -9951,6 +9954,7 @@ impl<'a> Game<'a> {
         Ok(Game {
             res: res.clone(),
             block_entity_render: RendererSlot::empty(),
+            active_content_mods: settings.mods.enabled.clone(),
             collision: &res.collision,
             motion: &res.motion,
             pack,

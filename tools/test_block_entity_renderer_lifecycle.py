@@ -9,6 +9,7 @@ directory keeps saves, options, mods and pack caches out of the checkout.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ def main():
     parser.add_argument("--ctl", type=Path, required=True)
     parser.add_argument("--resources", type=Path, required=True)
     parser.add_argument("--dev-mod", type=Path, action="append", default=[])
+    parser.add_argument("--failed-reload", action="store_true", help="Inject malformed renderer models, verify rollback and retry")
     args = parser.parse_args()
     client = args.client.resolve()
     ctl = args.ctl.resolve()
@@ -31,6 +33,18 @@ def main():
         cwd = Path(folder)
         socket = cwd / "control.sock"
         output = cwd / "client.log"
+        if args.failed_reload:
+            # Link large immutable resource trees; keep only the model document
+            # private so corrupting it cannot affect other running checkouts.
+            resource_copy = cwd / "resources"
+            resource_copy.mkdir()
+            for entry in resources.iterdir():
+                destination = resource_copy / entry.name
+                if entry.name == "entity-models.json":
+                    shutil.copy2(entry, destination)
+                else:
+                    destination.symlink_to(entry, target_is_directory=entry.is_dir())
+            resources = resource_copy
 
         def request(*words, timeout=15):
             reply = subprocess.run(
@@ -69,10 +83,26 @@ def main():
 
                 request("wait-ready", "120", timeout=130)
                 before = request("status")
-                request("key", "f3", "down", timeout=60)
-                request("key", "t", "tap", timeout=120)
-                request("key", "f3", "up", timeout=60)
-                request("wait", "5", timeout=30)
+                def reload():
+                    request("key", "f3", "down", timeout=60)
+                    try:
+                        request("key", "t", "tap", timeout=120)
+                    finally:
+                        request("key", "f3", "up", timeout=60)
+                    request("wait", "5", timeout=30)
+
+                if args.failed_reload:
+                    document = resources / "entity-models.json"
+                    original = document.read_bytes()
+                    try:
+                        document.write_bytes(b"{malformed")
+                        reload()
+                        failure = request("status")
+                        if not failure:
+                            raise AssertionError("world lost control after a failed reload")
+                    finally:
+                        document.write_bytes(original)
+                reload()
                 after = request("status")
                 if game.poll() is not None:
                     raise RuntimeError("client exited after pack reload")
@@ -88,7 +118,10 @@ def main():
                     if marker not in text:
                         raise AssertionError(f"expected log marker missing: {marker}")
                 if "resource reload failed" in text or "block entity renderer failed" in text:
-                    raise AssertionError("client logged a resource failure")
+                    if not args.failed_reload or "resource reload failed" not in text:
+                        raise AssertionError("unexpected resource failure")
+                if args.failed_reload and "resource reload failed" not in text:
+                    raise AssertionError("corrupt model reload was not rejected")
                 print(json.dumps({"status": "passed", "world_before": bool(before),
                                   "world_after": bool(after),
                                   "loader_logs": [line for line in text.splitlines()
