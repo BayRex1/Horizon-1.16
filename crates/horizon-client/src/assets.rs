@@ -95,7 +95,7 @@ fn tag(value: &Value) -> Result<Tag> {
 }
 /// Cache the validated NBT representation alongside the source facts. A digest
 /// of the complete source makes modified content roots and stale caches safe.
-fn registry_nbt(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<Tag> {
+fn load_registry(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<BlockRegistry> {
     let digest = Sha256::digest(facts_bytes);
     let cache = root.join("block-registry-cache.nbt");
     if let Ok(bytes) = fs::read(&cache)
@@ -103,9 +103,9 @@ fn registry_nbt(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<Tag> {
         && used == bytes.len()
         && saved.get("source_sha256") == Some(&Tag::ByteArray(digest.to_vec()))
         && let Some(registry) = saved.get("registry")
-        && BlockRegistry::from_nbt(registry).is_ok()
+        && let Ok(decoded) = BlockRegistry::from_nbt(registry)
     {
-        return Ok(registry.clone());
+        return Ok(decoded);
     }
     let states = facts["states"]
         .as_array()
@@ -124,7 +124,7 @@ fn registry_nbt(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<Tag> {
         ("defaults", tag(&facts["defaults"])?),
     ]);
     // Cache only after the same validation used on the uncached path.
-    BlockRegistry::from_nbt(&registry)?;
+    let validated = BlockRegistry::from_nbt(&registry)?;
     let saved = Tag::compound([
         ("source_sha256", Tag::ByteArray(digest.to_vec())),
         ("registry", registry.clone()),
@@ -136,7 +136,7 @@ fn registry_nbt(root: &Path, facts_bytes: &[u8], facts: &Value) -> Result<Tag> {
         }
         let _ = fs::remove_file(&temporary);
     }
-    Ok(registry)
+    Ok(validated)
 }
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
@@ -151,7 +151,7 @@ impl Assets {
         let states = facts["states"]
             .as_array()
             .ok_or_else(|| invalid("missing registry state facts"))?;
-        let registry = BlockRegistry::from_nbt(&registry_nbt(root, &facts_bytes, &facts)?)?;
+        let registry = load_registry(root, &facts_bytes, &facts)?;
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -308,8 +308,7 @@ mod registry_cache_tests {
         let second = br#"{"states":[["minecraft:dirt",false,false,0,{"id":"minecraft:dirt"}]],"defaults":{"minecraft:dirt":0}}"#;
         for source in [first.as_slice(), first.as_slice(), second.as_slice()] {
             let facts: Value = serde_json::from_slice(source).unwrap();
-            let registry =
-                BlockRegistry::from_nbt(&registry_nbt(&root, source, &facts).unwrap()).unwrap();
+            let registry = load_registry(&root, source, &facts).unwrap();
             let expected = if source == second {
                 "minecraft:dirt"
             } else {
@@ -317,9 +316,17 @@ mod registry_cache_tests {
             };
             assert_eq!(registry.default_state(expected), Some(BlockStateId(0)));
         }
+        fs::write(root.join("block-registry-cache.nbt"), b"invalid cache").unwrap();
+        let facts: Value = serde_json::from_slice(second).unwrap();
+        assert_eq!(
+            load_registry(&root, second, &facts)
+                .unwrap()
+                .default_state("minecraft:dirt"),
+            Some(BlockStateId(0))
+        );
         let invalid = br#"{"states":[["minecraft:stone",false,false,0,{"id":"minecraft:stone"}]],"defaults":{"minecraft:stone":1}}"#;
         let facts: Value = serde_json::from_slice(invalid).unwrap();
-        assert!(registry_nbt(&root, invalid, &facts).is_err());
+        assert!(load_registry(&root, invalid, &facts).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

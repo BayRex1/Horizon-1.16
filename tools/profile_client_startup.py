@@ -23,11 +23,17 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--metric", choices=["behaviours", "assets"], default="behaviours",
                         help="Profile behaviour loading or Assets::load using model_library_bench")
+    parser.add_argument("--cold-cache", action="store_true",
+                        help="Remove the registry cache before each Assets::load sample")
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats must be at least one")
+    if args.cold_cache and args.metric != "assets":
+        parser.error("--cold-cache is only valid with --metric assets")
     samples = []
     for _ in range(args.repeats):
+        if args.cold_cache:
+            args.resources.joinpath("block-registry-cache.nbt").unlink(missing_ok=True)
         run = subprocess.run([str(args.binary.resolve()), str(args.resources.resolve())],
                              text=True, capture_output=True, check=True)
         if args.metric == "assets":
@@ -42,7 +48,8 @@ def main():
     summary = {key: {"median_ms": round(statistics.median(row[key] for row in samples), 3),
                      "samples_ms": [row[key] for row in samples]}
                for key in samples[0]}
-    result = {"scope": ("Assets::load including models and sprites; not full client startup"
+    result = {"cache": "cold" if args.cold_cache else "as-present",
+              "scope": ("Assets::load including models and sprites; not full client startup"
                          if args.metric == "assets" else "behaviour loader only; not full client startup"),
               "binary": str(args.binary), "resources": str(args.resources), "repeats": args.repeats,
               "metrics": summary}
