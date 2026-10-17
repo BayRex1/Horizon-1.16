@@ -89,6 +89,52 @@ The same Vulkan `Parent device is lost` failure also occurred when repeating
 an original-checkout **debug world-entry** smoke test, establishing that the
 GPU issue is not exclusive to the optimized client.
 
+## Follow-up: controlled software-Vulkan release A/B
+
+The NVIDIA 615.71.09 ICD fails even outside Horizon: `vulkaninfo --summary`
+reports `vkCreateDevice failed with ERROR_INITIALIZATION_FAILED`. To isolate
+the graphics environment without installing system packages, the Arch
+`vulkan-swrast` 26.2.4 package was extracted in `/tmp` and its Lavapipe ICD
+JSON modified to point to the extracted absolute library path. With
+`VK_DRIVER_FILES=/tmp/horizon-lavapipe/icd.json`, `vulkaninfo --summary`
+reports **llvmpipe (LLVM 23.1.1, 256 bits), Vulkan CPU device**.
+
+Fifteen order-alternating release-client pairs, each with a fresh temporary
+game directory, same 26.3 resource root, `--frames 1 --offscreen`, and one
+llvmpipe adapter. Process timing includes the initial offscreen submission and
+client teardown; the separate engine marker begins after asset preparation.
+
+| Title startup, release (15 pairs) | Original | Optimized |
+| --- | ---: | ---: |
+| Process wall time median | 3317.351 ms | 3183.891 ms |
+| Process wall time range | 3237.203–3452.192 ms | 3081.425–3371.159 ms |
+| Game construction → first offscreen submission median | 281 ms | 269 ms |
+
+Paired optimized-minus-original process median was **-121.359 ms**; observed
+paired differences ranged from **-320.258 to -27.534 ms**, all 15 negative.
+This supports a **software-Vulkan title-startup reduction** consistent with
+moving ~131 ms of renderer work to gameplay, without claiming a hardware GPU
+speedup or a presented-frame timing. Raw data:
+`/tmp/block_entity_release_lavapipe_menu.json` on the measurement host.
+
+Seven more release-client pairs used `--world BlockEntityStartupWorld
+--test-terrain --render-distance 4 --world-frames 1 --offscreen` to check
+the first playable world frame:
+
+| Direct world entry, release (7 pairs) | Original | Optimized |
+| --- | ---: | ---: |
+| Process wall time median | 4893.770 ms | 4884.942 ms |
+| Process wall time range | 4755.564–5318.158 ms | 4834.223–4950.531 ms |
+| Game construction → first offscreen submission median | 1595 ms | 1710 ms |
+
+The optimized world-frame marker was **115 ms later** by median, consistent
+with the newly deferred loading cost. Total paired process differences had a
+median of **+55.425 ms**, range **-435.276 to +109.170 ms**; these mixed values
+do not establish a consistent regression in total process-to-world duration.
+Raw data: `/tmp/block_entity_release_lavapipe_world.json`. Both experiments
+used fully functional software Vulkan, but their offscreen submission markers
+do not establish GPU-complete presentation time on discrete NVIDIA hardware.
+
 ## Gameplay checks
 
 - Optimized offscreen world-entry smoke: exit 0, 6 frames, 90 generated chunks,
@@ -115,6 +161,10 @@ GPU issue is not exclusive to the optimized client.
   checkout subsequently failed a comparable world smoke with Vulkan device
   loss. The earlier successful gameplay/reload runs remain evidence, but these
   final end-to-end checks are **environment-blocked**, not claimed as passed.
+- Retrying the exact failed-reload/recovery integration on the same latest
+  debug client with the working Lavapipe ICD **passed**: first renderer 670.7
+  ms, successful F3+T retry 680.9 ms, active world before/after. The earlier
+  NVIDIA-specific failure remains documented above.
 
 ## Reproduction and limits
 

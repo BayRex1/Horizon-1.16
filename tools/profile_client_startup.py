@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--baseline-client-binary", type=Path, help="Pre-change client executable for paired comparison")
     parser.add_argument("--client-repeats", type=int, default=3)
     parser.add_argument("--client-cwd", type=Path, help="Game directory (isolated from other client runs)")
+    parser.add_argument("--world", action="store_true", help="Measure first playable world frame instead of the title frame (test terrain)")
     args = parser.parse_args()
     if args.repeats < 0 or (args.repeats == 0 and not args.client_binary):
         parser.error("--repeats must be positive unless running a client benchmark")
@@ -79,8 +80,12 @@ def main():
                     if source.is_file():
                         shutil.copy2(source, Path(scratch) / filename)
                 started = time.perf_counter()
-                run = subprocess.run([str(binary.resolve()), "--resources",
-                                      str(args.resources.resolve()), "--frames", "1", "--offscreen"],
+                command = [str(binary.resolve()), "--resources", str(args.resources.resolve()), "--offscreen"]
+                if args.world:
+                    command.extend(["--world", "BlockEntityStartupWorld", "--test-terrain", "--render-distance", "4", "--world-frames", "1", "--timeout-seconds", "120"])
+                else:
+                    command.extend(["--frames", "1"])
+                run = subprocess.run(command,
                                      cwd=scratch, capture_output=True, text=True)
                 wall_ms = round((time.perf_counter() - started) * 1000, 3)
             if run.returncode:
@@ -110,6 +115,7 @@ def main():
             "baseline_client_binary": str(args.baseline_client_binary) if args.baseline_client_binary else None,
             "game_dir": str(args.client_cwd),
             "fresh_game_directory_per_run": True,
+            "first_frame_kind": "world" if args.world else "title",
             "gpu_adapters": sorted(adapters),
             "game_constructed_to_first_frame_ms": {
                 name: {"median_ms": statistics.median(values), "samples_ms": values}
