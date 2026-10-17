@@ -2,6 +2,42 @@ use super::*;
 use horizon_assets::model::Direction as ModelDirection;
 
 #[test]
+fn cached_tables_match_fresh_render_facts() {
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+    if !root.join("horizon-resources.json").exists() {
+        return;
+    }
+    let assets = Assets::load(&root).unwrap();
+    let facts = BlockFacts::load(&root, assets.registry).unwrap();
+    let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
+    let fresh = MeshTables::new(&assets, &facts, visibility).unwrap();
+    let restored =
+        MeshTables::from_cache_bytes(&fresh.to_cache_bytes().unwrap(), facts.states.len()).unwrap();
+    for (id, _) in facts.states.iter().enumerate() {
+        let id = BlockStateId(id as u32);
+        let original = fresh.facts(id).unwrap();
+        let cached = restored.facts(id).unwrap();
+        assert_eq!(original.shade.to_bits(), cached.shade.to_bits());
+        assert_eq!(original.emission, cached.emission);
+        assert_eq!(original.tint_sources, cached.tint_sources);
+        assert_eq!(fresh.offset(id, 7, -12), restored.offset(id, 7, -12));
+        for direction in Direction::ALL {
+            assert_eq!(
+                fresh.visibility.full_face(id, direction),
+                restored.visibility.full_face(id, direction),
+            );
+        }
+    }
+    // Also catches loss of private fields such as fluid, tint variants, and
+    // face coverage that MeshFacts does not expose.
+    assert_eq!(
+        fresh.to_cache_bytes().unwrap(),
+        restored.to_cache_bytes().unwrap()
+    );
+}
+
+#[test]
 fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
     let root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");

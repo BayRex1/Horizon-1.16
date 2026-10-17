@@ -49,13 +49,17 @@ def run(binary, resources, workdir, timeout, disable_cache=False):
         return None if match is None else float(match.group(1)) * 1000
     facts = milestone("load biomes+env")
     pack = milestone("load pack tables")
+    cached_tables = re.search(r"cached pack mesh tables in ([\d.]+)ms", output)
+    built_tables = re.search(r"built pack mesh tables in ([\d.]+)ms", output)
     return {
         "exit_code": exit_code,
         "timed_out": timed_out,
         "elapsed_ms": round(elapsed, 2),
         "pack_interval_ms": None if pack is None or facts is None else round(pack - facts, 2),
         "pack_cumulative_ms": pack,
-        "cache_hit": "cached pack face geometry" in output,
+        "mesh_tables_ms": float((cached_tables or built_tables).group(1))
+        if cached_tables or built_tables else None,
+        "cache_hit": cached_tables is not None,
         "tail": output[-1500:] if timed_out or exit_code else None,
     }
 

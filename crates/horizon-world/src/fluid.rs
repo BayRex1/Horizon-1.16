@@ -5,9 +5,10 @@ use crate::{
     compression::invalid,
     registry::{BlockRegistry, BlockStateId},
 };
+use serde::{Deserialize, Serialize};
 use std::io;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum FluidKind {
     Empty,
@@ -54,7 +55,7 @@ impl FluidKind {
         1 << self as u8
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FluidState {
     kind: FluidKind,
     amount: u8,

@@ -22,6 +22,7 @@ use horizon_world::{
     fluid::{FluidKind, FluidState},
     registry::BlockStateId,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// An entity, item and effect vertex (the entity pipelines), with a face
@@ -175,7 +176,7 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
 mod leaf_culling_tests;
 #[cfg(test)]
 mod visibility_tests;
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Tint {
     None,
     Grass,
@@ -188,7 +189,7 @@ enum Tint {
     Stem(u8),
 }
 /// Per-state data the mesher needs on every block, flattened for speed.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 struct Info {
     /// `isSolidRender`.
     solid: bool,
@@ -247,6 +248,14 @@ pub struct MeshTables {
     lava_still: u16,
     lava_flow: u16,
 }
+/// Snapshot of per-state render facts and the prepared immutable face geometry.
+/// The visibility pair cache is reinitialized on load.
+#[derive(Serialize, Deserialize)]
+struct CachedMeshTables {
+    info: Vec<Info>,
+    visibility: Vec<u8>,
+    fluid_layers: [u16; 5],
+}
 fn redstone_color(power: u8) -> u32 {
     // RedstoneWireBlock.COLORS
     let f = f32::from(power) / 15.0;
@@ -256,6 +265,43 @@ fn redstone_color(power: u8) -> u32 {
     ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32
 }
 impl MeshTables {
+    pub fn to_cache_bytes(&self) -> crate::Result<Vec<u8>> {
+        Ok(postcard::to_allocvec(&CachedMeshTables {
+            info: self.info.clone(),
+            visibility: self.visibility.to_cache_bytes()?,
+            fluid_layers: [
+                self.water_still,
+                self.water_flow,
+                self.water_overlay,
+                self.lava_still,
+                self.lava_flow,
+            ],
+        })?)
+    }
+
+    pub fn from_cache_bytes(bytes: &[u8], expected_states: usize) -> crate::Result<Self> {
+        let cached: CachedMeshTables = postcard::from_bytes(bytes)?;
+        if cached.info.len() != expected_states {
+            return Err("cached mesh tables have the wrong state count".into());
+        }
+        let visibility = FaceVisibility::from_cache_bytes(&cached.visibility, expected_states)?;
+        let [
+            water_still,
+            water_flow,
+            water_overlay,
+            lava_still,
+            lava_flow,
+        ] = cached.fluid_layers;
+        Ok(Self {
+            info: cached.info,
+            visibility,
+            water_still,
+            water_flow,
+            water_overlay,
+            lava_still,
+            lava_flow,
+        })
+    }
     pub fn new(
         assets: &Assets,
         facts: &BlockFacts,

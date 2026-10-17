@@ -163,7 +163,7 @@ use horizon_client::{
     items::{ItemStack, Items},
     keymapping::KeyAction,
     light::LightTables,
-    mesher::{MeshTables, Vertex},
+    mesher::Vertex,
     mobs::{Mob, MobType, MobTypes},
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
     mouse::{LookOptions, MouseLook, Rotation},
@@ -713,8 +713,7 @@ impl PackResources {
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
     ) -> Result<Self> {
-        let visibility = pack_cache::load_visibility(root, assets.registry)?;
-        let tables = Arc::new(MeshTables::new(&assets, facts, visibility)?);
+        let tables = Arc::new(pack_cache::load_tables(root, &assets, facts)?);
         let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
             root,
             assets.model_library.clone(),
