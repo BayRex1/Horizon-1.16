@@ -670,9 +670,6 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
     providers: Providers,
-    block_entity_render: std::sync::OnceLock<
-        Result<horizon_client::block_entity_render::BlockEntityRenderer, String>,
-    >,
     animate: horizon_client::animate_tick::AnimateTables,
     fog: horizon_client::fog::FogTables,
     music: horizon_client::music::MusicTables,
@@ -687,6 +684,75 @@ pub struct Resources {
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
+}
+/// A renderer cache belongs to a single resource generation. Replacing this
+/// slot also clears errors from a previous pack or registry.
+struct RendererSlot<T, E> {
+    value: std::sync::OnceLock<std::result::Result<T, E>>,
+}
+impl<T, E> RendererSlot<T, E> {
+    fn empty() -> Self {
+        Self {
+            value: std::sync::OnceLock::new(),
+        }
+    }
+    fn ready(value: T) -> Self {
+        let slot = Self::empty();
+        let _ = slot.value.set(Ok(value));
+        slot
+    }
+    fn get_or_init(
+        &self,
+        load: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<&T, &E> {
+        self.value.get_or_init(load).as_ref()
+    }
+}
+#[cfg(test)]
+mod block_entity_renderer_lifecycle_tests {
+    use super::RendererSlot;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn loading_is_once_even_under_concurrent_first_use() {
+        let slot = Arc::new(RendererSlot::<usize, String>::empty());
+        let calls = Arc::new(AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..12 {
+                let slot = slot.clone();
+                let calls = calls.clone();
+                scope.spawn(move || {
+                    assert_eq!(
+                        *slot
+                            .get_or_init(|| {
+                                calls.fetch_add(1, Ordering::SeqCst);
+                                Ok(42)
+                            })
+                            .unwrap(),
+                        42
+                    );
+                });
+            }
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn pack_replacement_invalidates_successes_and_failures() {
+        let old = RendererSlot::<usize, &str>::empty();
+        assert_eq!(old.get_or_init(|| Err("bad pack")), Err(&"bad pack"));
+        assert_eq!(old.get_or_init(|| Ok(1)), Err(&"bad pack"));
+        let replacement = RendererSlot::<usize, &str>::ready(2);
+        assert_eq!(
+            replacement.get_or_init(|| panic!("already initialized")),
+            Ok(&2)
+        );
+        let empty_title_slot = RendererSlot::<usize, &str>::empty();
+        assert_eq!(empty_title_slot.get_or_init(|| Ok(3)), Ok(&3));
+    }
 }
 /// What a resource pack reload replaces (`Minecraft.reloadResourcePacks`):
 /// block models and sprites with their meshing tables, item models,
@@ -769,6 +835,8 @@ fn select_creative_tab(
 struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
+    block_entity_render:
+        RendererSlot<horizon_client::block_entity_render::BlockEntityRenderer, String>,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
     /// This game's resource packs (`reload_packs` replaces them).
@@ -1226,6 +1294,27 @@ fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     [-y.sin() * p.cos(), -p.sin(), y.cos() * p.cos()]
 }
 impl Game<'_> {
+    fn block_entity_renderer(
+        &self,
+    ) -> Result<&horizon_client::block_entity_render::BlockEntityRenderer> {
+        self.block_entity_render
+            .get_or_init(|| {
+                let started = Instant::now();
+                let loaded = horizon_client::block_entity_render::BlockEntityRenderer::load(
+                    &self.options.resources,
+                    self.pack.assets.registry,
+                );
+                match &loaded {
+                    Ok(_) => log::info!(
+                        "Horizon: block entity renderer ready in {:.1} ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    ),
+                    Err(error) => log::error!("Horizon: block entity renderer failed: {error}"),
+                }
+                loaded.map_err(|error| error.to_string())
+            })
+            .map_err(|error| error.clone().into())
+    }
     fn eye_position(&self) -> Option<[f64; 3]> {
         let p = self.player.as_ref()?;
         Some([
@@ -5563,18 +5652,7 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            let block_entity_renderer = self.res.block_entity_render.get_or_init(|| {
-                let loaded = horizon_client::block_entity_render::BlockEntityRenderer::load(
-                    &self.options.resources,
-                    self.pack.assets.registry,
-                )
-                .map_err(|err| err.to_string());
-                if let Err(err) = &loaded {
-                    log::error!("Block entity rendering resources failed: {err}");
-                }
-                loaded
-            });
-            if let Ok(block_entity_renderer) = block_entity_renderer {
+            if let Ok(block_entity_renderer) = self.block_entity_renderer() {
                 if self.entity_culler.is_some() {
                     for block in visible {
                         let start = out.len();
@@ -6142,6 +6220,9 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        if self.options.dedicated.is_none() {
+            self.block_entity_renderer()?;
+        }
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
@@ -9869,6 +9950,7 @@ impl<'a> Game<'a> {
         let particles = horizon_client::particles::ParticleEngine::new(&root, &atlas.sprites);
         Ok(Game {
             res: res.clone(),
+            block_entity_render: RendererSlot::empty(),
             collision: &res.collision,
             motion: &res.motion,
             pack,
@@ -10237,7 +10319,6 @@ pub fn run() -> Result<()> {
         collision,
         motion,
         providers: Providers::load(&root),
-        block_entity_render: std::sync::OnceLock::new(),
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(&root),

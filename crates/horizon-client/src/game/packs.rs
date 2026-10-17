@@ -104,13 +104,32 @@ impl Game<'_> {
         if self.ui.vanilla_root.as_os_str().is_empty() {
             self.ui.vanilla_root = vanilla.clone();
         }
-        let root = startup_root(&vanilla, &self.settings.resource_packs);
+        let pack_root = startup_root(&vanilla, &self.settings.resource_packs);
+        let root = super::mods::content_root(
+            &pack_root,
+            &self.settings.mods.enabled,
+            &self.options.dev_mods,
+        );
         if let Err(e) = self.reload_resources(&root) {
             log::warn!("Horizon: resource reload failed: {e}");
         }
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
         let assets = std::sync::Arc::new(self.pack.assets.reload(root)?);
+        let next_block_entity_render = if self.title.is_none() {
+            let started = std::time::Instant::now();
+            let renderer = horizon_client::block_entity_render::BlockEntityRenderer::load(
+                root,
+                assets.registry,
+            )?;
+            log::info!(
+                "Horizon: reloaded block entity renderer in {:.1} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            super::RendererSlot::ready(renderer)
+        } else {
+            super::RendererSlot::empty()
+        };
         let mut atlas = HudAtlas::build(root)?;
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
@@ -124,6 +143,7 @@ impl Game<'_> {
         // Everything loaded: switch over.
         self.random_tick_sections.clear();
         self.options.resources = root.to_path_buf();
+        self.block_entity_render = next_block_entity_render;
         let context = pack.context.clone();
         self.pack = pack;
         self.atlas = atlas;

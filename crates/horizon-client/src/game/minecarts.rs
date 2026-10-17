@@ -1331,9 +1331,9 @@ impl Game<'_> {
             banner: &|_| Vec::new(),
             glyph: &|c| self.atlas.glyph_cell(c),
         };
-        self.res
-            .block_entity_render
-            .render_state(&scene, state.0, m, light, out);
+        if let Ok(renderer) = self.block_entity_renderer() {
+            renderer.render_state(&scene, state.0, m, light, out);
+        }
     }
 }
 /// Saving and loading.

@@ -98,6 +98,7 @@ impl Game<'_> {
         creative: bool,
         create: Option<&WorldOptions>,
     ) -> Result<()> {
+        self.block_entity_renderer()?;
         let auth = horizon_client::auth::current();
         let player = auth
             .as_ref()
