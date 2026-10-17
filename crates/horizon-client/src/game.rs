@@ -713,19 +713,33 @@ impl PackResources {
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
     ) -> Result<Self> {
+        let started = Instant::now();
         let tables = Arc::new(pack_cache::load_tables(root, &assets, facts)?);
+        let tables_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let phase = Instant::now();
         let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
             root,
             assets.model_library.clone(),
         )?;
+        let items_ms = phase.elapsed().as_secs_f64() * 1000.0;
+        let phase = Instant::now();
+        let layer_names = Arc::new(
+            assets
+                .sprite_layers
+                .iter()
+                .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
+                .collect(),
+        );
+        let panorama = Arc::new(horizon_client::gfx::panorama::Faces::load(root));
+        let names = Arc::new(Names::load(root));
+        let clouds = Arc::new(load_clouds(root));
+        let forcefield = Arc::new(load_forcefield(root));
+        let extras_ms = phase.elapsed().as_secs_f64() * 1000.0;
+        log::info!(
+            "Horizon: pack phases mesh={tables_ms:.2}ms items={items_ms:.2}ms extras={extras_ms:.2}ms"
+        );
         Ok(Self {
-            layer_names: Arc::new(
-                assets
-                    .sprite_layers
-                    .iter()
-                    .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
-                    .collect(),
-            ),
+            layer_names,
             context: Arc::new(WorkerContext {
                 assets: assets.clone(),
                 tables,
@@ -733,11 +747,11 @@ impl PackResources {
                 light,
             }),
             assets,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
+            panorama,
             item_renderer: Arc::new(item_renderer),
-            names: Arc::new(Names::load(root)),
-            clouds: Arc::new(load_clouds(root)),
-            forcefield: Arc::new(load_forcefield(root)),
+            names,
+            clouds,
+            forcefield,
         })
     }
 }

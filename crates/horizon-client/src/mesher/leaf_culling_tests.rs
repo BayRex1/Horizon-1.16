@@ -35,6 +35,52 @@ fn cached_tables_match_fresh_render_facts() {
         fresh.to_cache_bytes().unwrap(),
         restored.to_cache_bytes().unwrap()
     );
+    // Rendering parity: opaque, cutout, fluid and translucent neighbours
+    // produce identical serialized vertices from fresh and restored tables.
+    let biomes = Biomes::load(&root).unwrap();
+    let mut chunk = Chunk::empty(0, 0);
+    for (x, name) in [
+        "minecraft:stone",
+        "minecraft:glass",
+        "minecraft:oak_leaves",
+        "minecraft:water",
+        "minecraft:lantern",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let id = assets.registry.default_state(name).unwrap();
+        chunk.set(x as i32 + 4, 7, 7, id.0 as u16);
+    }
+    let mut region = [[None; 3]; 3];
+    region[1][1] = Some(&chunk);
+    let mesh = |tables: &MeshTables| {
+        Mesher {
+            nether_shading: false,
+            assets: &assets,
+            tables,
+            biomes: &biomes,
+            visibility: tables.visibility.clone(),
+            zoom: BiomeZoom::new(0),
+            blend_radius: 0,
+            smooth_lighting: true,
+            cutout_leaves: true,
+            cull_leaves: true,
+        }
+        .tesselate(&region, (0 - MIN_Y) / 16)
+    };
+    let original = mesh(&fresh);
+    let cached = mesh(&restored);
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&original.solid),
+        bytemuck::cast_slice::<_, u8>(&cached.solid),
+    );
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&original.translucent),
+        bytemuck::cast_slice::<_, u8>(&cached.translucent),
+    );
+    assert_eq!(original.visibility, cached.visibility);
+    assert_eq!(original.block_entities, cached.block_entities);
 }
 
 #[test]
