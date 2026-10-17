@@ -90,6 +90,7 @@ mod net_harness;
 mod nether_portal;
 mod ominous_item_spawner;
 mod options;
+mod pack_cache;
 mod packs;
 mod pad;
 mod pad_menu;
@@ -164,7 +165,6 @@ use horizon_client::{
     light::LightTables,
     mesher::{MeshTables, Vertex},
     mobs::{Mob, MobType, MobTypes},
-    models,
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
     mouse::{LookOptions, MouseLook, Rotation},
     particles::Particle,
@@ -713,7 +713,7 @@ impl PackResources {
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
     ) -> Result<Self> {
-        let visibility = models::load_visibility(root, assets.registry)?;
+        let visibility = pack_cache::load_visibility(root, assets.registry)?;
         let tables = Arc::new(MeshTables::new(&assets, facts, visibility)?);
         let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
             root,
@@ -10178,6 +10178,11 @@ pub fn run() -> Result<()> {
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
+    // The startup profiler measures the full resource preparation path without
+    // opening a window or starting a world. Production launches proceed normally.
+    if std::env::var_os("HORIZON_PROFILE_PACK_LOAD").is_some() {
+        return Ok(());
+    }
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(

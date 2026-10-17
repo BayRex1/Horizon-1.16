@@ -7,7 +7,9 @@ use crate::{
     fluid::{FluidKind, FluidState},
     registry::BlockStateId,
 };
+use horizon_core::geometry::Axis;
 use horizon_core::geometry::{Direction, ShapeOp, VoxelShape};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     io,
@@ -45,7 +47,133 @@ pub struct FaceVisibility {
     faces: Vec<VoxelShape>,
     cache: HashMap<(u32, u32), bool>,
 }
+#[derive(Serialize, Deserialize)]
+struct CachedShape {
+    coords: [Vec<f64>; 3],
+    occupied: Vec<bool>,
+    cube: bool,
+    coordinate_cubes: [bool; 3],
+}
+#[derive(Serialize, Deserialize)]
+struct CachedState {
+    block: u32,
+    faces: [u32; 6],
+    skip: u8,
+    can_occlude: bool,
+    bars_tag: bool,
+    connections: u8,
+    connection_properties: u8,
+    fluid: String,
+}
+#[derive(Serialize, Deserialize)]
+struct CachedVisibility {
+    states: Vec<CachedState>,
+    faces: Vec<CachedShape>,
+}
 impl FaceVisibility {
+    /// Cache the immutable prepared state/face geometry. The runtime pair cache
+    /// is intentionally empty after restoring it.
+    pub fn to_cache_bytes(&self) -> io::Result<Vec<u8>> {
+        let cached = CachedVisibility {
+            states: self
+                .states
+                .iter()
+                .map(|s| CachedState {
+                    block: s.block.0,
+                    faces: s.faces,
+                    skip: match s.definition.skip {
+                        SkipRendering::Never => 0,
+                        SkipRendering::SameBlock => 1,
+                        SkipRendering::Bars => 2,
+                        SkipRendering::Leaves => 3,
+                        SkipRendering::Liquid => 4,
+                        SkipRendering::MangroveRoots => 5,
+                    },
+                    can_occlude: s.definition.can_occlude,
+                    bars_tag: s.definition.bars_tag,
+                    connections: s.connections,
+                    connection_properties: s.connection_properties,
+                    fluid: s.fluid.name().to_owned(),
+                })
+                .collect(),
+            faces: self
+                .faces
+                .iter()
+                .map(|shape| CachedShape {
+                    coords: [Axis::X, Axis::Y, Axis::Z]
+                        .map(|axis| shape.coordinates(axis).to_vec()),
+                    occupied: shape.occupied_cells(),
+                    cube: shape.is_cube(),
+                    coordinate_cubes: shape.cube_coordinate_axes(),
+                })
+                .collect(),
+        };
+        serde_json::to_vec(&cached).map_err(|e| invalid(e.to_string()))
+    }
+
+    pub fn from_cache_bytes(bytes: &[u8], expected_states: usize) -> io::Result<Self> {
+        let cached: CachedVisibility =
+            serde_json::from_slice(bytes).map_err(|e| invalid(e.to_string()))?;
+        if cached.states.len() != expected_states
+            || cached.faces.len() < 2
+            || cached.faces.len() > expected_states.saturating_mul(6).saturating_add(2)
+        {
+            return Err(invalid("invalid cached visibility dimensions"));
+        }
+        let mut faces = Vec::with_capacity(cached.faces.len());
+        for (i, shape) in cached.faces.into_iter().enumerate() {
+            let sizes = shape
+                .coords
+                .each_ref()
+                .map(|axis| axis.len().saturating_sub(1));
+            let restored = if i == 0 {
+                VoxelShape::empty()
+            } else if i == 1 {
+                VoxelShape::block()
+            } else if shape.cube {
+                VoxelShape::from_cube(sizes, &shape.occupied).map_err(|e| invalid(e.to_string()))?
+            } else {
+                VoxelShape::from_mixed_grid(shape.coords, &shape.occupied, shape.coordinate_cubes)
+                    .map_err(|e| invalid(e.to_string()))?
+            };
+            faces.push(restored);
+        }
+        let mut states = Vec::with_capacity(cached.states.len());
+        for s in cached.states {
+            if s.faces.iter().any(|&id| id as usize >= faces.len())
+                || s.block as usize >= expected_states
+            {
+                return Err(invalid("invalid cached face or state ID"));
+            }
+            let skip = match s.skip {
+                0 => SkipRendering::Never,
+                1 => SkipRendering::SameBlock,
+                2 => SkipRendering::Bars,
+                3 => SkipRendering::Leaves,
+                4 => SkipRendering::Liquid,
+                5 => SkipRendering::MangroveRoots,
+                _ => return Err(invalid("invalid cached render rule")),
+            };
+            states.push(State {
+                block: BlockStateId(s.block),
+                faces: s.faces,
+                definition: RenderDefinition {
+                    skip,
+                    can_occlude: s.can_occlude,
+                    bars_tag: s.bars_tag,
+                },
+                connections: s.connections,
+                connection_properties: s.connection_properties,
+                fluid: FluidKind::from_name(&s.fluid)
+                    .ok_or_else(|| invalid("invalid cached fluid"))?,
+            });
+        }
+        Ok(Self {
+            states,
+            faces,
+            cache: HashMap::new(),
+        })
+    }
     pub fn new(
         occlusion: &CachedCollisionRegistry<'_>,
         definitions: &BTreeMap<String, RenderDefinition>,
@@ -224,5 +352,45 @@ impl FaceVisibility {
         }
         self.cache.insert(key, visible);
         Ok(visible)
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn visibility_cache_preserves_partial_face_geometry() {
+        let partial = VoxelShape::from_grid(
+            [vec![0.0, 0.5, 1.0], vec![0.0, 1.0], vec![0.0, 1.0]],
+            &[true, false],
+        )
+        .unwrap();
+        let original = FaceVisibility {
+            states: vec![State {
+                block: BlockStateId(0),
+                faces: [2; 6],
+                definition: RenderDefinition {
+                    skip: SkipRendering::SameBlock,
+                    can_occlude: true,
+                    bars_tag: false,
+                },
+                connections: 0,
+                connection_properties: 0,
+                fluid: FluidKind::Empty,
+            }],
+            faces: vec![VoxelShape::empty(), VoxelShape::block(), partial],
+            cache: HashMap::new(),
+        };
+        let restored =
+            FaceVisibility::from_cache_bytes(&original.to_cache_bytes().unwrap(), 1).unwrap();
+        assert_eq!(restored.states.len(), original.states.len());
+        assert_eq!(restored.faces[2].sizes(), original.faces[2].sizes());
+        assert_eq!(
+            restored.faces[2].occupied_cells(),
+            original.faces[2].occupied_cells()
+        );
+        assert_eq!(restored.states[0].faces, original.states[0].faces);
+        assert!(restored.cache.is_empty());
     }
 }

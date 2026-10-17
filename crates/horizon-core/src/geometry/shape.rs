@@ -145,6 +145,12 @@ impl VoxelShape {
     pub fn sizes(&self) -> [usize; 3] {
         self.sizes
     }
+    /// Exact occupancy for durable caches of derived face geometry.
+    pub fn occupied_cells(&self) -> Vec<bool> {
+        (0..self.sizes.iter().product::<usize>())
+            .map(|i| self.occupancy[i / 64] & (1 << (i % 64)) != 0)
+            .collect()
+    }
     pub fn is_cube(&self) -> bool {
         self.cube
     }
