@@ -111,7 +111,28 @@ def other_state(states, rng, name, current):
     return rng.choice(choices) if choices else None
 
 
+def furnace_mining_cases(facts, only):
+    """Always check all three occupied slots, including after a chunk save/load (#1055)."""
+    states = d.States(facts)
+    for name, ingredient, result in [('furnace', 'iron_ore', 'iron_ingot'),
+                                     ('blast_furnace', 'iron_ore', 'iron_ingot'),
+                                     ('smoker', 'beef', 'cooked_beef')]:
+        if only and only not in name:
+            continue
+        for lit in ['false', 'true']:
+            for reload_chunk in [False, True]:
+                for tool in [plain('diamond_pickaxe'), plain('wooden_pickaxe'), '-']:
+                    yield {'seed': 1055, 'mode': 'remove', 'pos': [0, 0, 0],
+                           'cells': [[0, 0, 0, states.get(name, facing='north', lit=lit)]],
+                           'items': [[0, 0, 0, 0, named(ingredient, 64, 'Input')],
+                                     [0, 0, 0, 1, plain('coal', 32)],
+                                     [0, 0, 0, 2, named(result, 48, 'Output')]],
+                           'reload_chunk': reload_chunk,
+                           'remove': {'op': 'mine', 'item': tool}}
+
+
 def cases(facts, count, seed, only):
+    yield from furnace_mining_cases(facts, only)
     rng = random.Random(seed)
     states = d.States(facts)
     names = list(HOLDERS)

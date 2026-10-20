@@ -212,6 +212,41 @@ impl Game<'_> {
             let stack = parse_stack(item[4].as_str().unwrap_or("-"))?;
             self.fixture_fill(p, slot, stack);
         }
+        // Exercise loaded inventories as well as freshly populated block entities
+        // (#1055). Vanilla receives the same contents; this is a Horizon save/load
+        // round trip before either implementation starts recording the break.
+        if case["reload_chunk"].as_bool() == Some(true) {
+            let pos = &case["pos"];
+            let key = (
+                pos[0].as_i64().unwrap_or(0) as i32 >> 4,
+                pos[2].as_i64().unwrap_or(0) as i32 >> 4,
+            );
+            let chunks = horizon_client::save::chunks_with_block_entities(
+                self.world.chunks.get(&key),
+                &self.world.block_entities,
+                &self.world.block_names,
+            );
+            for chunk in chunks {
+                let tag = horizon_client::save::encode(
+                    &chunk,
+                    self.pack.assets.registry,
+                    self.res.biomes(),
+                );
+                let mut loaded = horizon_client::save::decode(
+                    &tag,
+                    self.pack.assets.registry,
+                    self.res.biomes(),
+                )
+                .ok_or("fixture chunk did not reload")?;
+                self.world
+                    .block_entities
+                    .retain(|p, _| (p.0 >> 4, p.2 >> 4) != key);
+                for (pos, entity) in loaded.block_entities.drain(..) {
+                    self.world.block_entities.insert(pos, entity);
+                }
+                self.world.chunks.insert(key, Arc::new(loaded));
+            }
+        }
         // CrafterBlock.newBlockEntity copies the state's triggered flag;
         // CrafterBlockEntity.setSlotState disables only empty slots.
         let crafter_positions: Vec<(i32, i32, i32)> = self
