@@ -368,7 +368,8 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return Ok(());
         };
-        if self.travelling.is_some() || p.health.dead_or_dying() {
+        // Watching, the owner's view goes through the body's portals only.
+        if self.travelling.is_some() || p.health.dead_or_dying() || self.watching() {
             return Ok(());
         }
         let (portal, gateway) = self.inside_end_portals(
@@ -1043,6 +1044,16 @@ impl Game<'_> {
             .play("minecraft:entity.ender_eye.launch", Some(at), 1.0, pitch);
         self.consume_held();
         self.swing_arm();
+    }
+
+    /// Where each eye of ender in flight is, oldest first: what a player
+    /// sees fly (a companion reads its bearing, game/companion_nether.rs).
+    pub(super) fn ender_eyes_in_flight(&self) -> Vec<[f64; 3]> {
+        self.end
+            .eyes
+            .iter()
+            .map(|e| e.position.to_array())
+            .collect()
     }
 
     /// EyeOfEnder.tick: fly, then drop (4 in 5) or shatter after 80 ticks.

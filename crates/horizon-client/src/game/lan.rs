@@ -66,6 +66,16 @@ pub(super) struct LanHost {
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
+    /// The hub runs only for companions (game/companion.rs): it doesn't
+    /// listen, and the world is not open to LAN until "Open to LAN" makes it
+    /// listen. It stays when the world closes to LAN again.
+    pub private: bool,
+    /// The companions' bodies in the hub, and their skills.
+    pub companions: Vec<super::companion::Body>,
+    /// The player model with each default skin, as the guests wear them.
+    pub skins: HashMap<&'static str, Arc<horizon_client::mobs::MobType>>,
+    /// What the hub's ticks cost while companions are in it (game/companion.rs).
+    pub cost: super::companion::Cost,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -368,44 +378,46 @@ impl Game<'_> {
     fn lan_status(&self) -> serde_json::Value {
         use serde_json::json;
         match &self.lan {
-            Some(h) if !self.serving() || self.published_port().is_some() => json!({
-                "open": true,
-                "host": h.host_name,
-                "port": h.settings.port,
-                // The server's own world: its finished chunks and how many it
-                // has generated or loaded so far.
-                "world": {
-                    "chunks": self.world.chunks.len(),
-                    "generated": self.streaming.generated_total,
-                },
-                "guests": h.hub.guests.iter().map(|g| json!({
-                    "name": g.name,
-                    "position": g.position,
-                    "placed": g.placed,
-                    "loaded": g.loaded,
-                    "game_mode": g.game_mode,
-                    "sneaking": g.sneaking,
-                    "sleeping": g.bed,
-                    "health": g.health,
-                    // FoodData: food level, saturation and exhaustion.
-                    "food": [
-                        f64::from(g.food),
-                        f64::from(g.saturation),
-                        g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
-                    ],
-                    "chunks": g.sent_chunks.len(),
-                    "tracked": g.tracker.len(),
-                    // The armour the host draws on this guest, head to feet.
-                    "model_armor": h.models.get(&g.conn).map(|m| {
-                        [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
-                            .map(|s| s.as_deref())
-                    }),
-                    // The host draws this guest's arm swinging.
-                    "model_swinging": h.models.get(&g.conn).map(|m| m.ai.swinging),
-                    // For how many ticks the host draws this guest using an item.
-                    "model_using": h.models.get(&g.conn).map(|m| m.extra.using_item),
-                })).collect::<Vec<_>>(),
-            }),
+            Some(h) if !h.private && (!self.serving() || self.published_port().is_some()) => {
+                json!({
+                    "open": true,
+                    "host": h.host_name,
+                    "port": h.settings.port,
+                    // The server's own world: its finished chunks and how many it
+                    // has generated or loaded so far.
+                    "world": {
+                        "chunks": self.world.chunks.len(),
+                        "generated": self.streaming.generated_total,
+                    },
+                    "guests": h.hub.guests.iter().map(|g| json!({
+                        "name": g.name,
+                        "position": g.position,
+                        "placed": g.placed,
+                        "loaded": g.loaded,
+                        "game_mode": g.game_mode,
+                        "sneaking": g.sneaking,
+                        "sleeping": g.bed,
+                        "health": g.health,
+                        // FoodData: food level, saturation and exhaustion.
+                        "food": [
+                            f64::from(g.food),
+                            f64::from(g.saturation),
+                            g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
+                        ],
+                        "chunks": g.sent_chunks.len(),
+                        "tracked": g.tracker.len(),
+                        // The armour the host draws on this guest, head to feet.
+                        "model_armor": h.models.get(&g.conn).map(|m| {
+                            [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
+                                .map(|s| s.as_deref())
+                        }),
+                        // The host draws this guest's arm swinging.
+                        "model_swinging": h.models.get(&g.conn).map(|m| m.ai.swinging),
+                        // For how many ticks the host draws this guest using an item.
+                        "model_using": h.models.get(&g.conn).map(|m| m.extra.using_item),
+                    })).collect::<Vec<_>>(),
+                })
+            }
             _ => json!({ "open": false }),
         }
     }
@@ -430,12 +442,20 @@ impl Game<'_> {
     }
     /// IntegratedServer.publishServer without the screen's announcement.
     pub(super) fn lan_start(&mut self, settings: LanSettings) -> Result<()> {
-        if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
-            return Err("already open".into());
-        }
         // IntegratedServer.publishServer: the MOTD names the host's profile.
         let name = self.options.player_name();
         let motd = format!("{name} - {}", self.level.name);
+        if self.lan.as_ref().is_some_and(|h| h.private) {
+            return self.lan_publish_private(settings, &motd);
+        }
+        if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
+            return Err("already open".into());
+        }
+        let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
+        self.lan_start_with(settings, net)
+    }
+    fn lan_start_with(&mut self, settings: LanSettings, net: NetConfig) -> Result<()> {
+        let name = self.options.player_name();
         let host_uuid = self.level.player_uuid.map_or_else(
             || offline_uuid(&name),
             |u| {
@@ -458,8 +478,45 @@ impl Game<'_> {
             dedicated: false,
             integrated: false,
         };
-        let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
         self.lan_host(settings, net, config, Some(host_uuid))
+    }
+    /// "Open to LAN" with the companions' hub running: the same hub starts
+    /// listening and announcing, with the settings the screen chose, and
+    /// the companions stay in it.
+    fn lan_publish_private(&mut self, settings: LanSettings, motd: &str) -> Result<()> {
+        let effective = settings.guest_commands && self.allow_commands();
+        let Some(host) = self.lan.as_mut() else {
+            return Err("not open".into());
+        };
+        host.hub.lan.set_motd(motd);
+        let port = host.hub.lan.listen(settings.port, true)?;
+        host.settings = LanSettings { port, ..settings };
+        host.hub.config.guest_commands = effective;
+        host.hub.config.force_game_mode = settings.force_game_mode;
+        host.private = false;
+        host.hub.resend_commands();
+        Ok(())
+    }
+    /// The hub a companion needs in a world not open to LAN: the one "Open
+    /// to LAN" starts, not listening (game/companion.rs).
+    pub(super) fn lan_start_private(&mut self) -> Result<()> {
+        let name = self.options.player_name();
+        let motd = format!("{name} - {}", self.level.name);
+        let settings = LanSettings {
+            port: 0,
+            guest_commands: false,
+            force_game_mode: false,
+        };
+        let net = NetConfig {
+            listen: false,
+            announce: false,
+            ..NetConfig::lan(0, motd, MAX_PLAYERS)
+        };
+        self.lan_start_with(settings, net)?;
+        if let Some(host) = self.lan.as_mut() {
+            host.private = true;
+        }
+        Ok(())
     }
     /// Start the network side and the play-state hub: for the LAN (with the
     /// host's own profile reserved) or for a dedicated server (no host).
@@ -531,6 +588,10 @@ impl Game<'_> {
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
             commands: Vec::new(),
+            private: false,
+            companions: Vec::new(),
+            skins: HashMap::new(),
+            cost: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -555,6 +616,10 @@ impl Game<'_> {
             return;
         }
         self.friends_lan_closed();
+        if self.lan.as_ref().is_some_and(|h| !h.companions.is_empty()) {
+            self.lan_unpublish_keeping_companions(announce);
+            return;
+        }
         let Some(mut host) = self.lan.take() else {
             return;
         };
@@ -570,6 +635,39 @@ impl Game<'_> {
         self.lan_events.clear();
         self.streaming.extra.clear();
         if announce {
+            self.system_message(Text::translate(
+                "menu.multiplayerOptions.publish.stopped",
+                &[],
+            ));
+        }
+    }
+
+    /// Close the world to LAN while companions play in it: the guests are
+    /// sent away and the hub stops listening, but stays for the companions.
+    fn lan_unpublish_keeping_companions(&mut self, announce: bool) {
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        let was_private = host.private;
+        let reason =
+            horizon_protocol::text::translatable("multiplayer.disconnect.server_shutdown", &[]);
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| !g.companion)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            if let Some(g) = host.hub.guest(conn) {
+                self.save_guest(&host, g);
+            }
+            host.hub.kick(conn, reason.clone());
+        }
+        host.hub.lan.stop_listening();
+        host.private = true;
+        self.lan = Some(host);
+        if announce && !was_private {
             self.system_message(Text::translate(
                 "menu.multiplayerOptions.publish.stopped",
                 &[],
@@ -705,11 +803,14 @@ impl Game<'_> {
         if self.serving() {
             return self.published_port();
         }
-        self.lan.as_ref().map(|h| h.settings.port)
+        self.lan
+            .as_ref()
+            .filter(|h| !h.private)
+            .map(|h| h.settings.port)
     }
 
     /// The host as the guests see them.
-    fn lan_host_state(&self, host: &LanHost) -> Option<HostState> {
+    pub(super) fn lan_host_state(&self, host: &LanHost) -> Option<HostState> {
         let p = self.player.as_ref()?;
         let mut equipment: [Option<ItemStack>; 6] = Default::default();
         equipment[0] = self.inventory.get(self.selected).cloned().flatten();
@@ -811,6 +912,8 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        let metered = (!host.companions.is_empty()).then(std::time::Instant::now);
+        let metered_cpu = metered.and_then(|_| horizon_client::spans::thread_cpu());
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
         // The host's own commands' (and command blocks') players moving
@@ -824,7 +927,8 @@ impl Game<'_> {
         let state = self.lan_host_state(&host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
-            let has_guests = !host.hub.guests.is_empty();
+            // Companions have no client to send the entities to.
+            let has_guests = host.hub.guests.iter().any(|g| !g.companion);
             let entities = if has_guests {
                 let host_entity = state.as_ref().map(|s| s.entity_id);
                 self.lan_assign_ids();
@@ -946,19 +1050,34 @@ impl Game<'_> {
             }
         }
         self.lan_flush_effects(&mut host);
-        self.tick_guests(&mut host);
+        if !host.companions.is_empty() {
+            horizon_client::spans::time("companions", || self.tick_companions(&mut host));
+        }
+        {
+            let _slow = super::companion::SlowLog::new("guests");
+            self.tick_guests(&mut host);
+        }
         self.lan_living_flags(&mut host);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
-        self.lan_update_streaming(&host);
+        {
+            let _slow = super::companion::SlowLog::new("guest streaming");
+            self.lan_update_streaming(&host);
+        }
         self.lan_update_models(&mut host);
         self.lan_update_waypoints(&mut host, state.as_ref());
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+        if let Some(started) = metered {
+            let cpu = metered_cpu
+                .zip(horizon_client::spans::thread_cpu())
+                .map(|(a, b)| b.saturating_sub(a));
+            host.cost.hub(started.elapsed(), cpu);
+        }
         self.lan = Some(host);
     }
 
-    fn lan_guest_joined(
+    pub(super) fn lan_guest_joined(
         &mut self,
         host: &mut LanHost,
         conn: u32,
@@ -1079,7 +1198,7 @@ impl Game<'_> {
             host.hub.entity_event(id, event, at);
         }
         self.lan_broadcast_effects(host);
-        if host.hub.guests.is_empty() {
+        if !host.hub.guests.iter().any(|g| !g.companion) {
             host.mob_state.clear();
             return;
         }
@@ -1136,23 +1255,37 @@ impl Game<'_> {
         // covers what the player tracks (`ChunkTrackingView`, within its view
         // distance + 1) and those chunks' lit neighbours.
         let radius = host.hub.config.view_distance + 1;
+        // A companion sees nothing: the chunks it walks and fights in are enough.
         self.streaming.extra = host
             .hub
             .guests
             .iter()
             .filter(|g| host.hub.here(g))
-            .map(|g| (g.chunk(), radius))
+            .map(|g| {
+                let r = if g.companion {
+                    super::companion::LOADED_RADIUS
+                } else {
+                    radius
+                };
+                (g.chunk(), r)
+            })
             .collect();
     }
 
     /// The guests' models, for the host to see them.
     fn lan_update_models(&mut self, host: &mut LanHost) {
-        let Some(kind) = self.res.player_type().clone() else {
+        if self.res.player_type().is_none() {
             return;
-        };
+        }
         host.models
             .retain(|conn, _| host.hub.guest(*conn).is_some_and(|g| g.placed));
         for g in host.hub.guests.iter().filter(|g| g.placed) {
+            // DefaultPlayerSkin.get(UUID): a player without a skin of their
+            // own wears the default skin their UUID picks, as on vanilla.
+            let skin = horizon_client::tab_list::default_skin(g.uuid);
+            let Some(kind) = self.player_skin_type(&mut host.skins, skin) else {
+                continue;
+            };
             let at = Vec3::new(
                 g.position[0],
                 g.position[1] - if g.sneaking { 0.125 } else { 0.0 },

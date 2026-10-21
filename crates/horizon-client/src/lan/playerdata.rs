@@ -50,6 +50,25 @@ pub fn load(guest: &mut Guest, world: &Path) -> bool {
     true
 }
 
+/// The level a saved player was in, if they have a file.
+pub fn saved_dimension(world: &Path, uuid: u128) -> Option<String> {
+    let tag = read_dat(&path(world, uuid))?;
+    let mut level = Level::default();
+    level.read_player(&tag);
+    Some(match level.dimension.as_str() {
+        d @ ("minecraft:the_nether" | "minecraft:the_end") => d.to_owned(),
+        _ => "minecraft:overworld".to_owned(),
+    })
+}
+
+/// Where a saved player was, if they have a file.
+pub fn saved_position(world: &Path, uuid: u128) -> Option<[f64; 3]> {
+    let tag = read_dat(&path(world, uuid))?;
+    let mut level = Level::default();
+    level.read_player(&tag);
+    level.position
+}
+
 /// Give a guest the player state read into `level`.
 pub fn apply(guest: &mut Guest, level: &Level) {
     if let Some(p) = level.position {

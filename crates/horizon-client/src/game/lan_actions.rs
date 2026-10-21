@@ -62,6 +62,12 @@ pub(super) struct GuestPlay {
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
     death_cause: Option<String>,
+    /// The equipment modifiers on the guest's attributes (`apply_equipment`)
+    /// and the armour and main hand they were put on for: the hub's player
+    /// is a `ServerPlayer` too, whose worn armour counts
+    /// (`LivingEntity.collectEquipmentChanges`).
+    modifiers: Vec<(String, String)>,
+    equipped: Option<Vec<Option<ItemStack>>>,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
@@ -77,6 +83,8 @@ pub(super) struct GuestCommand {
 /// the guest's records that live outside `Guest`.
 pub(super) struct GuestSwap {
     conn: u32,
+    /// `Companions::acting` before the turn.
+    companion: bool,
     i: usize,
     play: GuestPlay,
     player: Option<PlayerMotion>,
@@ -127,12 +135,22 @@ pub(super) struct GuestSwap {
     swings: u32,
     /// How many projectiles there were: those added since are the guest's.
     projectiles: usize,
+    /// The host's equipment modifiers.
+    modifiers: Vec<(String, String)>,
 }
 
 impl GuestPlay {
     /// The item in use: its slot and for how many ticks.
     pub(super) fn using(&self) -> Option<(usize, u32)> {
         self.using
+    }
+    /// The block being dug, as the client's START gave it.
+    pub(super) fn digging(&self) -> Option<[i32; 3]> {
+        self.digging.map(|(pos, _)| pos)
+    }
+    /// The dig's progress as the server counts it: the block, how far, ticks.
+    pub(super) fn mining(&self) -> Option<([i32; 3], f32, u32)> {
+        self.mining.as_ref().map(|m| (m.pos, m.progress, m.ticks))
     }
 }
 
@@ -190,7 +208,8 @@ impl Game<'_> {
             return None;
         }
         let i = host.hub.guests.iter().position(|g| g.conn == conn)?;
-        if host.hub.guests[i].motion.is_none() {
+        let fresh = host.hub.guests[i].motion.is_none();
+        if fresh {
             let p = Vec3::new(
                 host.hub.guests[i].position[0],
                 host.hub.guests[i].position[1],
@@ -199,6 +218,10 @@ impl Game<'_> {
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
         }
         let mut play = host.play.remove(&conn).unwrap_or_default();
+        if fresh {
+            // A new body (joined, respawned, changed level): nothing on it yet.
+            play.equipped = None;
+        }
         let g = &mut host.hub.guests[i];
         // The guest's body.
         let Some(mut motion) = g.motion.take() else {
@@ -301,8 +324,21 @@ impl Game<'_> {
         let packets = std::mem::take(&mut self.guest_packets);
         let swings = self.swings_started;
         let projectiles = self.creatures.projectiles.len();
+        let companion = std::mem::replace(&mut self.companions.acting, g.companion);
+        let modifiers = std::mem::replace(
+            &mut self.applied_modifiers,
+            std::mem::take(&mut play.modifiers),
+        );
+        // Its worn armour on its attributes, when it changed.
+        let mut equipped: Vec<Option<ItemStack>> = self.armor.to_vec();
+        equipped.push(self.inventory.get(self.selected).cloned().flatten());
+        if play.equipped.as_ref() != Some(&equipped) {
+            self.apply_equipment();
+            play.equipped = Some(equipped);
+        }
         Some(GuestSwap {
             conn,
+            companion,
             i,
             play,
             player,
@@ -345,6 +381,7 @@ impl Game<'_> {
             packets,
             swings,
             projectiles,
+            modifiers,
         })
     }
 
@@ -353,6 +390,7 @@ impl Game<'_> {
     pub(super) fn leave_guest(&mut self, host: &mut LanHost, swap: GuestSwap) {
         let GuestSwap {
             conn,
+            companion,
             i,
             mut play,
             mut player,
@@ -395,7 +433,9 @@ impl Game<'_> {
             packets,
             swings,
             projectiles,
+            modifiers,
         } = swap;
+        play.modifiers = std::mem::replace(&mut self.applied_modifiers, modifiers);
         // What the guest shot is theirs (Projectile.setOwner).
         for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
             if p.owner == Some(horizon_client::mobs::Who::Player) && p.guest.is_none() {
@@ -409,6 +449,7 @@ impl Game<'_> {
             host.hub.send_to(conn, &packet);
         }
         (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        self.companions.acting = companion;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
@@ -1069,18 +1110,29 @@ impl Game<'_> {
     }
 
     /// Aim the swapped-in player at an entity; returns its centre and the eye.
-    fn look_at_entity(
+    pub(super) fn look_at_entity(
         &mut self,
         host: &mut LanHost,
         gi: usize,
         id: i32,
     ) -> Option<([f64; 3], [f64; 3])> {
-        let m = self.mobs.iter().find(|m| m.id as i32 == id)?;
-        let centre = [
-            m.position.x,
-            m.position.y + m.kind.height * 0.5,
-            m.position.z,
-        ];
+        let centre = match self.mobs.iter().find(|m| m.id as i32 == id) {
+            Some(m) => [
+                m.position.x,
+                m.position.y + m.kind.height * 0.5,
+                m.position.z,
+            ],
+            // A dragon part or an end crystal (game/dragon.rs).
+            None => {
+                let b = self.tracked_special_box(id)?;
+                let (lo, hi) = (b.min_position(), b.max_position());
+                [
+                    (lo.x + hi.x) / 2.0,
+                    (lo.y + hi.y) / 2.0,
+                    (lo.z + hi.z) / 2.0,
+                ]
+            }
+        };
         let g = &mut host.hub.guests[gi];
         let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
@@ -1101,6 +1153,22 @@ impl Game<'_> {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
                 self.pvp_land(host, victim, &strike);
             }
+            return;
+        }
+        // A ghast's fireball or a wind charge: turned along the guest's own
+        // view (ServerGamePacketListenerImpl.handleInteract, then
+        // Player.attack's AIM_DEFLECT).
+        if let Some(i) = self
+            .creatures
+            .projectiles
+            .iter()
+            .position(|p| p.id != 0 && p.id as i32 == id && super::deflect::redirectable(p))
+        {
+            self.as_guest(host, conn, |g| {
+                if g.within_interaction_range(i) {
+                    g.deflect(i);
+                }
+            });
             return;
         }
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
@@ -1295,6 +1363,11 @@ impl Game<'_> {
     }
 
     fn guest_respawn(&mut self, host: &mut LanHost, conn: u32) {
+        self.guest_respawn_at(host, conn, None);
+    }
+    /// `guest_respawn`, at `at` when given (a companion's body comes back
+    /// beside its owner, game/companion.rs).
+    pub(super) fn guest_respawn_at(&mut self, host: &mut LanHost, conn: u32, at: Option<[f64; 3]>) {
         let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
@@ -1303,8 +1376,8 @@ impl Game<'_> {
             .level
             .world_spawn
             .map(|[x, y, z]| [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
-        let spawn = host.hub.guests[i]
-            .spawn
+        let spawn = at
+            .or(host.hub.guests[i].spawn)
             .or(world)
             .or(self.spawn.map(|s| [s.x, s.y, s.z]))
             .unwrap_or([0.5, 80.0, 0.5]);
@@ -1408,7 +1481,12 @@ impl Game<'_> {
                 });
             }
             self.guest_delayed_destroy(host, conn);
-            self.guest_server_tick(host, conn);
+            if host.hub.guests[gi].companion {
+                // Its body moves on the server (game/companion_body.rs).
+                self.companion_body_tick(host, conn);
+            } else {
+                self.guest_server_tick(host, conn);
+            }
             // Player.tick's statistics and ServerPlayer.tick's triggers, then
             // PlayerAdvancements.flushDirty.
             let sleeping = host.hub.guests[gi].sleeping;
@@ -1419,7 +1497,10 @@ impl Game<'_> {
             });
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
-            self.guest_pickups(host, gi);
+            let picked = self.guest_pickups(host, gi);
+            if host.hub.guests[gi].companion && !picked.is_empty() {
+                self.companion_picked_up(host, conn, picked);
+            }
             self.guest_orbs(host, gi);
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
@@ -1467,6 +1548,9 @@ impl Game<'_> {
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
                 self.spawn_orbs(at, reward);
+                if host.hub.guests[gi].companion {
+                    self.companion_died(host, conn);
+                }
             }
         }
     }
@@ -1504,11 +1588,12 @@ impl Game<'_> {
             count(self.sleeping.is_some(), self.sleep_timer);
         }
         if let Some(host) = self.lan.as_ref() {
+            // A companion sleeps when its owner does: it never holds the night up.
             for g in host
                 .hub
                 .guests
                 .iter()
-                .filter(|g| g.placed && !g.spectator())
+                .filter(|g| g.placed && !g.spectator() && !g.companion)
             {
                 count(g.bed.is_some(), g.sleep_timer);
             }
@@ -1639,7 +1724,7 @@ impl Game<'_> {
     /// eyes. Suffocating is a full collision box that is also a full render
     /// cube (`BlockBehaviour.isSuffocating`'s default; glass and the like
     /// opt out), as the mobs' check has it.
-    fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
+    pub(super) fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
         let (y, half) = ((at[1] + eye_height).floor() as i32, 0.24);
         let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
         range(at[0]).any(|x| {
@@ -1756,13 +1841,14 @@ impl Game<'_> {
     }
 
     /// Dropped items touching a guest go into their inventory.
-    fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
+    /// Returns what was taken: each item and how many.
+    fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) -> Vec<(String, u32)> {
         let (conn, mode, position, id) = {
             let g = &host.hub.guests[gi];
             (g.conn, g.game_mode, g.position, g.entity_id)
         };
         if mode == SPECTATOR || self.dropped.is_empty() {
-            return;
+            return Vec::new();
         }
         let near: Vec<usize> = self
             .dropped
@@ -1778,20 +1864,24 @@ impl Game<'_> {
             .map(|(i, _)| i)
             .collect();
         let mut taken = Vec::new();
+        let mut picked = Vec::new();
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
-            let before = stack.count;
+            let (before, name) = (stack.count, stack.item.to_string());
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
                     self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
+                    picked.push((name, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
-                    taken.push((item_id, before - self.dropped[i].stack.count));
+                    let count = before - self.dropped[i].stack.count;
+                    taken.push((item_id, count));
+                    picked.push((name, count));
                 }
                 Some(_) => {}
             }
@@ -1801,6 +1891,7 @@ impl Game<'_> {
             host.hub
                 .sound("minecraft:entity.item.pickup", position, 0.2, 1.4, 7, None);
         }
+        picked
     }
 
     /// `Player.tick`'s takeXpDelay and `Player.aiStep`'s touch of the

@@ -84,7 +84,7 @@ fn format_double(v: f64) -> String {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) {
-        if self.mod_command(command) {
+        if self.mod_command(command) || self.companion_chat_command(command) {
             return;
         }
         let d = vanilla::game_dispatcher();
@@ -181,7 +181,7 @@ impl Game<'_> {
         let informs = match self.console_broadcast {
             Some(broadcast) => broadcast,
             // While a guest acts the host's LanHost is out of `self.lan`.
-            None => self.lan_acting.is_some() || self.lan.is_some(),
+            None => self.lan_acting.is_some() || self.lan.as_ref().is_some_and(|h| !h.private),
         };
         if !informs
             || message
@@ -1146,7 +1146,7 @@ impl Game<'_> {
     }
     /// Teleport the local player into the command source's dimension. Unlike
     /// portal travel, `/tp` keeps the coordinates given by the command.
-    fn teleport_player_to_dimension(
+    pub(super) fn teleport_player_to_dimension(
         &mut self,
         dimension: Dim,
         pos: [f64; 3],
@@ -1612,11 +1612,16 @@ impl Game<'_> {
             {
                 return Err(err("commands.summon.failed.peaceful", &[]));
             }
-            let Some(target) = self.summon_with_nbt(&format!("minecraft:{short}"), pos, &nbt)?
-            else {
-                return Err(err("commands.summon.failed", &[]));
+            let before = self.spawned_mark();
+            let name = match self.summon_with_nbt(&format!("minecraft:{short}"), pos, &nbt)? {
+                Some(target) => self.target_name(target),
+                // Spawned as a kind no command target stands for (primed
+                // TNT, falling blocks, projectiles): its type's name.
+                None if self.spawned_mark() != before => {
+                    Text::translate(&format!("entity.minecraft.{short}"), &[])
+                }
+                None => return Err(err("commands.summon.failed", &[])),
             };
-            let name = self.target_name(target);
             self.feedback(Text::translate("commands.summon.success", &[name]));
             return Ok(1);
         }
@@ -1669,15 +1674,30 @@ impl Game<'_> {
                 }
                 // SummonCommand.createEntity: any other type from an empty compound.
                 _ => {
-                    let Some(target) = self.summon_with_nbt(&kind, pos, "{}")? else {
-                        return Err(err("commands.summon.failed", &[]));
+                    let before = self.spawned_mark();
+                    name = match self.summon_with_nbt(&kind, pos, "{}")? {
+                        Some(target) => self.target_name(target),
+                        // Spawned as a kind no command target stands for
+                        // (primed TNT, falling blocks, projectiles).
+                        None if self.spawned_mark() != before => {
+                            Text::translate(&format!("entity.minecraft.{short}"), &[])
+                        }
+                        None => return Err(err("commands.summon.failed", &[])),
                     };
-                    name = self.target_name(target);
                 }
             }
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));
         Ok(1)
+    }
+    /// What changes when an entity spawns, kinds that take their id only
+    /// when first tracked (primed TNT, falling blocks, projectiles)
+    /// included: a summon compares it before and after.
+    fn spawned_mark(&self) -> (u32, usize) {
+        (
+            self.next_entity,
+            self.tnts.len() + self.falling.len() + self.creatures.projectiles.len(),
+        )
     }
     /// BlockStateArgument -> registry state.
     pub(super) fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {
@@ -2415,26 +2435,15 @@ impl Game<'_> {
             .filter(|t| !t.trim().is_empty())
             .all(|term| split_top_level(term, '|').iter().any(|alt| test(alt)))
     }
-    fn cmd_clear(&mut self, ctx: &Context) -> R<i32> {
-        let targets = if ctx.get("targets").is_some() {
-            self.entities(ctx, "targets", true)?
-        } else {
-            vec![Target::Player]
-        };
-        let predicate = match ctx.get("item") {
-            Some(Arg::Item(i)) => i.clone(),
-            _ => ItemInput {
-                id: "*".into(),
-                tag: false,
-                any: true,
-                components: None,
-            },
-        };
-        let max = Self::int(ctx, "maxCount").unwrap_or(-1);
-        let counting = max == 0;
-        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
-        let mut removed = 0i32;
-        let mut budget = if max < 0 { i32::MAX } else { max };
+    /// Removes (or, when `counting`, only counts) up to `budget` items matching
+    /// `predicate` from the acting player's inventory; returns what it took and
+    /// the budget left.
+    fn clear_matching(
+        &mut self,
+        predicate: &ItemInput,
+        mut budget: i32,
+        counting: bool,
+    ) -> (i32, i32) {
         let all = |g: &Self| -> Vec<Option<ItemStack>> {
             let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
             v.extend(g.armor.iter().cloned());
@@ -2444,11 +2453,9 @@ impl Game<'_> {
         };
         let matching: Vec<bool> = all(self)
             .iter()
-            .map(|s| {
-                s.as_ref()
-                    .is_some_and(|s| self.stack_matches(&predicate, s))
-            })
+            .map(|s| s.as_ref().is_some_and(|s| self.stack_matches(predicate, s)))
             .collect();
+        let mut removed = 0i32;
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
         slots.extend(self.armor.iter_mut());
@@ -2476,11 +2483,39 @@ impl Game<'_> {
                 }
             }
         }
+        (removed, budget)
+    }
+    fn cmd_clear(&mut self, ctx: &Context) -> R<i32> {
+        let targets = if ctx.get("targets").is_some() {
+            self.entities(ctx, "targets", true)?
+        } else {
+            vec![Target::Player]
+        };
+        let predicate = match ctx.get("item") {
+            Some(Arg::Item(i)) => i.clone(),
+            _ => ItemInput {
+                id: "*".into(),
+                tag: false,
+                any: true,
+                components: None,
+            },
+        };
+        let max = Self::int(ctx, "maxCount").unwrap_or(-1);
+        let counting = max == 0;
+        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried,
+        // for each target's own inventory (a guest's, not the host's), each up to maxCount.
+        let budget = if max < 0 { i32::MAX } else { max };
+        let mut removed = 0i32;
+        for &t in &targets {
+            removed += self
+                .for_player(t, |g| g.clear_matching(&predicate, budget, counting).0)
+                .unwrap_or(0);
+        }
         if removed == 0 {
             return Err(if targets.len() == 1 {
                 CommandError::new(Text::translate(
                     "clear.failed.single",
-                    &[Text::literal(self.acting_player_name())],
+                    &[self.target_name(targets[0])],
                 ))
             } else {
                 err("clear.failed.multiple", &[&targets.len()])
@@ -2491,7 +2526,7 @@ impl Game<'_> {
             &format!("commands.clear.{kind}.single"),
             &[
                 Text::literal(removed.to_string()),
-                Text::literal(self.acting_player_name()),
+                self.target_name(targets[0]),
             ],
         ));
         Ok(removed)
