@@ -77,6 +77,8 @@ pub(super) struct GuestCommand {
 /// the guest's records that live outside `Guest`.
 pub(super) struct GuestSwap {
     conn: u32,
+    /// `Companions::acting` before the turn.
+    companion: bool,
     i: usize,
     play: GuestPlay,
     player: Option<PlayerMotion>,
@@ -134,6 +136,10 @@ impl GuestPlay {
     pub(super) fn using(&self) -> Option<(usize, u32)> {
         self.using
     }
+    /// The block being dug, as the client's START gave it.
+    pub(super) fn digging(&self) -> Option<[i32; 3]> {
+        self.digging.map(|(pos, _)| pos)
+    }
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -171,9 +177,9 @@ impl Game<'_> {
         conn: u32,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
-        let swap = self.enter_guest(host, conn)?;
+        let swap = horizon_client::spans::time("enter_guest", || self.enter_guest(host, conn))?;
         let result = f(self);
-        self.leave_guest(host, swap);
+        horizon_client::spans::time("leave_guest", || self.leave_guest(host, swap));
         Some(result)
     }
 
@@ -301,8 +307,10 @@ impl Game<'_> {
         let packets = std::mem::take(&mut self.guest_packets);
         let swings = self.swings_started;
         let projectiles = self.creatures.projectiles.len();
+        let companion = std::mem::replace(&mut self.companions.acting, g.companion);
         Some(GuestSwap {
             conn,
+            companion,
             i,
             play,
             player,
@@ -353,6 +361,7 @@ impl Game<'_> {
     pub(super) fn leave_guest(&mut self, host: &mut LanHost, swap: GuestSwap) {
         let GuestSwap {
             conn,
+            companion,
             i,
             mut play,
             mut player,
@@ -409,6 +418,7 @@ impl Game<'_> {
             host.hub.send_to(conn, &packet);
         }
         (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        self.companions.acting = companion;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
@@ -1069,18 +1079,29 @@ impl Game<'_> {
     }
 
     /// Aim the swapped-in player at an entity; returns its centre and the eye.
-    fn look_at_entity(
+    pub(super) fn look_at_entity(
         &mut self,
         host: &mut LanHost,
         gi: usize,
         id: i32,
     ) -> Option<([f64; 3], [f64; 3])> {
-        let m = self.mobs.iter().find(|m| m.id as i32 == id)?;
-        let centre = [
-            m.position.x,
-            m.position.y + m.kind.height * 0.5,
-            m.position.z,
-        ];
+        let centre = match self.mobs.iter().find(|m| m.id as i32 == id) {
+            Some(m) => [
+                m.position.x,
+                m.position.y + m.kind.height * 0.5,
+                m.position.z,
+            ],
+            // A dragon part or an end crystal (game/dragon.rs).
+            None => {
+                let b = self.tracked_special_box(id)?;
+                let (lo, hi) = (b.min_position(), b.max_position());
+                [
+                    (lo.x + hi.x) / 2.0,
+                    (lo.y + hi.y) / 2.0,
+                    (lo.z + hi.z) / 2.0,
+                ]
+            }
+        };
         let g = &mut host.hub.guests[gi];
         let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
@@ -1295,6 +1316,11 @@ impl Game<'_> {
     }
 
     fn guest_respawn(&mut self, host: &mut LanHost, conn: u32) {
+        self.guest_respawn_at(host, conn, None);
+    }
+    /// `guest_respawn`, at `at` when given (a companion's body comes back
+    /// beside its owner, game/companion.rs).
+    pub(super) fn guest_respawn_at(&mut self, host: &mut LanHost, conn: u32, at: Option<[f64; 3]>) {
         let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
@@ -1303,8 +1329,8 @@ impl Game<'_> {
             .level
             .world_spawn
             .map(|[x, y, z]| [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
-        let spawn = host.hub.guests[i]
-            .spawn
+        let spawn = at
+            .or(host.hub.guests[i].spawn)
             .or(world)
             .or(self.spawn.map(|s| [s.x, s.y, s.z]))
             .unwrap_or([0.5, 80.0, 0.5]);
@@ -1376,7 +1402,7 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
-            self.guest_sleep_tick(host, gi);
+            horizon_client::spans::time("guest_sleep", || self.guest_sleep_tick(host, gi));
             if host.hub.guests[gi].dead || self.on_server_trip(conn) {
                 continue;
             }
@@ -1385,6 +1411,7 @@ impl Game<'_> {
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
             if digging.is_some() || using || delayed {
+                let _span = horizon_client::spans::Span::new("guest_dig_use");
                 self.as_guest(host, conn, |g| {
                     g.attack_ticks = g.attack_ticks.saturating_add(1);
                     if let Some((pos, face)) = digging {
@@ -1407,20 +1434,37 @@ impl Game<'_> {
                     }
                 });
             }
-            self.guest_delayed_destroy(host, conn);
-            self.guest_server_tick(host, conn);
+            horizon_client::spans::time("guest_destroy", || self.guest_delayed_destroy(host, conn));
+            if host.hub.guests[gi].companion {
+                // Its body moves on the server (game/companion_body.rs).
+                horizon_client::spans::time("companion_body", || {
+                    self.companion_body_tick(host, conn)
+                });
+            } else {
+                self.guest_server_tick(host, conn);
+            }
             // Player.tick's statistics and ServerPlayer.tick's triggers, then
             // PlayerAdvancements.flushDirty.
             let sleeping = host.hub.guests[gi].sleeping;
-            self.as_guest(host, conn, |g| {
-                g.count_tick_stats(sleeping);
-                g.tick_advancements();
-                g.update_player_attributes();
+            horizon_client::spans::time("guest_player_tick", || {
+                self.as_guest(host, conn, |g| {
+                    horizon_client::spans::time("guest_stats", || g.count_tick_stats(sleeping));
+                    horizon_client::spans::time("guest_advancements", || g.tick_advancements());
+                    g.update_player_attributes();
+                })
             });
-            host.hub.flush_progress(conn);
-            self.guest_dig_feedback(host, conn);
-            self.guest_pickups(host, gi);
-            self.guest_orbs(host, gi);
+            horizon_client::spans::time("guest_progress", || host.hub.flush_progress(conn));
+            horizon_client::spans::time("guest_dig_feedback", || {
+                self.guest_dig_feedback(host, conn)
+            });
+            let picked =
+                horizon_client::spans::time("guest_pickups", || self.guest_pickups(host, gi));
+            if host.hub.guests[gi].companion && !picked.is_empty() {
+                horizon_client::spans::time("companion_picked", || {
+                    self.companion_picked_up(host, conn, picked);
+                });
+            }
+            horizon_client::spans::time("guest_orbs", || self.guest_orbs(host, gi));
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
                 g.dead = true;
@@ -1467,6 +1511,9 @@ impl Game<'_> {
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
                 self.spawn_orbs(at, reward);
+                if host.hub.guests[gi].companion {
+                    self.companion_died(host, conn);
+                }
             }
         }
     }
@@ -1504,11 +1551,12 @@ impl Game<'_> {
             count(self.sleeping.is_some(), self.sleep_timer);
         }
         if let Some(host) = self.lan.as_ref() {
+            // A companion sleeps when its owner does: it never holds the night up.
             for g in host
                 .hub
                 .guests
                 .iter()
-                .filter(|g| g.placed && !g.spectator())
+                .filter(|g| g.placed && !g.spectator() && !g.companion)
             {
                 count(g.bed.is_some(), g.sleep_timer);
             }
@@ -1639,7 +1687,7 @@ impl Game<'_> {
     /// eyes. Suffocating is a full collision box that is also a full render
     /// cube (`BlockBehaviour.isSuffocating`'s default; glass and the like
     /// opt out), as the mobs' check has it.
-    fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
+    pub(super) fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
         let (y, half) = ((at[1] + eye_height).floor() as i32, 0.24);
         let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
         range(at[0]).any(|x| {
@@ -1756,13 +1804,14 @@ impl Game<'_> {
     }
 
     /// Dropped items touching a guest go into their inventory.
-    fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
+    /// Returns what was taken: each item and how many.
+    fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) -> Vec<(String, u32)> {
         let (conn, mode, position, id) = {
             let g = &host.hub.guests[gi];
             (g.conn, g.game_mode, g.position, g.entity_id)
         };
         if mode == SPECTATOR || self.dropped.is_empty() {
-            return;
+            return Vec::new();
         }
         let near: Vec<usize> = self
             .dropped
@@ -1778,20 +1827,24 @@ impl Game<'_> {
             .map(|(i, _)| i)
             .collect();
         let mut taken = Vec::new();
+        let mut picked = Vec::new();
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
-            let before = stack.count;
+            let (before, name) = (stack.count, stack.item.to_string());
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
                     self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
+                    picked.push((name, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
-                    taken.push((item_id, before - self.dropped[i].stack.count));
+                    let count = before - self.dropped[i].stack.count;
+                    taken.push((item_id, count));
+                    picked.push((name, count));
                 }
                 Some(_) => {}
             }
@@ -1801,6 +1854,7 @@ impl Game<'_> {
             host.hub
                 .sound("minecraft:entity.item.pickup", position, 0.2, 1.4, 7, None);
         }
+        picked
     }
 
     /// `Player.tick`'s takeXpDelay and `Player.aiStep`'s touch of the

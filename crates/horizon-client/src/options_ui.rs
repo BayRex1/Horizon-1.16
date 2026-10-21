@@ -869,6 +869,8 @@ pub enum Page {
     Controller,
     PadBinds,
     Extras,
+    /// The AI companion (`companion_options`).
+    Companion,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -888,6 +890,7 @@ enum Act {
     HorizonMenus,
     ToggleMod(usize),
     OpenModFolder,
+    Companion(crate::companion_options::Row),
 }
 enum WKind {
     Button {
@@ -935,6 +938,8 @@ pub enum Event {
     Packs(Vec<String>),
     OpenPackFolder,
     OpenModFolder,
+    /// The Companion section asks the game for something (`companion_options::Action`).
+    Companion(crate::companion_options::Action),
 }
 /// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
 /// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
@@ -993,6 +998,8 @@ pub struct OptionsUi {
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
     pub graphics: crate::graphics_ui::GraphicsUi,
+    /// The companion's name being typed (the Companion section's name box has the focus).
+    pub companion_name: Option<String>,
 }
 impl Default for OptionsUi {
     fn default() -> Self {
@@ -1025,6 +1032,7 @@ impl Default for OptionsUi {
             in_world: false,
             center_language: false,
             graphics: Default::default(),
+            companion_name: None,
         }
     }
 }
@@ -1093,6 +1101,17 @@ impl OptionsUi {
     }
     /// Jump straight to a page (control socket / tests).
     pub fn show(&mut self, page: Page) {
+        // Horizon's menus have the Companion page as a section of their own.
+        if page == Page::Companion && crate::ui_theme::horizon() {
+            self.stack.truncate(1);
+            self.section = crate::options_horizon::SECTIONS
+                .iter()
+                .position(|section| section.name == "Companion")
+                .unwrap_or(0);
+            self.section_shown = None;
+            self.hscroll = 0.0;
+            return;
+        }
         if page != Page::Main {
             self.push(page);
         }
@@ -1157,6 +1176,7 @@ impl OptionsUi {
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
             Page::Extras => "Horizon Extras",
+            Page::Companion => "Companion",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -1209,6 +1229,72 @@ impl OptionsUi {
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
+            Page::Companion => {
+                use crate::companion_options::{self as co, Control};
+                let talk = if self.selected_key == Some(keybinds::TALK) {
+                    "> Press a key <".to_owned()
+                } else {
+                    keybinds::display_name(s.keys.get(keybinds::TALK)).plain()
+                };
+                co::rows(&s.companion)
+                    .into_iter()
+                    .flat_map(|row| {
+                        let (caption, text, control) =
+                            co::row_parts(row, &s.companion, &talk, self.companion_name.as_deref());
+                        match (row, control) {
+                            (co::Row::Header(h), _) => vec![Row::Header(h)],
+                            // What doesn't fit the button goes on the next ones.
+                            (_, Control::None) => {
+                                let line = if caption.is_empty() {
+                                    text
+                                } else {
+                                    format!("{caption}: {text}")
+                                };
+                                co::classic_lines(&line, co::CLASSIC_TEXT)
+                                    .into_iter()
+                                    .map(|line| {
+                                        Row::Buttons(
+                                            inactive(button(
+                                                0.0,
+                                                0.0,
+                                                310.0,
+                                                Text::literal(line),
+                                                Act::None,
+                                            )),
+                                            None,
+                                        )
+                                    })
+                                    .collect()
+                            }
+                            (_, control) => {
+                                let value = match control {
+                                    Control::Switch(on) => if on { "ON" } else { "OFF" }.to_owned(),
+                                    Control::Button(v) => v,
+                                    Control::Inactive(v) => v,
+                                    Control::TextBox(v, true) => format!("> {v}_ <"),
+                                    Control::TextBox(v, false) => v,
+                                    Control::None => String::new(),
+                                };
+                                let line = format!("{caption}: {value}");
+                                // A value too long beside its caption shows alone.
+                                let label = Text::literal(
+                                    if caption.is_empty()
+                                        || co::classic_width(&line) > co::CLASSIC_TEXT
+                                    {
+                                        value
+                                    } else {
+                                        line
+                                    },
+                                );
+                                vec![Row::Buttons(
+                                    button(0.0, 0.0, 310.0, label, Act::Companion(row)),
+                                    None,
+                                )]
+                            }
+                        }
+                    })
+                    .collect()
+            }
             Page::Extras => crate::extras::rows()
                 .into_iter()
                 .map(|row| match row {
@@ -1482,8 +1568,12 @@ impl OptionsUi {
                     ("options.accessibility", Some(Page::Accessibility)),
                     ("Mods...", Some(Page::Mods)),
                     ("Horizon Extras...", Some(Page::Extras)),
+                    ("Companion...", Some(Page::Companion)),
                 ];
-                let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
+                let companion = s.companion.ready && !s.extras.no_ai;
+                let entries = &entries[..entries.len() - usize::from(!companion)];
+                let rows = entries.len().div_ceil(2) as f32;
+                let gy = (61.0 + 30.0f32).min(h - 33.0 - 24.0 * rows);
                 for (i, (key, page)) in entries.iter().enumerate() {
                     let x = cx - 158.0 + 4.0 + (i % 2) as f32 * 158.0;
                     let y = gy + (i / 2) as f32 * 24.0;
@@ -1512,13 +1602,21 @@ impl OptionsUi {
                     MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
                 let query = self.settings_search.value.to_lowercase();
                 mappings.retain(|(name, _)| {
-                    query.is_empty() || lang::get(name).to_lowercase().contains(&query)
+                    keybinds::listed(name)
+                        && (query.is_empty()
+                            || keybinds::label(name)
+                                .plain()
+                                .to_lowercase()
+                                .contains(&query))
                 });
                 mappings.sort_by(|a, b| {
                     let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
                     let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
-                    ca.cmp(&cb)
-                        .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
+                    ca.cmp(&cb).then_with(|| {
+                        keybinds::label(a.0)
+                            .plain()
+                            .cmp(&keybinds::label(b.0).plain())
+                    })
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
@@ -1555,7 +1653,7 @@ impl OptionsUi {
                         w: 200.0,
                         h: 9.0,
                         kind: WKind::Text {
-                            text: tr(name),
+                            text: keybinds::label(name),
                             color: u32::MAX,
                             centered: false,
                         },
@@ -2358,6 +2456,7 @@ impl OptionsUi {
                             events.push(Event::Changed);
                         }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
+                        Act::Companion(row) => events.extend(self.companion_click(s, row, right)),
                         Act::None => {}
                     }
                 }
@@ -2420,6 +2519,10 @@ impl OptionsUi {
         }
     }
     pub fn scroll(&mut self, s: &Settings, size: (f32, f32), amount: f32) {
+        if crate::ui_theme::horizon() && self.page() == Page::Main {
+            self.scroll_horizon(amount);
+            return;
+        }
         let (_, top, bottom, content) = self.layout(s, size.0, size.1);
         self.scroll -= amount * 18.0;
         self.clamp_scroll(top, bottom, content);
@@ -2516,7 +2619,9 @@ impl OptionsUi {
             p.type_text(&crate::screen_draw::Measure(&atlas.font), text);
             return;
         }
-        if self.page() == Page::Language {
+        if let Some(name) = self.companion_name.as_mut() {
+            *name = crate::companion_options::name_chars(&format!("{name}{text}"));
+        } else if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
         } else if self.settings_search_active() {
@@ -2563,6 +2668,36 @@ impl OptionsUi {
             s.keys.set(name, &value);
         }
         vec![Event::Changed]
+    }
+    /// A click on a Companion row, in either menu style.
+    pub(crate) fn companion_click(
+        &mut self,
+        s: &mut Settings,
+        row: crate::companion_options::Row,
+        back: bool,
+    ) -> Vec<Event> {
+        use crate::companion_options::{self as co, Action};
+        let mut events = self.companion_name_commit(s);
+        match co::click(row, &mut s.companion, back) {
+            Some(Action::EditName) => {
+                self.companion_name = Some(s.companion.settings.persona.name.clone())
+            }
+            Some(Action::BindTalk) => self.selected_key = Some(keybinds::TALK),
+            Some(action) => events.push(Event::Companion(action)),
+            None => {}
+        }
+        events
+    }
+    /// The name box loses the focus: a valid name is kept.
+    pub(crate) fn companion_name_commit(&mut self, s: &mut Settings) -> Vec<Event> {
+        let Some(name) = self.companion_name.take() else {
+            return Vec::new();
+        };
+        if name.chars().count() < 3 || name == s.companion.settings.persona.name {
+            return Vec::new();
+        }
+        s.companion.settings.persona.name = name;
+        vec![Event::Companion(crate::companion_options::Action::Changed)]
     }
     /// Mouse bindings use the same settings and persistence as keyboard bindings.
     pub fn bind_mouse(
@@ -2622,6 +2757,17 @@ impl OptionsUi {
                     .to_owned()
             };
             return self.bind_key(s, value);
+        }
+        if let Some(name) = self.companion_name.as_mut() {
+            match key {
+                K::Backspace => {
+                    name.pop();
+                }
+                K::Enter | K::NumpadEnter => return self.companion_name_commit(s),
+                K::Escape => self.companion_name = None,
+                _ => {}
+            }
+            return Vec::new();
         }
         if key == K::Escape {
             return self.back(s);

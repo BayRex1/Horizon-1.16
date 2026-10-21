@@ -30,11 +30,12 @@ const HELP: &[&str] = &[
     "chat TEXT                      send a chat line or /command as if typed",
     "type TEXT                      type into the open chat box (key enter tap sends)",
     "chat-log [N]                   the newest N chat messages (default 10)",
-    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
+    "options [PAGE] [ROWS]          open the options, scrolled down ROWS (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]  fly the camera along a line at constant speed, then reply with the frame summary (raw: every frame time too)",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
+    "singleplayer                   the title's Singleplayer button (Create New World with no saves)",
     "save                           save the world",
     "save-all                       save the world, rewriting every resident chunk",
     "connect HOST[:PORT] [NAME]     join a multiplayer server (offline mode) from the title screen",
@@ -159,6 +160,9 @@ impl Game<'_> {
             return Ok(value);
         }
         if let Some(value) = self.options_control(&words, line)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.companion_control(&words)? {
             return Ok(Some(value));
         }
         if let Some(value) = self.lan_control(&words)? {
@@ -525,6 +529,7 @@ impl Game<'_> {
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
+                    "companion" => Page::Companion,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {
@@ -532,6 +537,11 @@ impl Game<'_> {
                 }
                 self.open_options(self.title.is_some());
                 self.ui.options.show(page);
+                // `options PAGE ROWS`: scrolled down like the mouse wheel (screenshots of long pages).
+                if let Some(rows) = words.get(2).map(|r| r.parse::<f32>()).transpose()? {
+                    let size = self.gui_size();
+                    self.ui.options.scroll(&self.settings, size, -rows);
+                }
                 ok()
             }
             "chat-log" => {
@@ -579,6 +589,12 @@ impl Game<'_> {
                     tick_ms: Vec::new(),
                 });
                 Ok(None)
+            }
+            "singleplayer" => {
+                // The title's Singleplayer button: Create New World when the saves are empty.
+                let title = self.title.as_mut().ok_or("a world is open")?;
+                title.enter_singleplayer();
+                ok()
             }
             "open" => {
                 if self.title.is_none() {
@@ -633,7 +649,7 @@ impl Game<'_> {
             "dragon-hurt" => {
                 // Test hook: damage the dragon's head as the player would.
                 let amount: f32 = arg(1)?.parse()?;
-                self.hit_special(super::dragon::SPECIAL, amount, true);
+                self.hit_special(super::dragon::SPECIAL, amount, true, false);
                 ok()
             }
             "quit" => {
@@ -707,6 +723,9 @@ impl Game<'_> {
                 "on_ground": p.ground.on_ground,
                 "health": p.health.health(),
                 "food": p.health.food.food,
+                // level.dat's spawn, where a player without a bed respawns.
+                "world_spawn": self.level.world_spawn,
+                "game_mode": self.mode_id(),
             })
         });
         let target = self.pick().map(|hit| {

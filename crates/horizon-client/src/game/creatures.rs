@@ -623,6 +623,8 @@ impl Game<'_> {
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        // A companion's kill gives a player's loot, but its owner no credit.
+        let credited = by_player && !self.companions.killed(m.id, self.combat.last_hurt_mob);
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
         // takes the experience (before the loot is dropped).
@@ -635,7 +637,7 @@ impl Game<'_> {
                     0
                 }
             });
-        if by_player {
+        if credited {
             self.stats.add("killed", &m.kind.id, 1);
             self.stats.custom("mob_kills", 1);
             self.score_player_killed(super::commands::Target::Mob(m.id));
@@ -1855,12 +1857,30 @@ impl Game<'_> {
         } = hit
             && id >= super::dragon::SPECIAL
         {
+            let by_player = p.owner == Some(Who::Player);
+            if let ProjectileKind::Arrow { .. } = p.kind {
+                // AbstractArrow.onHitEntity: spent if the part or crystal took
+                // it, else turned back (a perched dragon sets it alight first).
+                let mut arrow = p.clone();
+                let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
+                let outcome = match self.hit_special(id, amount, by_player, true) {
+                    super::dragon::Hurt::Landed { .. } => EntityHit::Hurt,
+                    super::dragon::Hurt::Refused => EntityHit::Refused,
+                    super::dragon::Hurt::Shrugged => {
+                        if let Some(a) = arrow.arrow.as_mut() {
+                            a.ignite_for_seconds(1.0);
+                        }
+                        EntityHit::Refused
+                    }
+                };
+                self.finish_arrow_hit(arrow, outcome);
+                return Ok(());
+            }
             let amount = match p.kind {
-                ProjectileKind::Arrow { .. } => p.arrow_damage(&mut self.world.random),
                 ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 6.0,
                 _ => 0.0,
             };
-            self.hit_special(id, amount, p.owner == Some(Who::Player));
+            self.hit_special(id, amount, by_player, false);
             return Ok(());
         }
         if let (

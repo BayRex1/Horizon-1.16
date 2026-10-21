@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""The engine under a companion that plays alone (docs/companion-speedrun.md, engine gaps).
+
+In a fixed-seed world, through the control socket:
+
+- camera: Watch's camera is pulled in along its ray when leaves are in the way and comes back out smoothly.
+- respawn: a companion that dies with its owner far away comes back where a player would, at the world
+  spawn in the Overworld (its owner elsewhere keeps their place); one that dies in the Nether away from its
+  owner comes back in the Overworld, parked there until its owner returns.
+
+    python3 tools/test_companion_engine.py --client target/fast/horizon-client --offscreen
+
+Worlds and settings live in a temporary directory.
+"""
+import argparse
+import json
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_companion import command, distance, player, start, stop, wait_for  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
+SEED = 20261020
+WORLD = 'CompanionEngine'
+
+
+def settle(endpoint, what):
+    """Wait until the owner stands on loaded ground (once the move has registered)."""
+    time.sleep(1)
+    wait_for(endpoint, 'status', lambda v: v['player'] and v['player'].get('on_ground')
+             and v['pending_chunks'] == 0, timeout=90, what=what)
+
+
+def listed(endpoint, name):
+    for c in command(endpoint, 'companion list')['companions']:
+        if c['name'] == name:
+            return c
+    return None
+
+
+def die_and_come_back(endpoint, name):
+    command(endpoint, f'command kill {name}')
+    wait_for(endpoint, 'companion list', lambda v: any(c['name'] == name and c.get('dead') for c in v['companions']),
+             timeout=10, what=f'{name} dead')
+    back = wait_for(endpoint, 'companion list',
+                    lambda v: any(c['name'] == name and (c.get('parked') or not c['dead']) for c in v['companions']),
+                    timeout=30, what=f'{name} back')
+    return next(c for c in back['companions'] if c['name'] == name)
+
+
+def open_world(endpoint):
+    wait_for(endpoint, 'screen', lambda v: v['screen'] == 'title', what='title screen')
+    command(endpoint, f'open {WORLD} {SEED}')
+    wait_for(endpoint, 'status', lambda v: v['player'] is not None and v['pending_chunks'] == 0,
+             timeout=180, what='world loaded')
+    command(endpoint, 'time 1000')
+    for rule in ('advance_time', 'spawn_mobs', 'spawn_patrols', 'spawn_phantoms'):
+        command(endpoint, f'command gamerule {rule} false')
+    command(endpoint, 'command difficulty easy')
+    command(endpoint, 'command gamemode creative')
+
+
+def respawn(endpoint):
+    """E6: alone, it respawns at the world spawn; in another level, it waits there for its owner."""
+    spawn = player(endpoint)['world_spawn']
+    assert spawn, 'the world has no spawn'
+    at_spawn = [spawn[0] + 0.5, spawn[1], spawn[2] + 0.5]
+    # Near the spawn, so its chunks stay loaded; the companion holds its post.
+    command(endpoint, f'command tp @s {spawn[0] + 0.5} 200 {spawn[2] + 30.5}')
+    settle(endpoint, 'owner near the spawn')
+    command(endpoint, 'companion spawn Ari')
+    command(endpoint, 'companion do Ari stay')
+    time.sleep(1)
+    # The owner 40 blocks off: not with it.
+    command(endpoint, f'command tp @s {spawn[0] + 40.5} 200 {spawn[2] + 30.5}')
+    settle(endpoint, 'owner away')
+    owner = player(endpoint)['position']
+    c = die_and_come_back(endpoint, 'Ari')
+    assert distance(c['position'], at_spawn) < 1.5, ('not at the world spawn', c['position'], at_spawn)
+    assert distance(c['position'], owner) > 20, ('beside its owner', c['position'], owner)
+    print(f'respawn alone: at the world spawn {c["position"]}, owner {distance(c["position"], owner):.0f} blocks off')
+
+    # With its owner it still comes back beside them.
+    command(endpoint, 'companion do Ari follow')
+    wait_for(endpoint, 'companion list', lambda v: distance(listed(endpoint, 'Ari')['position'],
+                                                            player(endpoint)['position']) < 8,
+             timeout=30, what='Ari with its owner')
+    owner = player(endpoint)['position']
+    c = die_and_come_back(endpoint, 'Ari')
+    assert distance(c['position'], owner) < 8, ('not beside its owner', c['position'], owner)
+    print('respawn together: beside its owner')
+
+    # In the Nether, on the roof, away from its owner: back in the Overworld, parked there.
+    command(endpoint, 'command execute in minecraft:the_nether run tp @s 0.5 128 0.5')
+    wait_for(endpoint, 'status', lambda v: v['dimension'] == 'minecraft:the_nether', timeout=30, what='the Nether')
+    settle(endpoint, 'owner on the Nether roof')
+    wait_for(endpoint, 'companion list', lambda v: (listed(endpoint, 'Ari') or {}).get('dimension')
+             == 'minecraft:the_nether', timeout=30, what='Ari came along')
+    command(endpoint, 'companion do Ari stay')
+    command(endpoint, 'command tp @s 40.5 128 0.5')
+    settle(endpoint, 'owner away on the roof')
+    c = die_and_come_back(endpoint, 'Ari')
+    assert c.get('parked') == 'minecraft:overworld', ('not parked in the Overworld', c)
+    # Its owner comes home: it is at the spawn.
+    command(endpoint, f'command execute in minecraft:overworld run tp @s {spawn[0] + 10.5} 200 {spawn[2] + 0.5}')
+    wait_for(endpoint, 'status', lambda v: v['dimension'] == 'minecraft:overworld', timeout=30, what='home')
+    settle(endpoint, 'owner home')
+    wait_for(endpoint, 'companion list', lambda v: (listed(endpoint, 'Ari') or {}).get('dimension')
+             == 'minecraft:overworld', timeout=30, what='Ari rejoined')
+    c = listed(endpoint, 'Ari')
+    assert distance(c['position'], at_spawn) < 1.5, ('not at the world spawn', c, at_spawn)
+    print('respawn in another level: parked in the Overworld at the spawn, rejoined when its owner came back')
+    command(endpoint, 'companion dismiss Ari')
+
+
+def companion_at(endpoint, name):
+    c = listed(endpoint, name)
+    assert c and 'position' in c, (name, c)
+    return c
+
+
+def block_text(endpoint, x, y, z):
+    return json.dumps(command(endpoint, f'block {x} {y} {z}'))
+
+
+def watching(endpoint, name, dimension):
+    """The owner is the camera on `name`, in `dimension` with it."""
+    status = command(endpoint, 'status')
+    c = companion_at(endpoint, name)
+    watch = command(endpoint, 'companion watch status')
+    assert watch['watching'] == name, watch
+    assert status['dimension'] == dimension and c['dimension'] == dimension, (status['dimension'], c)
+    assert status['player']['game_mode'] == 3, status['player']
+    assert distance(status['player']['position'], c['position']) < 8, (status['player']['position'], c)
+    return c
+
+
+def through(endpoint, name, dimension, timeout=60):
+    wait_for(endpoint, 'status', lambda v: v['dimension'] == dimension and v['player'] is not None
+             and v['pending_chunks'] == 0, timeout=timeout, what=f'the view in {dimension}')
+    wait_for(endpoint, 'companion list', lambda v: (listed(endpoint, name) or {}).get('dimension') == dimension
+             and 'position' in listed(endpoint, name), timeout=30, what=f'{name} in {dimension}')
+    time.sleep(1)
+    return watching(endpoint, name, dimension)
+
+
+def watch(endpoint):
+    """E1: Watch mode follows a companion through Nether and End portals; E2a: the dragon fights it."""
+    spawn = player(endpoint)['world_spawn']
+    command(endpoint, f'command tp @s {spawn[0] + 0.5} {spawn[1] + 2} {spawn[2] + 0.5}')
+    settle(endpoint, 'owner at the spawn')
+    command(endpoint, 'companion spawn Bea')
+    command(endpoint, 'companion do Bea stay')
+    time.sleep(1)
+    for item in ('flint_and_steel', 'obsidian 10', 'iron_sword', 'bread 16'):
+        command(endpoint, f'command give Bea {item}')
+    c = companion_at(endpoint, 'Bea')
+    x, y, z = (int(v // 1) for v in c['position'])
+    # A lit Nether portal three blocks in front, on a floor, in the open.
+    pz = z + 3
+    command(endpoint, f'command fill {x - 3} {y} {z - 1} {x + 4} {y + 5} {z + 5} air')
+    command(endpoint, f'command fill {x - 3} {y - 1} {z - 1} {x + 4} {y - 1} {z + 5} stone')
+    command(endpoint, f'command fill {x - 1} {y - 1} {pz} {x + 2} {y + 3} {pz} obsidian')
+    command(endpoint, f'command fill {x} {y} {pz} {x + 1} {y + 2} {pz} nether_portal[axis=x]')
+    assert 'nether_portal' in block_text(endpoint, x, y, pz), block_text(endpoint, x, y, pz)
+    command(endpoint, 'command difficulty peaceful')
+
+    watched = command(endpoint, 'companion watch Bea')
+    assert watched['watching'] == 'Bea' and len(watched['hud']) == 3, watched
+    command(endpoint, 'companion watch step build the portal')
+    command(endpoint, 'companion watch perception low')
+    hud = command(endpoint, 'companion watch status')['hud']
+    assert hud[1] == 'Step: build the portal' and hud[2] == 'Perception: low', hud
+    watching(endpoint, 'Bea', 'minecraft:overworld')
+    print(f'watch: the owner is a spectator camera on Bea; HUD {hud}')
+
+    # By itself into the portal: the view follows it to the Nether.
+    command(endpoint, f'companion do Bea goto {x} {y} {pz}')
+    c = through(endpoint, 'Bea', 'minecraft:the_nether', timeout=90)
+    print(f'watch: Bea walked into the portal, the view followed it to the Nether at {c["position"]}')
+
+    # Out of its exit portal and back in: home.
+    nx, ny, nz = (int(v // 1) for v in c['position'])
+    exit_portal = block_text(endpoint, nx, ny, nz)
+    assert 'nether_portal' in exit_portal, exit_portal
+    out = (nx, ny, nz + 2) if '"x"' in exit_portal or 'axis=x' in exit_portal else (nx + 2, ny, nz)
+    command(endpoint, 'companion do Bea goto {} {} {}'.format(*out))
+    wait_for(endpoint, 'companion list', lambda v: 'nether_portal' not in block_text(
+        endpoint, *(int(p // 1) for p in companion_at(endpoint, 'Bea')['position'])), timeout=30, what='Bea out of the portal')
+    time.sleep(1)
+    command(endpoint, f'companion do Bea goto {nx} {ny} {nz}')
+    c = through(endpoint, 'Bea', 'minecraft:overworld', timeout=90)
+    assert distance(c['position'], [x + 1, y, pz + 0.5]) < 4, ('not back at its portal', c['position'])
+    print(f'watch: Bea came back through its exit portal, the view with it, at {c["position"]}')
+
+    # Set up for the End: an End portal by the Nether one, resistance for the crystal's blast.
+    for effect in ('resistance 600 4', 'slow_falling 600 0', 'fire_resistance 600 0'):
+        command(endpoint, f'command effect give Bea minecraft:{effect} true')
+    command(endpoint, 'companion do Bea stop')
+    # Bea stood 2 or 3 blocks from the world spawn, where it comes back after dying in the End: the
+    # portal 8 to 10 blocks off, so that it never respawns standing in it (and goes back to the End).
+    command(endpoint, f'command fill {x - 1} {y} {z - 10} {x + 1} {y + 3} {z - 8} air')
+    command(endpoint, f'command fill {x - 1} {y - 2} {z - 10} {x + 1} {y - 2} {z - 8} stone')
+    command(endpoint, f'command fill {x - 1} {y - 1} {z - 10} {x + 1} {y - 1} {z - 8} end_portal')
+    # Off its portal first: standing in one, its portal cooldown keeps restarting.
+    command(endpoint, f'command tp Bea {x + 0.5} {y} {z + 0.5}')
+    time.sleep(1)
+    command(endpoint, f'command tp Bea {x + 0.5} {y - 0.5} {z - 8.5}')
+    c = through(endpoint, 'Bea', 'minecraft:the_end', timeout=90)
+    print(f'watch: Bea stepped onto an End portal, the view followed it to the End at {c["position"]}')
+
+    # The fight starts from it once the arena is in (the owner only watches, a spectator): over the
+    # island's centre, with the view's chunks reaching its edge.
+    command(endpoint, 'render-distance 9')
+    # Not peaceful: there the dragon attacks no one (LivingEntity.canAttack).
+    command(endpoint, 'command difficulty easy')
+    command(endpoint, 'command tp Bea 0.5 90 0.5')
+    fight = wait_for(endpoint, 'status', lambda v: v['fight']['dragon'] and v['fight']['dragon']['id']
+                     and all(k['id'] for k in v['fight']['crystal_list']) and v['fight']['crystal_list'],
+                     timeout=60, what='the dragon')['fight']
+    command(endpoint, 'companion do Bea stop')
+    crystal = min(fight['crystal_list'], key=lambda k: k['position'][1])
+    cx, cy, cz = crystal['position']
+    command(endpoint, f'command tp Bea {cx + 1.5} {cy} {cz + 0.5}')
+    time.sleep(0.5)
+    bo = companion_at(endpoint, 'Bea')['entity_id']
+
+    def broke(v):
+        if not any(k['id'] == crystal['id'] for k in v['fight']['crystal_list']):
+            return True
+        command(endpoint, f'companion strike Bea {crystal["id"]}')
+        return False
+    wait_for(endpoint, 'status', broke, timeout=30, what='Bea broke a crystal')
+    strafing = wait_for(endpoint, 'status', lambda v: v['fight']['dragon']['strafing'] == bo, timeout=20,
+                        what='the dragon strafing Bea')['fight']['dragon']
+    print(f'watch: Bea broke a crystal, the dragon strafes it (phase {strafing["phase"]}, target {bo})')
+
+    # Its blows land: next to the dragon's body, one strike at a time.
+    def hurt(v):
+        d = v['fight']['dragon']
+        if d['health'] < 200:
+            return True
+        command(endpoint, 'command tp Bea {} {} {}'.format(*d['position']))
+        command(endpoint, f'companion strike Bea {d["id"] + 3}')
+        return False
+    dragon = wait_for(endpoint, 'status', hurt, timeout=60, what='Bea hurting the dragon')['fight']['dragon']
+    assert companion_at(endpoint, 'Bea')['dimension'] == 'minecraft:the_end'
+    print(f'watch: Bea hurt the dragon (health {dragon["health"]:.2f})')
+
+    # Dead in the End, it comes back at the world spawn; the view goes home with it.
+    command(endpoint, 'command kill Bea')
+    c = through(endpoint, 'Bea', 'minecraft:overworld', timeout=60)
+    assert distance(c['position'], [spawn[0] + 0.5, spawn[1], spawn[2] + 0.5]) < 1.5, ('not at the spawn', c, spawn)
+    print(f'watch: Bea died in the End and came back at the world spawn, the view with it')
+
+    command(endpoint, 'companion watch off')
+    status = command(endpoint, 'status')
+    assert status['player']['game_mode'] == 1, status['player']
+    assert command(endpoint, 'companion watch status')['watching'] is None
+    print('watch: off, the owner is back in creative where Bea is')
+
+    # Killed while watching (only /kill reaches a spectator): the death screen and the owner's own
+    # mode, no camera; no Watch until they respawn.
+    command(endpoint, 'companion watch Bea')
+    command(endpoint, 'command kill @s')
+    wait_for(endpoint, 'status', lambda v: v['screen'] == 'dead', timeout=10, what='the death screen')
+    time.sleep(0.5)
+    assert command(endpoint, 'companion watch status')['watching'] is None
+    assert command(endpoint, 'status')['screen'] == 'dead'
+    try:
+        command(endpoint, 'companion watch Bea')
+        refused = 'Watch started'
+    except AssertionError as e:
+        refused = str(e)
+    assert 'respawn first' in refused, refused
+    # DeathScreen enables Respawn after 20 ticks.
+    time.sleep(1.5)
+    command(endpoint, 'respawn')
+    status = wait_for(endpoint, 'status', lambda v: v['screen'] != 'dead' and v['player'] is not None,
+                      timeout=10, what='respawned')
+    assert status['player']['game_mode'] == 1, status['player']
+    print('watch: killed while watching, the owner got the death screen and creative back; Watch waits for the respawn')
+    command(endpoint, 'companion dismiss Bea')
+
+
+def camera(endpoint):
+    """Watch's camera is kept out of blocks like a third-person camera: pulled in along the ray from the
+    body's head when leaves (or the ground) would be in the way, and back out smoothly once they are gone."""
+    spawn = player(endpoint)['world_spawn']
+    # In survival a Watch before this one (spectator, then creative again) cannot leave the owner flying.
+    command(endpoint, 'command gamemode survival')
+    command(endpoint, f'command tp @s {spawn[0] + 0.5} {spawn[1] + 2} {spawn[2] + 0.5}')
+    settle(endpoint, 'owner at the spawn')
+    command(endpoint, 'companion spawn Cam')
+    command(endpoint, 'companion do Cam stay')
+    time.sleep(1)
+    c = companion_at(endpoint, 'Cam')
+    x, y, z = (int(v // 1) for v in c['position'])
+    # An open platform around the body, then a ball of leaves with a one-block shaft for it.
+    command(endpoint, f'command fill {x - 8} {y} {z - 8} {x + 8} {y + 9} {z + 8} air')
+    command(endpoint, f'command fill {x - 8} {y - 1} {z - 8} {x + 8} {y - 1} {z + 8} stone')
+    time.sleep(1)
+    c = companion_at(endpoint, 'Cam')
+    head = [c['position'][0], c['position'][1] + 1.62, c['position'][2]]
+
+    def eye():
+        feet = command(endpoint, 'companion watch status')['camera']
+        return [feet[0], feet[1] + 1.62, feet[2]]
+
+    def settled():
+        time.sleep(2.5)
+        status = command(endpoint, 'companion watch status')
+        return status['reach'], distance(head, eye()), block_text(endpoint, *(int(v // 1) for v in eye()))
+
+    command(endpoint, 'companion watch Cam')
+    reach, gap, inside = settled()
+    assert gap > 4.0 and reach > 4.0, ('the open view is not 4 blocks out', reach, gap)
+    print(f'camera: in the open it stands {gap:.2f} blocks from the head')
+
+    command(endpoint, f'command fill {x - 4} {y} {z - 4} {x + 4} {y + 6} {z + 4} oak_leaves[persistent=true]')
+    command(endpoint, f'command fill {x} {y} {z} {x} {y + 3} {z} air')
+    reach, gap, inside = settled()
+    assert gap < 1.0 and 'leaves' not in inside, ('the camera is in the leaves', reach, gap, inside)
+    for _ in range(10):
+        # No frame of it inside a block: it only moves within the shaft.
+        e = eye()
+        name = block_text(endpoint, *(int(v // 1) for v in e))
+        assert 'leaves' not in name and 'stone' not in name, ('inside a block', e, name)
+        time.sleep(0.1)
+    print(f'camera: in a ball of leaves it comes in to {gap:.2f} blocks, in {inside}')
+
+    command(endpoint, f'command fill {x - 4} {y} {z - 4} {x + 4} {y + 6} {z + 4} air')
+    # Back out smoothly, not at once: a step of the camera is never more than the ease allows.
+    last, biggest = eye(), 0.0
+    for _ in range(40):
+        time.sleep(0.05)
+        now = eye()
+        biggest = max(biggest, distance(last, now))
+        last = now
+    reach, gap, inside = settled()
+    assert gap > 4.0, ('the camera did not come back out', reach, gap)
+    assert biggest < 1.0, ('the camera jumped back out', biggest)
+    print(f'camera: the leaves gone, it is back at {gap:.2f} blocks (largest step {biggest:.2f})')
+    command(endpoint, 'companion watch off')
+    command(endpoint, 'companion dismiss Cam')
+
+
+SCENARIOS = {'respawn': respawn, 'watch': watch, 'camera': camera}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--client', type=Path, required=True)
+    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--offscreen', action='store_true')
+    parser.add_argument('--only', choices=sorted(SCENARIOS), action='append')
+    parser.add_argument('--log', type=Path, help="keep the client's log here")
+    args = parser.parse_args()
+    client, resources = args.client.resolve(), args.resources.resolve()
+    with tempfile.TemporaryDirectory(prefix='horizon-companion-engine-') as directory:
+        home = Path(directory) / 'game'
+        home.mkdir()
+        endpoint = home / 'control.sock'
+        with (home / 'client.log').open('w+') as log:
+            process = start(client, resources, home, endpoint, log, args.offscreen)
+            try:
+                open_world(endpoint)
+                for name in args.only or list(SCENARIOS):
+                    SCENARIOS[name](endpoint)
+                command(endpoint, 'quit')
+                assert process.wait(timeout=60) == 0, 'client exited unsuccessfully'
+            except Exception:
+                log.seek(0)
+                print('\n'.join(log.read().splitlines()[-40:]))
+                raise
+            finally:
+                stop(process)
+                if args.log:
+                    shutil.copy(home / 'client.log', args.log)
+    print('Companion engine passed:', ', '.join(args.only or SCENARIOS))
+
+
+if __name__ == '__main__':
+    main()

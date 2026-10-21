@@ -24,6 +24,14 @@ mod combat;
 mod command_blocks;
 mod command_harness;
 mod commands;
+mod companion;
+mod companion_ai;
+mod companion_body;
+mod companion_craft;
+mod companion_setup;
+mod companion_voice;
+mod companion_watch;
+mod companion_work;
 mod composter;
 mod consume;
 mod control;
@@ -810,6 +818,7 @@ struct WorldRest {
     behaviours: Behaviours,
     player_arm: Option<horizon_client::mobs::Part>,
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
+    player_slim_type: Option<Arc<horizon_client::mobs::MobType>>,
     stations: horizon_client::stations::StationData,
 }
 
@@ -884,6 +893,9 @@ impl Resources {
     }
     fn player_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
         &self.rest().player_type
+    }
+    fn player_slim_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
+        &self.rest().player_slim_type
     }
     fn stations(&self) -> &horizon_client::stations::StationData {
         &self.rest().stations
@@ -1381,6 +1393,9 @@ struct Game<'a> {
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
+    /// The world's companions not in its hub: coming back, or left in
+    /// another dimension; and their reports (game/companion.rs).
+    companions: companion::Companions,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
     /// Their UUID (`Player.getUUID`).
@@ -1415,6 +1430,9 @@ struct Game<'a> {
     /// `Hud.tabList`: the player list's header, footer and heart states.
     tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
+    companion_voice: companion_voice::VoiceState,
+    companion_ai: companion_ai::AiState,
+    companion_setup: companion_setup::SetupState,
     adv: advancements::AdvState,
     restore_player_state: bool,
     stats_ui: stats_screen::StatsUi,
@@ -3549,6 +3567,9 @@ impl Game<'_> {
                     f64::from(z) + 0.5,
                 ));
                 self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+                // The world's spawn from the start, not only once saved: a bed set
+                // before the first save must not become it.
+                self.level.world_spawn.get_or_insert([x, y, z]);
             }
             let s = self
                 .level
@@ -4026,7 +4047,11 @@ impl Game<'_> {
                 self.resolve_arrivals();
             });
         }
+        horizon_client::spans::time("tick_companion_ai", || self.tick_companion_ai());
+        self.tick_companion_setup();
+        self.tick_companion_arrivals();
         horizon_client::spans::time("tick_lan", || self.tick_lan());
+        self.tick_companion_watch();
         self.tick_friends();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
@@ -4555,6 +4580,8 @@ impl Game<'_> {
             self.draw_titles(&mut batch);
             self.draw_scoreboard(&mut batch);
             self.draw_subtitles(&mut batch);
+            self.draw_companion_mic(&mut batch);
+            self.draw_companion_watch(&mut batch);
         }
         let atlas = &self.gui.atlas;
         if show_hud
@@ -6672,6 +6699,7 @@ impl Game<'_> {
         self.load_bossbars();
         self.tick_functions();
         self.tick_worldborder();
+        self.tick_companion_voice();
         self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
@@ -6809,6 +6837,11 @@ impl Game<'_> {
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
         }
+        // "Start with a companion": it joins once the player stands in the new world.
+        self.companion_ai.spawn_on_arrival = create.is_some_and(|o| o.companion == Some(true));
+        self.companion_ai.spawn_role = create
+            .filter(|o| o.companion == Some(true))
+            .map(|o| o.companion_role);
         self.perf.world_opening();
         horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
@@ -7005,6 +7038,7 @@ impl Game<'_> {
             self.level.write(&save_root)?;
         }
         self.load_world_state();
+        self.companions_world_opened();
         Ok(())
     }
     /// Streaming and region storage for one dimension of a world.
@@ -7299,6 +7333,8 @@ impl Game<'_> {
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
         }
+        self.companions_leave_world();
+        self.companion_ai_world_closed();
         self.lan_close(false);
         self.save_game()
     }
@@ -7313,6 +7349,8 @@ impl Game<'_> {
         }
         self.finish_perf();
         self.stats.custom("leave_game", 1);
+        self.companions_leave_world();
+        self.companion_ai_world_closed();
         self.save_game()?;
         self.lan_close(false);
         // Closing the level storage: once the last writes are on disk the
@@ -9095,6 +9133,7 @@ impl Game<'_> {
         self.save_bossbars();
         self.save_schedule();
         self.save_warden_tracker();
+        self.save_companions();
         self.sync_level();
         self.store_owner();
         self.level.write(&self.world_root)?;
@@ -10576,6 +10615,11 @@ impl ApplicationHandler for Game<'_> {
                         return Ok(());
                     };
                     self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
+                    self.companion_voice_key(
+                        key,
+                        event.state == ElementState::Pressed,
+                        event.repeat,
+                    );
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
@@ -11143,6 +11187,7 @@ impl<'a> Game<'a> {
             lan_entity_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
+            companions: Default::default(),
             guest_packets: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
@@ -11164,6 +11209,9 @@ impl<'a> Game<'a> {
             border_state: Default::default(),
             tab_list: Default::default(),
             subtitles: Default::default(),
+            companion_voice: Default::default(),
+            companion_ai: Default::default(),
+            companion_setup: Default::default(),
             adv: Default::default(),
             restore_player_state: true,
             stats_ui: Default::default(),
@@ -11678,6 +11726,7 @@ fn load_world_rest(
             .collect(),
         mob_data,
         player_type: perspective::player_type(root),
+        player_slim_type: perspective::player_slim_type(root),
         player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     })

@@ -121,6 +121,11 @@ pub enum HostEvent {
         line: String,
         secure: bool,
     },
+    /// What a guest said in chat, for the companions to hear (game/companion_ai.rs).
+    Said {
+        name: String,
+        text: String,
+    },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
     /// A server log error (LOGGER.error).
@@ -348,6 +353,11 @@ impl Hub {
     pub fn here(&self, g: &Guest) -> bool {
         g.placed && g.dimension == self.config.dimension
     }
+    /// Whether a player with a connection is in the level in place: only
+    /// they need its chunks, block changes and entities sent.
+    pub fn viewers_here(&self) -> bool {
+        self.guests.iter().any(|g| !g.companion && self.here(g))
+    }
     /// `PlayerList.broadcastAll(packet, dimension)`: the players in the
     /// level in place.
     pub fn broadcast_level(&self, packet: &C) {
@@ -377,6 +387,23 @@ impl Hub {
             chat_type: play::ChatTypeBound {
                 chat_type: self.chat_type,
                 name: literal(sender),
+                target: None,
+            },
+        }));
+    }
+    /// A companion's chat line (game/companion_ai.rs): a disguised chat from its name with the
+    /// AI marker. Shift-clicking the line inserts `@Name ` (vanilla's `insertion`), which also
+    /// marks it as a companion's line for a Horizon guest with No AI ([`is_companion_line`]).
+    pub fn companion_chat(&self, name: &str, text: &str) {
+        let message = Tag::compound([
+            ("text", literal(text)),
+            ("insertion", literal(&format!("@{name} "))),
+        ]);
+        self.broadcast(&C::DisguisedChat(play::DisguisedChat {
+            message,
+            chat_type: play::ChatTypeBound {
+                chat_type: self.chat_type,
+                name: crate::companion::listed_name(name),
                 target: None,
             },
         }));
@@ -468,6 +495,10 @@ impl Hub {
 
     fn player_info(&self, uuid: u128, name: &str, mode: i32, latency: i32) -> play::PlayerInfo {
         let guest = self.guests.iter().find(|g| g.uuid == uuid);
+        // A companion is listed with its AI marker, so nobody takes it for a person.
+        let display_name = guest
+            .filter(|g| g.companion)
+            .map(|_| crate::companion::listed_name(name));
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
@@ -476,7 +507,7 @@ impl Hub {
             game_mode: Some(mode),
             listed: Some(true),
             latency: Some(latency),
-            display_name: Some(None),
+            display_name: Some(display_name),
             list_order: Some(0),
             show_hat: Some(true),
         }
@@ -499,6 +530,26 @@ impl Hub {
             portal_cooldown: 0,
             sea_level: 63,
         }
+    }
+
+    /// A companion's body joins (game/companion.rs): a player with no
+    /// connection, admitted as a network player would be, then placed by the
+    /// game like one (`place_new_player`).
+    pub fn admit_companion(&mut self, j: super::Joined, ctx: &mut TickCtx) -> u32 {
+        let conn = self.admit(j, ctx);
+        if let Some(g) = self.guest_mut(conn) {
+            g.companion = true;
+        }
+        conn
+    }
+    /// A companion's body leaves the world: the players see it go as a
+    /// player who left (`remove_guest`).
+    pub fn remove_companion(&mut self, conn: u32) -> Option<Guest> {
+        let i = self
+            .guests
+            .iter()
+            .position(|g| g.conn == conn && g.companion)?;
+        Some(self.remove_guest(i, "dismissed"))
     }
 
     fn admit(&mut self, j: super::Joined, ctx: &mut TickCtx) -> u32 {
@@ -1012,7 +1063,8 @@ impl Hub {
                 self.process_inbox(i, ctx, &mut events);
             }
         }
-        if !self.guests.iter().any(|g| self.here(g)) {
+        // A level with only companions in it has nobody to send it to.
+        if !self.viewers_here() {
             // ServerTickRateManager broadcasts a change to the players there
             // are; one who joins later is sent the state as it is then
             // (`updateJoiningPlayer`).
@@ -1022,7 +1074,7 @@ impl Hub {
             if !self
                 .guests
                 .iter()
-                .any(|g| g.dimension == self.config.dimension)
+                .any(|g| !g.companion && g.dimension == self.config.dimension)
             {
                 let _ = ctx.world.block_log.take();
                 let _ = ctx.world.light_log.take();
@@ -1184,7 +1236,7 @@ impl Hub {
         let world = &*ctx.world;
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
-            if self.here(&self.guests[i]) {
+            if self.here(&self.guests[i]) && !self.guests[i].companion {
                 self.update_view(i);
                 if let Some(batch) = self.next_batch(i, world) {
                     batches.push((i, batch));
@@ -1601,7 +1653,8 @@ impl Hub {
             .unwrap_or_default();
         let mut outs = std::mem::take(&mut self.entity_out);
         let dimension = &self.config.dimension;
-        let here = |g: &Guest| g.placed && g.dimension == *dimension;
+        // The players who see entities: a companion has no client to tell.
+        let here = |g: &Guest| g.placed && !g.companion && g.dimension == *dimension;
         outs.resize_with(self.guests.iter().filter(|g| here(g)).count(), Vec::new);
         let mut viewers: Vec<Viewer> = self
             .guests
@@ -2440,4 +2493,20 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     w.f32(rate);
     w.bool(frozen);
     raw(ids::TICKING_STATE, w.data)
+}
+
+/// Whether a disguised chat is a companion's line ([`Hub::companion_chat`]): its text inserts
+/// `@Name ` and the sender's name ends with the AI marker.
+pub fn is_companion_line(message: &Tag, sender: &Tag) -> bool {
+    let insertion = matches!(message.get("insertion"), Some(Tag::String(s)) if s.to_string_lossy().starts_with('@'));
+    let marked = match sender.get("extra") {
+        Some(Tag::List(parts)) => parts.iter().any(|p| match p.get("extra") {
+            Some(Tag::List(inner)) => inner.iter().any(
+                |t| matches!(t.get("text"), Some(Tag::String(s)) if s.to_string_lossy() == "[AI]"),
+            ),
+            _ => matches!(p.get("text"), Some(Tag::String(s)) if s.to_string_lossy() == "[AI]"),
+        }),
+        _ => false,
+    };
+    insertion && marked
 }

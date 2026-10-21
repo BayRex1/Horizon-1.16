@@ -34,6 +34,10 @@ pub struct WorldOptions {
     pub flat: bool,
     pub structures: bool,
     pub bonus_chest: bool,
+    /// Horizon: "Start with a companion", offered once a companion is set up and No AI is off
+    /// (`None`: not offered), and the role it starts with (the Companion settings' by default).
+    pub companion: Option<bool>,
+    pub companion_role: horizon_companion::prompt::Role,
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -45,8 +49,20 @@ impl Default for WorldOptions {
             flat: false,
             structures: true,
             bonus_chest: false,
+            companion: companion_offer().map(|_| true),
+            companion_role: companion_offer().unwrap_or_default(),
         }
     }
+}
+/// The settings' role, if the game's home has a companion set up, without No AI.
+fn companion_offer() -> Option<horizon_companion::prompt::Role> {
+    if cfg!(test) {
+        return None;
+    }
+    let home = std::env::current_dir().ok()?;
+    let settings = horizon_companion::settings::CompanionSettings::load(&home);
+    (settings.set_up && !settings.no_ai && !crate::extras::Extras::load(&home).no_ai)
+        .then_some(settings.persona.role)
 }
 impl WorldOptions {
     /// Re-Create: the saved world's choices.
@@ -104,6 +120,15 @@ impl WorldOptions {
             25 => self.flat = !self.flat,
             27 => self.structures = !self.structures,
             28 => self.bonus_chest = !self.bonus_chest,
+            32 => self.companion = self.companion.map(|on| !on),
+            33 => {
+                use horizon_companion::prompt::Role;
+                let i = Role::ALL
+                    .iter()
+                    .position(|r| *r == self.companion_role)
+                    .unwrap_or(0);
+                self.companion_role = Role::ALL[(i + 1) % Role::ALL.len()];
+            }
             _ => {}
         }
     }
@@ -226,7 +251,29 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 !o.hardcore,
                 24,
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(o.companion.map(|on| {
+            b(
+                gx,
+                gy + 125.0,
+                210.0,
+                format!("Start with a companion: {}", on_off(on)),
+                true,
+                32,
+            )
+        }))
+        .chain((o.companion == Some(true)).then(|| {
+            b(
+                gx,
+                gy + 153.0,
+                210.0,
+                format!("Companion role: {}", o.companion_role.label()),
+                true,
+                33,
+            )
+        }))
+        .collect(),
         1 => vec![
             b(
                 gx,
