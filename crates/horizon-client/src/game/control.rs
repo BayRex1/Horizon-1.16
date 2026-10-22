@@ -215,6 +215,22 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
             }
+            "rt-shadows" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => r.set_ray_shadows(true)?,
+                    Some("off") => r.set_ray_shadows(false)?,
+                    Some("rebuild") => r.rebuild_ray_shadows()?,
+                    Some("bench-builds") => {
+                        return Ok(Some(
+                            json!({ "ok": true, "builds": r.bench_ray_shadow_builds()? }),
+                        ));
+                    }
+                    Some(other) => return Err(format!("unknown rt-shadows mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "rt_shadows": r.ray_shadows() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
