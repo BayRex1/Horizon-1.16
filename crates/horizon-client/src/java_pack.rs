@@ -254,6 +254,21 @@ mod tests {
             })
     }
 
+    #[test]
+    fn reparse_reports_invalid_shader_from_bundled_java_pack() {
+        // Unlike the optional real-packs test, this always executes in CI.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-shaderpack/tests/fixtures/passes");
+        let mut pack = load(&dir, &BTreeMap::new(), "Apple", "Apple M4 Pro").unwrap();
+        assert!(reparse_error(&pack).is_none(), "bundled WGSL must reparse");
+
+        // Verify that invalid translated output is rejected and reports the
+        // exact program stage rather than silently passing the pack.
+        pack.folders[0].passes[0].fragment.wgsl = "this is not valid WGSL".into();
+        let error = reparse_error(&pack).expect("invalid WGSL must be reported");
+        assert!(error.contains("deferred.fsh:"), "{error}");
+    }
+
     /// The packs in `HORIZON_TEST_SHADERPACKS` (folders or zips) load as the
     /// game loads them, with their default options: the compatibility table
     /// of docs/shader-packs.md. Skipped when the variable isn't set.
