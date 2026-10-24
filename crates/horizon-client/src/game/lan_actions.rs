@@ -84,6 +84,7 @@ pub(super) struct GuestPlay {
     equipped: Option<Vec<Option<ItemStack>>>,
     /// The guest's cast fishing hook (`Player.fishing`).
     pub(super) hook: Option<super::fishing::Hook>,
+    sculk: super::sculk::PlayerEvents,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
@@ -249,6 +250,7 @@ impl Game<'_> {
         if fresh {
             // A new body (joined, respawned, changed level): nothing on it yet.
             play.equipped = None;
+            play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
         // The guest's body.
@@ -256,6 +258,7 @@ impl Game<'_> {
             host.play.insert(conn, play);
             return None;
         };
+        self.sculk.swap_player(&mut play.sculk);
         self.potions.swap_player(&mut g.effects, &mut play.potions);
         motion.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
         motion.ground.on_ground = g.on_ground;
@@ -474,6 +477,7 @@ impl Game<'_> {
             projectiles,
             modifiers,
         } = swap;
+        self.sculk.swap_player(&mut play.sculk);
         play.modifiers = std::mem::replace(&mut self.applied_modifiers, modifiers);
         // What the guest shot is theirs (Projectile.setOwner).
         for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
@@ -2035,6 +2039,7 @@ impl Game<'_> {
         let Some((sounds, marked)) = sounds else {
             return;
         };
+        self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for sound in sounds {
             self.player_hurt_sound(sound, at);
         }
