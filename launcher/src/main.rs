@@ -21,6 +21,7 @@ mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod perf;
+mod release_pages;
 mod scrollbar;
 mod servers_page;
 mod settings_page;
@@ -131,6 +132,7 @@ struct Launcher {
     theme: Theme,
     page: Page,
     settings_ui: settings_page::SettingsUi,
+    release_ui: release_pages::ReleaseUi,
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
@@ -272,6 +274,7 @@ impl Launcher {
             theme: Theme::for_appearance(settings.appearance, window.appearance()),
             page: Page::from_env(),
             settings_ui: Default::default(),
+            release_ui: Default::default(),
             switches: 0,
             content_scroll: Scrollbar::default(),
             long_list: cull::Cull::default(),
@@ -2691,208 +2694,6 @@ impl Launcher {
         if self.starting_client.is_none() {
             self.joining = None;
         }
-    }
-
-    fn versions_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let header = page_header(
-            "Versions",
-            "Builds from GitHub. Each one installs into its own folder.",
-            &t,
-        );
-        let page = div().flex().flex_col().gap(px(32.)).child(header);
-        let releases = match &self.releases {
-            Load::Loading => return page.child(centered("Loading releases…", &t)),
-            Load::Failed(e) => {
-                return page.child(centered(&format!("Couldn't load releases. {e}"), &t).child(
-                    button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.fetch_releases();
-                            cx.notify();
-                        },
-                    )),
-                ))
-            }
-            Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
-            Load::Ready(r) => r,
-        };
-        // A hundred releases: only the rows near the screen are drawn.
-        let keep = |i: usize| {
-            let tag = &releases[i].tag;
-            self.installing.as_ref().is_some_and(|(t, _)| t == tag)
-                || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
-                || self.confirm_remove.as_ref() == Some(tag)
-        };
-        let list = self.long_list.clone().column(
-            &self.content_scroll.handle,
-            releases.len(),
-            8.,
-            keep,
-            |i| {
-                let release = releases[i].clone();
-                let tag = release.tag.clone();
-                let installed = self.installed.contains(&tag);
-                let selected = self.selected() == Some(&tag);
-                let mut meta = vec![release.date.clone()];
-                if let Some((_, size)) = release.asset {
-                    meta.push(megabytes(size));
-                }
-                let summary = release
-                    .name
-                    .split_once(": ")
-                    .map(|(_, rest)| rest.to_string())
-                    .unwrap_or_else(|| release.name.clone());
-                let right: gpui::AnyElement = if let Some((_, p)) =
-                    self.installing.as_ref().filter(|(t, _)| *t == tag)
-                {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .w(px(180.))
-                        .child(progress_bar(Some(self.bar), &t))
-                        .child(
-                            text(theme::MICRO)
-                                .w(px(36.))
-                                .text_color(t.muted)
-                                .child(format!("{:.0}%", p * 100.)),
-                        )
-                        .into_any_element()
-                } else if installed {
-                    let confirming = self.confirm_remove.as_ref() == Some(&tag);
-                    let (t1, t2) = (tag.clone(), tag.clone());
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .when(!selected && !confirming, |d| {
-                            d.child(
-                                button(format!("use-{tag}"), "Use", Kind::Ghost, &t).on_click(
-                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        this.settings.selected = Some(t1.clone());
-                                        this.settings.save();
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
-                        })
-                        .child(
-                            button(
-                                format!("remove-{tag}"),
-                                if confirming {
-                                    "Remove for good"
-                                } else {
-                                    "Remove"
-                                },
-                                if confirming {
-                                    Kind::Secondary
-                                } else {
-                                    Kind::Ghost
-                                },
-                                &t,
-                            )
-                            .when(confirming, |b| b.text_color(t.danger))
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    if this.confirm_remove.as_ref() == Some(&t2) {
-                                        this.remove(&t2);
-                                    } else {
-                                        this.confirm_remove = Some(t2.clone());
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .into_any_element()
-                } else if release.asset.is_none() {
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .child("No build for this platform")
-                        .into_any_element()
-                } else {
-                    let mut b = button(format!("install-{tag}"), "Install", Kind::Secondary, &t);
-                    if self.installing.is_some() {
-                        b = disabled(b);
-                    } else {
-                        b = b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.install(&release);
-                            cx.notify();
-                        }));
-                    }
-                    b.into_any_element()
-                };
-                let status = if selected {
-                    Some(caps("In use").text_color(t.accent))
-                } else if installed {
-                    Some(caps("Installed").text_color(t.ink_soft))
-                } else {
-                    None
-                };
-                let error = self
-                    .install_error
-                    .as_ref()
-                    .filter(|(t, _)| *t == tag)
-                    .map(|(_, e)| e.clone());
-                let id = SharedString::from(format!("release-{tag}"));
-                let row = div()
-                    .id(id.clone())
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .py(px(14.))
-                    .px(px(16.))
-                    .mb(px(8.))
-                    .bg(t.panel)
-                    .border_2()
-                    .border_color(t.outline)
-                    .children(blocks::edges(t.bevel, t.lip, theme::BEVEL))
-                    .child(hover_layer(&id, t.raised, 0., 0.))
-                    .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .gap(px(16.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap(px(4.))
-                                    .child(version_tag(&tag).text_color(t.ink))
-                                    .child(
-                                        text(theme::UI)
-                                            .text_color(t.muted)
-                                            .truncate()
-                                            .child(summary),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .items_end()
-                                    .gap(px(2.))
-                                    .flex_none()
-                                    .children(status)
-                                    .child(caps(meta.join("  ·  ")).text_color(t.muted)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_end()
-                                    .w(px(190.))
-                                    .flex_none()
-                                    .child(right),
-                            ),
-                    )
-                    .children(error.map(|e| notice(e, &t)));
-                track_hover(row, id)
-            },
-        );
-        page.child(list)
     }
 
     fn notes_page(&mut self, cx: &mut Context<Self>) -> Div {
