@@ -256,7 +256,7 @@ def full(args, work):
         join(guest, code, 'Guest')
         play_together(host, guest, 'Guest', 1)
         assert host('friends status')['direct'] == 1, host('friends status')
-        print('code alone: chat, movement and blocks both ways, no server involved')
+        print('code alone: chat, movement and blocks both ways, no relay involved')
         leave(host, guest, 'Guest')
         host('friends stop')
         assert host('friends status')['code'] is None

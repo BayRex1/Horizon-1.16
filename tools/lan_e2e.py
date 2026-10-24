@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """LAN multiplayer end to end: a host opens its world to LAN and a guest joins, both real games.
 
-Two Horizon clients run side by side under horizon-ctl, each in its own scratch folder. The host
+The host uses its integrated server thread by default; --in-frame compares the fallback, and
+--server-thread remains accepted. Two Horizon clients run under horizon-ctl in scratch folders. The host
 creates a survival world and opens it to LAN with commands allowed; the guest connects to it by
 address. The script then checks, from both sides, what a guest's game used to get wrong (#366):
 
@@ -298,6 +299,16 @@ class Game:
 
     def wait(self, ticks):
         self.d('wait', ticks=ticks)
+
+    def script(self, lines):
+        """Keep tick-sensitive input in one ctl process, through the normal control commands."""
+        result = subprocess.run(self.d.base + ['script'], input='\n'.join(lines) + '\n',
+                                cwd=self.work, env=self.d.env, capture_output=True, text=True,
+                                timeout=600)
+        replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}')
+        assert result.returncode == 0 and replies and not any('error' in r for r in replies), result.stdout
+        return replies[-1]
 
     def until(self, observe, predicate, ticks=100):
         """Wait for an observable answer, within the existing tick budget."""
@@ -1968,12 +1979,11 @@ def chat_input(game):
 def complete(guest, text):
     """Opens the chat on `/`, types `text` and presses Tab: the input after it."""
     guest.raw('key', 'slash', 'tap')
-    guest.wait(3)
+    guest.until(lambda: guest('screen').get('screen'), lambda s: s == 'chat', ticks=3)
     guest.raw('type', text)
-    guest.wait(2)
+    guest.until(lambda: guest('screen').get('chat_suggestions'), bool, ticks=2)
     guest.raw('key', 'tab', 'tap')
-    guest.wait(2)
-    return chat_input(guest)
+    return guest.until(lambda: chat_input(guest), lambda value: value != '/' + text, ticks=2)
 
 
 def check_commands(host, guest, out):
@@ -3101,12 +3111,10 @@ def same_light(host, guest, lo, hi, what, ticks=100):
 def check_flight(host, guest, out):
     def double_jump(game):
         # LocalPlayer.aiStep: a second jump press within 7 ticks of the first toggles flight.
+        lines = []
         for hold in (1, 4):
-            game.raw('key', 'space', 'down')
-            game.wait(hold)
-            game.raw('key', 'space', 'up')
-            game.wait(2)
-        game.wait(10)
+            lines += ['key space down', f'wait {hold}', 'key space up', 'wait 2']
+        game.script(lines + ['wait 10'])
         return game('state')['player']
 
     def set_mode(game, mode):
