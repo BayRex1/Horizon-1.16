@@ -14,7 +14,7 @@ use super::*;
 use gpui::img;
 use horizon_launcher::browser::{
     self,
-    details::{Details, Environment, Filters, Sort, Tags},
+    details::{Details, Filters, Tags},
     images, java, Kind as PackKind, Project, SourceId, Support, Version,
 };
 use std::collections::{HashMap, HashSet};
@@ -57,9 +57,9 @@ pub(super) struct ProjectVersion {
 pub(super) struct Browse {
     pub(super) open: Option<Opened>,
     pub(super) filters: Filters,
-    pub(super) show_filters: bool,
     tags: HashMap<(SourceId, PackKind), Tags>,
     tags_asked: HashSet<(SourceId, PackKind)>,
+    pub(super) tag_errors: HashMap<(SourceId, PackKind), String>,
     /// Images on disk, by URL and size; `None` while they load or when they failed.
     images: HashMap<(String, u32), Option<PathBuf>>,
     image_queue: Option<std::sync::mpsc::Sender<(String, u32)>>,
@@ -112,9 +112,12 @@ impl Launcher {
                 b.images.insert(key, path);
             }
             Loaded::Tags(key, Ok(tags)) => {
+                b.tag_errors.remove(&key);
                 b.tags.insert(key, tags);
             }
-            Loaded::Tags(_, Err(_)) => {}
+            Loaded::Tags(key, Err(error)) => {
+                b.tag_errors.insert(key, error);
+            }
         }
     }
 
@@ -123,7 +126,12 @@ impl Launcher {
         let key = (project.source, project.id.clone());
         let tx = self.mods.tx.clone();
         let p = project.clone();
+        let search = self.mods.search;
         std::thread::spawn(move || {
+            if p.source == SourceId::Horizon {
+                let about = browser::horizon::trust_and_capabilities(&p.id);
+                let _ = tx.send(Event::About(search, HashMap::from([(p.id.clone(), about)])));
+            }
             let Some(source) = browser::source(p.source) else {
                 return;
             };
@@ -210,7 +218,7 @@ impl Launcher {
     }
 
     /// The values the filters can take for the current kind and source, asked for once.
-    fn mods_tags(&mut self) -> Option<&Tags> {
+    pub(super) fn mods_tags(&mut self) -> Option<&Tags> {
         let key = (self.mods.source, self.mods.kind);
         if self.mods.browse.tags_asked.insert(key) {
             let tx = self.mods.tx.clone();
@@ -222,156 +230,6 @@ impl Launcher {
             });
         }
         self.mods.browse.tags.get(&key)
-    }
-
-    /// Sets the filters and searches again.
-    fn mods_filter(&mut self, change: impl FnOnce(&mut Filters)) {
-        change(&mut self.mods.browse.filters);
-        self.mods_search(0);
-    }
-
-    /// The filter bar: sort always; loader, version, environment and categories when shown.
-    pub(super) fn mods_filters(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let this = cx.entity().downgrade();
-        let f = self.mods.browse.filters.clone();
-        let sorts: Vec<(Option<Sort>, &'static str)> = std::iter::once((None, "Best match"))
-            .chain(Sort::ALL.iter().map(|s| (Some(*s), s.label())))
-            .collect();
-        let sort = segments("mods-sort", &sorts, f.sort, &t, {
-            let this = this.clone();
-            move |value, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.mods_filter(|f| f.sort = value);
-                    cx.notify();
-                });
-            }
-        });
-        let shown = self.mods.browse.show_filters;
-        let active = f.categories.len()
-            + f.loader.is_some() as usize
-            + f.game_version.is_some() as usize
-            + f.environment.is_some() as usize;
-        let toggle = button(
-            "mods-filters",
-            if active > 0 {
-                format!("Filters ({active})")
-            } else {
-                "Filters".to_string()
-            },
-            if shown { Kind::Secondary } else { Kind::Ghost },
-            &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.mods.browse.show_filters = !this.mods.browse.show_filters;
-            cx.notify();
-        }));
-        let mut bar = div().flex().flex_col().gap(px(12.)).child(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(12.))
-                .child(sort)
-                .child(toggle),
-        );
-        if !shown {
-            return bar;
-        }
-        let Some(tags) = self.mods_tags().cloned() else {
-            return bar.child(caps("Loading filters").text_color(t.muted));
-        };
-        // A chip: on or off, one value of a filter.
-        let chip = |id: String, label: String, on: bool| {
-            button(
-                id,
-                label,
-                if on { Kind::Secondary } else { Kind::Ghost },
-                &t,
-            )
-        };
-        let row = |title: &'static str| {
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(4.))
-                .child(caps(title).text_color(t.muted).w(px(120.)))
-        };
-        let mut loaders = row("Loader");
-        for l in &tags.loaders {
-            let on = f.loader.as_deref() == Some(l.as_str());
-            let value = l.clone();
-            loaders = loaders.child(chip(format!("mods-loader-{l}"), l.clone(), on).on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    let v = value.clone();
-                    this.mods_filter(|f| f.loader = if on { None } else { Some(v) });
-                    cx.notify();
-                }),
-            ));
-        }
-        let mut versions = row("Game version");
-        if let Some(path) = self.vanilla_icon() {
-            versions = versions.child(img(path).size(px(20.)).flex_none());
-        }
-        for v in tags.game_versions.iter().take(12) {
-            let on = f.game_version.as_deref() == Some(v.as_str());
-            let value = v.clone();
-            versions = versions.child(chip(format!("mods-version-{v}"), v.clone(), on).on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    let v = value.clone();
-                    this.mods_filter(|f| f.game_version = if on { None } else { Some(v) });
-                    cx.notify();
-                }),
-            ));
-        }
-        let mut environment = row("Environment");
-        for e in Environment::ALL {
-            let on = f.environment == Some(e);
-            environment = environment.child(
-                chip(format!("mods-env-{}", e.label()), e.label().into(), on).on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.mods_filter(|f| f.environment = if on { None } else { Some(e) });
-                        cx.notify();
-                    }),
-                ),
-            );
-        }
-        let mut categories = row("Categories");
-        for c in &tags.categories {
-            let on = f.categories.contains(&c.name);
-            let value = c.name.clone();
-            categories = categories.child(
-                chip(format!("mods-cat-{}", c.name), c.name.replace('-', " "), on).on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        let v = value.clone();
-                        this.mods_filter(|f| {
-                            if !f.categories.contains(&v) {
-                                f.categories.push(v);
-                            } else {
-                                f.categories.retain(|x| *x != v);
-                            }
-                        });
-                        cx.notify();
-                    }),
-                ),
-            );
-        }
-        let clear = button("mods-clear", "Clear filters", Kind::Ghost, &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.mods_filter(|f| *f = Filters::default());
-                cx.notify();
-            },
-        ));
-        bar = bar
-            .child(loaders)
-            .child(versions)
-            .child(environment)
-            .child(categories);
-        if active > 0 {
-            bar = bar.child(div().flex().child(clear));
-        }
-        bar
     }
 
     /// Vanilla's mark, drawn from the player's prepared game files when there are some.
@@ -401,9 +259,14 @@ impl Launcher {
         let details = o.details.clone();
         let versions = o.versions.clone();
         let version_list = o.version_list.clone();
-        let mut meta = vec![format!("{} downloads", thousands(p.downloads))];
+        let mut meta = vec![];
+        if p.source != SourceId::Horizon {
+            meta.push(format!("{} downloads", thousands(p.downloads)));
+        }
         if let Some(Ok(d)) = &details {
-            meta.push(format!("{} followers", thousands(d.followers)));
+            if p.source != SourceId::Horizon {
+                meta.push(format!("{} followers", thousands(d.followers)));
+            }
             if let Some(day) = d.updated.get(..10) {
                 meta.push(format!("updated {day}"));
             }
@@ -418,7 +281,7 @@ impl Launcher {
         };
         let icon = self.mods_icon(&p, 72.);
         let busy = self.mods.busy.as_ref().map(|b| b.0.clone());
-        let installed = self.mods.entry(&p).is_some();
+        let installed = self.content_is_installed(&p);
         let checking = matches!(
             self.mods.checks.get(&(p.source, p.id.clone())),
             None | Some(Checking::Running)
@@ -439,13 +302,15 @@ impl Launcher {
         } else if installed {
             action = action.child(caps("Installed").text_color(t.muted));
         } else if support.installable() && !checking {
-            let label = if p.kind == PackKind::Modpack {
+            let label = if p.kind == PackKind::Modpack && p.source != SourceId::Horizon {
                 "Import"
             } else {
                 "Install"
             };
             let mut install = button("mods-page-install", label, Kind::Primary, &t);
-            if busy.is_some() {
+            if busy.is_some()
+                || (p.source == SourceId::Horizon && !self.mods.about.contains_key(&p.id))
+            {
                 install = disabled(install);
             } else {
                 let p = p.clone();
@@ -491,6 +356,21 @@ impl Launcher {
             .gap(px(24.))
             .child(div().flex().child(back))
             .child(head);
+        if p.source == SourceId::Horizon {
+            let lines = self
+                .mods
+                .about
+                .get(&p.id)
+                .cloned()
+                .unwrap_or_else(|| vec!["Reading registry trust and capabilities…".into()]);
+            page = page.child(
+                plate(&t).p(px(12.)).child(
+                    text(theme::CAPTION)
+                        .text_color(t.ink_soft)
+                        .child(lines.join(" · ")),
+                ),
+            );
+        }
         if let Some(why) = support.reason() {
             page = page.child(
                 text(theme::UI)
@@ -643,5 +523,13 @@ impl Opened {
                 row.verdict = Some(*verdict);
             }
         }
+    }
+}
+
+impl Launcher {
+    pub(super) fn retry_mods_tags(&mut self) {
+        let key = (self.mods.source, self.mods.kind);
+        self.mods.browse.tags_asked.remove(&key);
+        self.mods.browse.tag_errors.remove(&key);
     }
 }

@@ -6,6 +6,7 @@
 mod agents_page;
 mod art;
 mod blocks;
+mod browser_controls;
 mod cli;
 mod cli_tools;
 mod collection;
@@ -59,7 +60,7 @@ impl Page {
     /// opens on that page, for screenshots; Home otherwise.
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
-            Ok("mods" | "modpacks") => Page::Mods,
+            Ok("content" | "mods" | "modpacks") => Page::Mods,
             Ok("servers") => Page::Servers,
             Ok("versions") => Page::Versions,
             Ok("notes") => Page::Notes,
@@ -72,7 +73,7 @@ impl Page {
     /// own button.
     const ALL: [(Page, &'static str, &'static str); 6] = [
         (Page::Play, "Home", "home"),
-        (Page::Mods, "Mods", "package"),
+        (Page::Mods, "Content", "package"),
         (Page::Servers, "Servers", "server"),
         (Page::Versions, "Versions", "archive"),
         (Page::Notes, "Patch notes", "notes"),
@@ -379,6 +380,7 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.mods.ui.popup = None;
     }
 
     fn check_updates(&mut self) {
@@ -3300,6 +3302,7 @@ impl Render for Launcher {
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(cx);
         let sidebar = self.sidebar(cx);
+        let popup_root_bounds = self.mods.ui.root_bounds.clone();
         let mut root = div()
             .id("root")
             .track_focus(&self.root_focus)
@@ -3314,6 +3317,7 @@ impl Render for Launcher {
                             window.focus_next();
                         }
                     }
+                    "escape" if this.close_browser_popup(window) => {}
                     "escape" if this.servers_escape() => {}
                     _ => return,
                 }
@@ -3330,6 +3334,14 @@ impl Render for Launcher {
             .text_color(t.ink)
             .overflow_hidden()
             .child(blocks::stone(stone, size.width.into(), size.height.into()))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| popup_root_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 div()
                     .relative()
@@ -3370,6 +3382,9 @@ impl Render for Launcher {
                         ),
                     ),
             );
+        if let Some(popup) = self.browser_popup(size, cx) {
+            root = root.child(popup);
+        }
         if self.page == Page::Servers {
             if let Some(dialog) = self.create_dialog(cx) {
                 root = root.child(dialog);

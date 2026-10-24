@@ -19,11 +19,6 @@ const KINDS: [(PackKind, &str, &str); 3] = [
     (PackKind::Modpack, "Modpacks", "archive"),
     (PackKind::ResourcePack, "Resource packs", "image"),
 ];
-/// The sources to pick from; CurseForge is shown beside them as coming soon.
-const SOURCES: [(SourceId, &str); 2] = [
-    (SourceId::Modrinth, "Modrinth"),
-    (SourceId::Horizon, "Horizon"),
-];
 const PAGE: usize = 20;
 
 pub(super) enum Event {
@@ -35,7 +30,7 @@ pub(super) enum Event {
     /// A Java mod's check: its jar read, or why it couldn't be.
     Checked(u64, (SourceId, String), Result<Box<Check>, String>),
     /// What a Horizon registry project says before install: signed or not, what it may do.
-    About(HashMap<String, Vec<String>>),
+    About(u64, HashMap<String, Vec<String>>),
     /// Registry files taken down that the launcher turned off.
     TakenDown(Vec<String>),
     /// A project page's part, an image or a filter's values (`mods_project`).
@@ -50,6 +45,7 @@ pub(super) enum Checking {
 }
 
 pub(super) struct Mods {
+    pub(super) ui: browser_controls::BrowserUi,
     pub(super) kind: PackKind,
     pub(super) source: SourceId,
     text: String,
@@ -100,6 +96,7 @@ impl Mods {
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
         Self {
+            ui: browser_controls::BrowserUi::new(cx),
             kind: if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("modpacks") {
                 PackKind::Modpack
             } else {
@@ -113,7 +110,7 @@ impl Mods {
             text: String::new(),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focused: false,
-            everything: false,
+            everything: true,
             search: 0,
             check_generation: Default::default(),
             check_jobs: None,
@@ -200,6 +197,13 @@ impl Launcher {
         }
     }
 
+    pub(super) fn content_is_installed(&self, project: &Project) -> bool {
+        if project.source == SourceId::Horizon && project.kind == PackKind::Modpack {
+            return self.registry_packs.iter().any(|pack| pack.id == project.id);
+        }
+        self.mods.entry(project).is_some()
+    }
+
     /// Called with the launcher's other work: what the background sent.
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
@@ -250,11 +254,12 @@ impl Launcher {
                 }
                 Event::Checked(..) => {}
                 Event::Loaded(l) => loaded.push(l),
-                Event::About(about) => {
+                Event::About(search, about) if search == m.search => {
                     // Rows grow by a line: measure them again (`cull`).
                     m.about.extend(about);
                     m.results_list.reset();
                 }
+                Event::About(..) => {}
                 Event::TakenDown(lines) => {
                     m.message = Some(Ok(lines.join("\n")));
                     m.installed = installed::Installed::load(&backend::game_home()).entries;
@@ -319,7 +324,7 @@ impl Launcher {
             };
             let _ = tx.send(Event::Found(search, offset, result));
             if !about.is_empty() {
-                let _ = tx.send(Event::About(about));
+                let _ = tx.send(Event::About(search, about));
             }
         });
     }
@@ -482,13 +487,13 @@ impl Launcher {
         });
     }
 
-    fn mods_field(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(super) fn mods_field(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let m = &self.mods;
         let focused = m.focused;
         let shown: String = {
             let chars: Vec<char> = m.text.chars().collect();
-            chars[chars.len().saturating_sub(40)..].iter().collect()
+            chars[chars.len().saturating_sub(18)..].iter().collect()
         };
         div()
             .id("mods-search")
@@ -496,7 +501,7 @@ impl Launcher {
             .flex()
             .items_center()
             .gap(px(10.))
-            .w(px(320.))
+            .w(px(170.))
             .h(px(theme::FIELD + 4.))
             .px(px(12.))
             .overflow_hidden()
@@ -507,7 +512,7 @@ impl Launcher {
             .cursor_text()
             .child(blocks::icon("search", 18., t.muted))
             .child(if m.text.is_empty() && !focused {
-                div().text_color(t.muted).child("Search, then Enter")
+                div().text_color(t.muted).child("Search…")
             } else {
                 div().text_color(t.ink).child(shown)
             })
@@ -528,7 +533,13 @@ impl Launcher {
                     k.key_char.as_deref(),
                     command,
                 ) {
-                    Key::Enter => this.mods_search(0),
+                    Key::Enter => {
+                        if this.mods.ui.view == browser_controls::LibraryView::Browse {
+                            this.mods_search(0);
+                        } else {
+                            this.mods.reset_lists();
+                        }
+                    }
                     Key::Escape => window.blur(),
                     Key::Paste => {
                         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
@@ -556,94 +567,55 @@ impl Launcher {
             self.mods_taken_down();
             self.mods_search(0);
         }
-        let header = page_header(
-            "Mods",
-            "Mods made for Horizon from its own reviewed registry, and Java mods, modpacks and \
-             resource packs from Modrinth: Horizon ports what a Java mod carries (blocks, items, \
-             recipes, worldgen) and says before you install what runs. Each file is checked \
-             against its source's checksum before it reaches your game folder.",
+        let entity = cx.entity().downgrade();
+        let kinds = blocks::tabs(
+            "mods-kind",
+            &KINDS,
+            self.mods.kind,
             &t,
-        );
-        let this = cx.entity().downgrade();
-        let kinds = blocks::tabs("mods-kind", &KINDS, self.mods.kind, &t, {
-            let this = this.clone();
             move |kind, _, cx| {
-                let _ = this.update(cx, |this, cx| {
+                let _ = entity.update(cx, |this, cx| {
                     if this.mods.kind != kind {
                         this.mods.kind = kind;
-                        // Categories and loaders differ by kind.
                         this.mods.browse.filters = Default::default();
                         this.mods.browse.open = None;
+                        this.mods.ui.popup = None;
                         this.mods_search(0);
                     }
                     cx.notify();
                 });
-            }
-        });
-        let everything = self.mods.everything;
-        let toggle = div()
-            .id("mods-everything")
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .cursor_pointer()
-            .child(switch("mods-everything-switch", everything, &t))
-            .child(
-                text(theme::LABEL)
-                    .text_color(t.ink_soft)
-                    .child("Show everything"),
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.mods.everything = !this.mods.everything;
-                this.mods_search(0);
-                cx.notify();
-            }));
-        // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
-        // account's "Coming soon").
-        let source_note = div().flex().child(self.mods_source_switch(cx));
-        // The registry lists only what was made for Horizon: no "everything", no Modrinth filters.
-        let registry = self.mods.source == SourceId::Horizon;
-        let filters = (!registry).then(|| self.mods_filters(cx));
-        let controls = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(self.mods_field(cx))
-                    .when(!registry, |d| d.child(toggle)),
-            )
-            .child(source_note)
-            .children(filters);
-        // The kinds are inventory tabs on the panel that holds the open one.
-        let body = blocks::panel(&t).flex().flex_col().gap(px(24.)).p(px(20.));
-        let page = |body: Div| {
-            div()
+            },
+        );
+        let mut body = blocks::panel(&t).flex().flex_col().gap(px(16.)).p(px(20.));
+        if let Some(project) = self.mods_project_page(cx) {
+            return div()
                 .flex()
                 .flex_col()
-                .gap(px(32.))
-                .child(header)
-                .child(div().flex().flex_col().child(kinds).child(body))
-        };
-        if let Some(project) = self.mods_project_page(cx) {
-            return page(body.children(self.mods_busy_plate()).child(project));
+                .child(kinds)
+                .child(body.children(self.mods_busy_plate()).child(project));
         }
-        let mut body = body.children(self.mods_busy_plate());
-        if self.mods.kind == PackKind::Modpack {
+        body = body
+            .child(self.browser_navigation(cx))
+            .children(self.mods_busy_plate());
+        if self.mods.ui.view == browser_controls::LibraryView::Installed {
+            if self.mods.kind == PackKind::Modpack {
+                body = body.child(self.imported_packs(cx));
+            } else {
+                body = body.child(self.mods_field(cx));
+                body = match self.mods_installed_list(cx) {
+                    Some(list) => body.child(list),
+                    None => body.child(centered(
+                        "No installed content matches this view. Browse to add content.",
+                        &t,
+                    )),
+                };
+            }
+        } else {
             body = body
-                .child(self.imported_packs(cx))
-                .child(div().h(px(2.)).bg(t.rule))
-                .child(section_title("Browse modpacks", "search", &t));
+                .child(self.browser_toolbar(cx))
+                .child(self.mods_results(cx));
         }
-        body = body.child(controls);
-        if let Some(list) = self.mods_installed_list(cx) {
-            body = body.child(list);
-        }
-        page(body.child(self.mods_results(cx)))
+        div().flex().flex_col().child(kinds).child(body)
     }
 
     /// The install under way and the last install's answer.
@@ -977,45 +949,6 @@ impl Launcher {
         }
         out
     }
-}
-
-impl Launcher {
-    /// The source switch: Modrinth or Horizon's registry, CurseForge shown as coming soon and not
-    /// clickable, like the Microsoft account's "Coming soon".
-    fn mods_source_switch(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let this = cx.entity().downgrade();
-        source_switch(&self.theme, self.mods.source, move |source, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                if this.mods.source != source {
-                    this.mods.source = source;
-                    this.mods.browse.filters = Default::default();
-                    this.mods.browse.open = None;
-                    this.mods_search(0);
-                }
-                cx.notify();
-            });
-        })
-    }
-}
-
-fn source_switch(
-    t: &Theme,
-    current: SourceId,
-    on_pick: impl Fn(SourceId, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
-    let soon = div()
-        .flex()
-        .items_center()
-        .h(px(theme::SEGMENT))
-        .px(px(14.))
-        .pb(px(2.))
-        .opacity(theme::DISABLED)
-        .child(
-            blocks::pixel(14., FontWeight::MEDIUM)
-                .text_color(t.muted)
-                .child("CurseForge (coming soon)"),
-        );
-    segments("mods-source", &SOURCES, current, t, on_pick).child(soon)
 }
 
 #[cfg(test)]
