@@ -75,7 +75,8 @@ impl Cull {
                     .borrow_mut()
                     .record(&spans, &bounds, scroll.bounds(), scroll.offset().y)
                 {
-                    window.refresh();
+                    // refresh() is ignored during prepaint; notify the view on the next frame.
+                    window.request_animation_frame();
                 }
             })
     }
