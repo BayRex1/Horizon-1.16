@@ -180,24 +180,6 @@ fn short_sum(checksum: &str) -> String {
 }
 
 impl Launcher {
-    /// Opens the Mods page on its Modpacks tab, with the pack `slug` open when given (the
-    /// sidebar's packs and its + button).
-    pub(super) fn show_modpack(&mut self, slug: Option<String>) {
-        self.go(Page::Mods);
-        if slug.is_some() {
-            self.pack_open = slug;
-            self.mods.report_list.reset();
-        }
-        if self.mods.kind != PackKind::Modpack {
-            self.mods.kind = PackKind::Modpack;
-            self.mods.browse.filters = Default::default();
-            self.mods.browse.open = None;
-            if self.mods.loaded {
-                self.mods_search(0);
-            }
-        }
-    }
-
     pub(super) fn content_is_installed(&self, project: &Project) -> bool {
         if project.source == SourceId::Horizon && project.kind == PackKind::Modpack {
             return self.registry_packs.iter().any(|pack| pack.id == project.id);

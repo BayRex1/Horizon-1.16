@@ -15,6 +15,7 @@ mod content_checks;
 mod cull;
 mod game_tools;
 mod instance_content;
+mod instance_creation;
 mod instance_page;
 mod internet;
 mod markdown;
@@ -139,6 +140,7 @@ struct Launcher {
     settings_ui: settings_page::SettingsUi,
     release_ui: release_pages::ReleaseUi,
     instance: instance_page::InstanceUi,
+    instance_creation: instance_creation::CreateUi,
     local_instances: Vec<instances::LocalInstance>,
     /// How many times the page changed, for the page transition.
     switches: usize,
@@ -283,6 +285,7 @@ impl Launcher {
             settings_ui: Default::default(),
             release_ui: Default::default(),
             instance: instance_page::InstanceUi::new(cx),
+            instance_creation: instance_creation::CreateUi::new(cx),
             local_instances: vec![],
             switches: 0,
             content_scroll: Scrollbar::default(),
@@ -1541,8 +1544,8 @@ impl Launcher {
             .cursor_pointer()
             .hover(move |s| s.bg(t.raised))
             .child(blocks::icon("plus", 14., t.ink_soft))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.show_modpack(None);
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.open_create_instance(window);
                 cx.notify();
             }));
         let mut list = div()
@@ -2791,12 +2794,15 @@ impl Render for Launcher {
                 match k.key.as_str() {
                     "tab" => {
                         KEYBOARD.store(true, Ordering::Relaxed);
-                        if k.modifiers.shift {
+                        if this.instance_creation.open {
+                            this.cycle_create_focus(k.modifiers.shift, window);
+                        } else if k.modifiers.shift {
                             window.focus_prev();
                         } else {
                             window.focus_next();
                         }
                     }
+                    "escape" if this.close_create_instance(window) => {}
                     "escape" if this.close_browser_popup(window) => {}
                     "escape" if this.servers_escape() => {}
                     _ => return,
@@ -2869,6 +2875,9 @@ impl Render for Launcher {
             if let Some(dialog) = self.create_dialog(cx) {
                 root = root.child(dialog);
             }
+        }
+        if let Some(dialog) = self.instance_creation_dialog(cx) {
+            root = root.child(dialog);
         }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));
