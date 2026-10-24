@@ -185,6 +185,45 @@ pub fn resource_pack_enabled(home: &Path, name: &str) -> Result<bool, String> {
     Ok(resource_packs(&options(home)?)?.contains(&format!("file/{name}")))
 }
 
+/// One read of each game-native selection file for a whole content snapshot.
+pub struct ContentStates {
+    packs: Result<BTreeSet<String>, String>,
+    mods: Result<BTreeSet<String>, String>,
+}
+
+impl ContentStates {
+    pub fn load(home: &Path) -> Self {
+        let packs = options(home)
+            .and_then(|text| resource_packs(&text))
+            .map(|packs| packs.into_iter().collect());
+        let mods = match fs::read_to_string(home.join("horizon-mods.txt")) {
+            Ok(text) => Ok(text.lines().map(str::trim).map(str::to_owned).collect()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+            Err(error) => Err(format!("Could not read mod selection: {error}")),
+        };
+        Self { packs, mods }
+    }
+
+    pub fn resource_pack(&self, name: &str) -> Result<bool, String> {
+        validate_resource_name(name)?;
+        self.packs
+            .as_ref()
+            .map(|packs| packs.contains(&format!("file/{name}")))
+            .map_err(Clone::clone)
+    }
+
+    pub fn enabled(&self, entry: &Entry) -> Result<bool, String> {
+        let id = entry_id(entry)?;
+        if entry.kind == Kind::ResourcePack {
+            return self.resource_pack(id);
+        }
+        self.mods
+            .as_ref()
+            .map(|mods| mods.contains(&format!("mod.{id}:true")))
+            .map_err(Clone::clone)
+    }
+}
+
 /// Reads the same switches the game reads, without changing files during rendering.
 pub fn enabled(home: &Path, entry: &Entry) -> Result<bool, String> {
     let id = entry_id(entry)?;
@@ -391,6 +430,36 @@ mod tests {
             .disabled_ported
             .is_empty());
         fs::remove_file(home.join(SETTINGS_FILE)).unwrap();
+        fs::remove_dir(home).unwrap();
+    }
+
+    #[test]
+    fn content_state_snapshot_reads_selection_files_once_for_the_collection() {
+        let home =
+            std::env::temp_dir().join(format!("horizon-instance-states-{}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("options.txt"),
+            "resourcePacks:[\"vanilla\",\"file/glass.zip\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            home.join("horizon-mods.txt"),
+            "mod.copper:true\nmod.disabled:false\n",
+        )
+        .unwrap();
+        let states = ContentStates::load(&home);
+        fs::remove_file(home.join("options.txt")).unwrap();
+        fs::remove_file(home.join("horizon-mods.txt")).unwrap();
+        assert!(states.enabled(&entry()).unwrap());
+        let mut content = entry();
+        content.kind = Kind::Mod;
+        content.file = "horizon-mods/copper".into();
+        assert!(states.enabled(&content).unwrap());
+        content.file = "horizon-mods/disabled".into();
+        assert!(!states.enabled(&content).unwrap());
+        assert!(!states.resource_pack("other.zip").unwrap());
+        assert!(states.resource_pack("../outside.zip").is_err());
         fs::remove_dir(home).unwrap();
     }
 

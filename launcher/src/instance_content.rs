@@ -15,24 +15,48 @@ pub(super) enum Origin {
 }
 #[derive(Clone)]
 pub(super) struct ContentItem {
-    key: String,
+    pub(super) key: String,
+    pub(super) search_name: String,
     icon: horizon_launcher::content_icons::Icon,
-    title: String,
+    pub(super) title: String,
     detail: String,
     version: String,
     file: String,
-    kind: ContentKind,
+    pub(super) kind: ContentKind,
     enabled: Option<bool>,
-    origin: Origin,
+    pub(super) origin: Origin,
+}
+
+#[cfg(test)]
+impl ContentItem {
+    pub(super) fn fixture(index: usize, kind: ContentKind) -> Self {
+        let title = format!("Project {index:05}");
+        Self {
+            key: index.to_string(),
+            search_name: title.to_lowercase(),
+            title,
+            icon: horizon_launcher::content_icons::Icon::Archive(PathBuf::new()),
+            detail: String::new(),
+            version: String::new(),
+            file: String::new(),
+            kind,
+            enabled: Some(false),
+            origin: Origin::LocalPack {
+                name: index.to_string(),
+                path: PathBuf::new(),
+            },
+        }
+    }
 }
 
 impl Launcher {
     pub(super) fn instance_content_snapshot(&self) -> Vec<ContentItem> {
+        let states = instance_profile::ContentStates::load(&self.instance.home);
         let mut items = installed::Installed::load(&self.instance.home)
             .entries
             .into_iter()
             .map(|entry| {
-                let selection = instance_profile::enabled(&self.instance.home, &entry);
+                let selection = states.enabled(&entry);
                 let detail = match &selection {
                     Ok(_) => instance_profile::taken_down(&entry).map_or_else(
                         || format!("{} · {}", entry.kind.label(), entry.source.label()),
@@ -42,6 +66,7 @@ impl Launcher {
                 };
                 ContentItem {
                     key: format!("{}:{}", entry.source.label(), entry.project),
+                    search_name: entry.title.to_lowercase(),
                     icon: horizon_launcher::content_icons::Icon::Project(
                         entry.source,
                         entry.project.clone(),
@@ -56,6 +81,10 @@ impl Launcher {
                 }
             })
             .collect::<Vec<_>>();
+        let managed_files = items
+            .iter()
+            .map(|item| item.file.clone())
+            .collect::<std::collections::HashSet<_>>();
         if let Ok(entries) = std::fs::read_dir(self.instance.home.join("resourcepacks")) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -65,11 +94,11 @@ impl Launcher {
                     || path
                         .extension()
                         .is_none_or(|extension| !extension.eq_ignore_ascii_case("zip"))
-                    || items.iter().any(|item| item.file == relative)
+                    || managed_files.contains(&relative)
                 {
                     continue;
                 }
-                let selection = instance_profile::resource_pack_enabled(&self.instance.home, &name);
+                let selection = states.resource_pack(&name);
                 let detail = selection
                     .as_ref()
                     .err()
@@ -77,6 +106,7 @@ impl Launcher {
                     .unwrap_or_else(|| "Resource pack · Local file".into());
                 items.push(ContentItem {
                     key: format!("local:{name}"),
+                    search_name: name.to_lowercase(),
                     icon: horizon_launcher::content_icons::Icon::Archive(path.clone()),
                     title: path
                         .file_stem()
@@ -98,11 +128,13 @@ impl Launcher {
             .imported_slug()
             .and_then(|slug| self.packs.iter().find(|pack| &pack.slug == slug))
         {
+            let available_mods = pack.mods.iter().collect::<std::collections::HashSet<_>>();
             for row in &pack.rows {
                 let path = pack.work.join("mods").join(&row.key).join("carry");
-                let available = pack.mods.contains(&path);
+                let available = available_mods.contains(&path);
                 items.push(ContentItem {
                     key: format!("ported:{}", row.key),
+                    search_name: format!("{} {}", row.name, row.key).to_lowercase(),
                     icon: horizon_launcher::content_icons::Icon::ImportedItem {
                         work: pack.work.clone(),
                         key: row.key.clone(),
@@ -148,109 +180,7 @@ impl Launcher {
         }
     }
 
-    pub(super) fn instance_content(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let snapshot = self.instance.content.clone();
-        let mut items = snapshot
-            .iter()
-            .filter(|item| {
-                self.instance.kind.is_none_or(|kind| item.kind == kind)
-                    && item
-                        .title
-                        .to_lowercase()
-                        .contains(&self.instance.query.to_lowercase())
-            })
-            .collect::<Vec<_>>();
-        items.sort_by(|first, second| {
-            if self.instance.updates_first {
-                let order = self
-                    .instance_item_has_update(second)
-                    .cmp(&self.instance_item_has_update(first));
-                if !order.is_eq() {
-                    return order;
-                }
-            }
-            first.title.to_lowercase().cmp(&second.title.to_lowercase())
-        });
-        let count = items.len();
-        let mut page = div().flex().flex_col().gap(px(14.));
-        if self.instance.id.imported_slug().is_some() {
-            page=page.child(text(theme::CAPTION).text_color(t.muted).child("Imported for Horizon. Supported content is carried over; unsupported Java behaviour stays off.")).child(self.instance_port_controls(cx));
-        }
-        page = page.child(self.instance_content_toolbar(cx)).child(
-            text(theme::CAPTION)
-                .text_color(t.muted)
-                .child(format!("{count} projects · changes apply on next launch")),
-        );
-        if !self.instance.selected.is_empty() {
-            page = page.child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        text(theme::CAPTION)
-                            .child(format!("{} selected", self.instance.selected.len())),
-                    )
-                    .child(
-                        button("instance-enable-selected", "Enable", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.instance_bulk_enabled(true);
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        button("instance-disable-selected", "Disable", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.instance_bulk_enabled(false);
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            );
-        }
-        let header = div()
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .px(px(14.))
-            .py(px(10.))
-            .border_b_1()
-            .border_color(t.bevel)
-            .child(
-                text(theme::CAPTION)
-                    .flex_1()
-                    .text_color(t.muted)
-                    .child("Project"),
-            )
-            .child(
-                text(theme::CAPTION)
-                    .w(px(130.))
-                    .text_color(t.muted)
-                    .child("Version"),
-            )
-            .child(
-                text(theme::CAPTION)
-                    .w(px(145.))
-                    .text_color(t.muted)
-                    .child("Actions"),
-            );
-        let mut table = blocks::panel(&t).flex().flex_col().child(header);
-        for item in items {
-            table = table.child(self.instance_content_row(item, cx));
-        }
-        if count == 0 {
-            table = table.child(centered(
-                "No content matches. Browse to add projects, or change the search.",
-                &t,
-            ));
-        }
-        page.child(table)
-    }
-
-    fn instance_content_toolbar(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn instance_content_toolbar(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let sort = if self.instance.updates_first {
             "Updates first"
@@ -260,60 +190,52 @@ impl Launcher {
         let kind = self.instance.kind.map_or("All content", ContentKind::label);
         div()
             .flex()
-            .flex_col()
+            .flex_wrap()
+            .items_center()
             .gap(px(8.))
+            .child(self.instance_field(instance_page::Field::Search, cx))
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(self.instance_field(instance_page::Field::Search, cx))
-                    .child(
-                        button("instance-add-files", "Add files", Kind::Secondary, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.add_instance_files(cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        button("instance-browse", "Browse content", Kind::Secondary, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                if this.set_mods_target(
-                                    this.instance.home.clone(),
-                                    this.instance.title.clone(),
-                                ) {
-                                    this.mods.ui.view = browser_controls::LibraryView::Browse;
-                                    this.mods.browse.open = None;
-                                    this.go(Page::Mods);
-                                }
-                                cx.notify();
-                            }),
-                        ),
-                    ),
+                button("instance-add-files", "Add files", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.add_instance_files(cx);
+                    }),
+                ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(self.browser_menu_button(Popup::InstanceSort, sort.into(), cx))
-                    .child(self.browser_menu_button(Popup::InstanceKinds, kind.into(), cx))
-                    .child(
-                        button("instance-update-all", "Update all", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.update_instance_content();
-                                cx.notify();
-                            }),
-                        ),
-                    ),
+                button("instance-browse", "Browse", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        if this.set_mods_target(
+                            this.instance.home.clone(),
+                            this.instance.title.clone(),
+                        ) {
+                            this.mods.ui.view = browser_controls::LibraryView::Browse;
+                            this.mods.browse.open = None;
+                            this.go(Page::Mods);
+                        }
+                        cx.notify();
+                    },
+                )),
             )
+            .child(self.browser_menu_button(Popup::InstanceSort, sort.into(), cx))
+            .child(self.browser_menu_button(Popup::InstanceKinds, kind.into(), cx))
+            .child(
+                button("instance-update-all", "Update all", Kind::Ghost, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.update_instance_content();
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(self.content_view_button(content_paging::Collection::Instance, cx))
     }
 
-    fn instance_content_row(&mut self, item: &ContentItem, cx: &mut Context<Self>) -> Div {
+    pub(super) fn instance_content_row(
+        &mut self,
+        item: &ContentItem,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let t = self.theme;
-        let icon = self.content_art_slot(item.icon.clone(), &item.title, 38.);
+        let icon = self.content_art_slot(item.icon.clone(), &item.title, 44.);
         let key = item.key.clone();
         let selected = self.instance.selected.contains(&key);
         let checkbox = keyboard(div().id(SharedString::from(format!("select-{key}"))), &t)
@@ -336,7 +258,7 @@ impl Launcher {
             .items_center()
             .gap(px(12.))
             .px(px(14.))
-            .py(px(14.))
+            .h(px(88.))
             .border_b_1()
             .border_color(t.bevel)
             .child(checkbox)
@@ -351,11 +273,13 @@ impl Launcher {
                     .child(
                         blocks::pixel(16., FontWeight::MEDIUM)
                             .text_color(t.ink)
+                            .truncate()
                             .child(item.title.clone()),
                     )
                     .child(
                         text(theme::CAPTION)
                             .text_color(t.muted)
+                            .truncate()
                             .child(item.detail.clone()),
                     ),
             )
@@ -375,6 +299,7 @@ impl Launcher {
                         text(theme::MICRO)
                             .font_family(theme::MONO)
                             .text_color(t.muted)
+                            .truncate()
                             .child(item.file.clone()),
                     ),
             )
@@ -385,11 +310,10 @@ impl Launcher {
         let t = self.theme;
         let mut actions = div()
             .flex()
-            .flex_wrap()
             .items_center()
             .justify_end()
             .gap(px(6.))
-            .w(px(145.))
+            .w(px(200.))
             .flex_none();
         let taken_down = match &item.origin {
             Origin::Managed(entry) => instance_profile::taken_down(entry).is_some(),
@@ -531,7 +455,7 @@ impl Launcher {
         }
     }
 
-    fn instance_bulk_enabled(&mut self, enabled: bool) {
+    pub(super) fn instance_bulk_enabled(&mut self, enabled: bool) {
         let items = self
             .instance
             .content
@@ -583,7 +507,7 @@ impl Launcher {
         }
     }
 
-    fn instance_port_controls(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn instance_port_controls(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let Some(pack) = self
             .instance
@@ -733,6 +657,7 @@ impl Launcher {
                             .justify_start()
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.close_browser_popup(window);
+                                this.content_art.retry_missing();
                                 this.reload_instance();
                                 this.set_mods_target(
                                     this.instance.home.clone(),

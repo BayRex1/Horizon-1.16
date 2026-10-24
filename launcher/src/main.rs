@@ -19,6 +19,7 @@ mod cull;
 mod game_tools;
 mod home_instances;
 mod instance_content;
+mod instance_content_list;
 mod instance_creation;
 mod instance_page;
 mod internet;

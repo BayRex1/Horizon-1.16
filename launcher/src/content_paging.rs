@@ -6,12 +6,14 @@ use horizon_launcher::pagination::{PageSize, Pagination};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Collection {
     Browser,
+    Instance,
 }
 
 impl Launcher {
     fn content_paging(&self, collection: Collection) -> Pagination {
         match collection {
             Collection::Browser => self.mods.ui.paging,
+            Collection::Instance => self.instance.content_list.paging,
         }
     }
 
@@ -22,13 +24,18 @@ impl Launcher {
     ) -> Stateful<Div> {
         let popup = match collection {
             Collection::Browser => Popup::BrowserView,
+            Collection::Instance => Popup::InstanceView,
         };
         let count = self.content_paging(collection).size.count();
         self.browser_menu_button(popup, format!("View: {count}"), cx)
     }
 
-    pub(super) fn content_view_menu(&self, _popup: Popup, cx: &mut Context<Self>) -> Div {
-        let collection = Collection::Browser;
+    pub(super) fn content_view_menu(&self, popup: Popup, cx: &mut Context<Self>) -> Div {
+        let collection = if popup == Popup::InstanceView {
+            Collection::Instance
+        } else {
+            Collection::Browser
+        };
         let current = self.content_paging(collection).size;
         let t = self.theme;
         blocks::panel(&t)
@@ -164,6 +171,7 @@ impl Launcher {
     fn set_content_page_size(&mut self, collection: Collection, size: PageSize) {
         match collection {
             Collection::Browser => self.mods.ui.paging.set_size(size),
+            Collection::Instance => self.instance.content_list.paging.set_size(size),
         }
         self.set_content_page(collection, 0);
     }
@@ -176,6 +184,10 @@ impl Launcher {
                 if self.mods.ui.view == LibraryView::Browse {
                     self.mods_search(self.mods.ui.paging.offset());
                 }
+            }
+            Collection::Instance => {
+                self.instance.content_list.paging.index = index;
+                self.instance.content_list.rows.reset();
             }
         }
         self.content_scroll

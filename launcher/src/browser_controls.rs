@@ -15,6 +15,7 @@ pub(super) enum Popup {
     HomeInstances,
     HomeBuild,
     BrowserView,
+    InstanceView,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -167,7 +168,7 @@ impl Launcher {
         let ui = &self.mods.ui;
         let (focus, bounds) = match popup {
             Popup::Source => (&ui.source_focus, ui.source_bounds.clone()),
-            Popup::BrowserView => (&ui.view_focus, ui.view_bounds.clone()),
+            Popup::BrowserView | Popup::InstanceView => (&ui.view_focus, ui.view_bounds.clone()),
             Popup::Sort | Popup::InstanceSort => (&ui.sort_focus, ui.sort_bounds.clone()),
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 (&ui.filter_focus, ui.filter_bounds.clone())
@@ -240,7 +241,7 @@ impl Launcher {
         };
         window.focus(match popup {
             Popup::Source => &self.mods.ui.source_focus,
-            Popup::BrowserView => &self.mods.ui.view_focus,
+            Popup::BrowserView | Popup::InstanceView => &self.mods.ui.view_focus,
             Popup::Sort | Popup::InstanceSort => &self.mods.ui.sort_focus,
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 &self.mods.ui.filter_focus
@@ -261,7 +262,7 @@ impl Launcher {
         let popup = self.mods.ui.popup?;
         let anchor = match popup {
             Popup::Source => self.mods.ui.source_bounds.clone(),
-            Popup::BrowserView => self.mods.ui.view_bounds.clone(),
+            Popup::BrowserView | Popup::InstanceView => self.mods.ui.view_bounds.clone(),
             Popup::Sort | Popup::InstanceSort => self.mods.ui.sort_bounds.clone(),
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 self.mods.ui.filter_bounds.clone()
@@ -284,7 +285,7 @@ impl Launcher {
         let below = (f32::from(root.bottom() - bounds.bottom()) - gap - margin).max(0.);
         let above = (f32::from(bounds.top() - root.top()) - gap - margin).max(0.);
         let desired_height = match popup {
-            Popup::BrowserView => 190.,
+            Popup::BrowserView | Popup::InstanceView => 190.,
             Popup::Source => 132.,
             Popup::Sort => 220.,
             Popup::InstanceSort | Popup::InstanceMore => 86.,
@@ -313,7 +314,7 @@ impl Launcher {
         );
         let body = match popup {
             Popup::Source => self.browser_source_menu(cx),
-            Popup::BrowserView => self.content_view_menu(popup, cx),
+            Popup::BrowserView | Popup::InstanceView => self.content_view_menu(popup, cx),
             Popup::Sort => self.browser_sort_menu(cx),
             Popup::Filters => self.browser_filter_menu(height, cx),
             Popup::HomeInstances | Popup::HomeBuild => self.home_menu(popup, height, cx),

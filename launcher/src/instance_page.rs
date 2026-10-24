@@ -41,6 +41,7 @@ pub(super) struct InstanceUi {
     pub(super) names: HashMap<InstanceId, String>,
     pub(super) tab: Tab,
     pub(super) content: Vec<super::instance_content::ContentItem>,
+    pub(super) content_list: super::instance_content_list::ContentList,
     pub(super) query: String,
     pub(super) kind: Option<horizon_launcher::browser::Kind>,
     pub(super) updates_first: bool,
@@ -70,6 +71,7 @@ impl InstanceUi {
             names: HashMap::new(),
             tab: Tab::Content,
             content: vec![],
+            content_list: Default::default(),
             query: String::new(),
             kind: None,
             updates_first: false,
@@ -168,6 +170,7 @@ impl Launcher {
         self.pack_open = id.imported_slug().cloned();
         self.instance.tab = Tab::Content;
         self.instance.query.clear();
+        self.instance.content_list.paging.index = 0;
         self.instance.kind = None;
         self.instance.selected.clear();
         self.instance.message = None;
@@ -204,6 +207,7 @@ impl Launcher {
         self.instance.name_input = self.instance.title.clone();
         self.instance.args_input = self.instance.preferences.arguments.clone();
         self.instance.content = self.instance_content_snapshot();
+        self.instance.content_list.invalidate();
         self.instance.files =
             Self::instance_directory(&self.instance.home).unwrap_or_else(|error| {
                 self.instance.message = Some(error);
@@ -655,7 +659,7 @@ impl Launcher {
                 "instance-search",
                 &self.instance.search_focus,
                 &self.instance.query,
-                "Search content…",
+                "Search…",
             ),
             Field::Name => (
                 "instance-name",
@@ -676,7 +680,7 @@ impl Launcher {
             .track_focus(&focus)
             .flex()
             .items_center()
-            .w(px(if field == Field::Search { 180. } else { 250. }))
+            .w(px(if field == Field::Search { 144. } else { 250. }))
             .h(px(36.))
             .px(px(10.))
             .border_2()
