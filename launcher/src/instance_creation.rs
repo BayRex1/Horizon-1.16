@@ -92,6 +92,8 @@ impl Launcher {
             Ok(instance) => {
                 let id = InstanceId::Local(instance.slug.clone());
                 self.local_instances.push(instance);
+                self.home_ui.id = id.clone();
+                self.home_ui.loaded = false;
                 self.instance_creation.open = false;
                 self.open_instance(id);
                 window.focus(&self.root_focus);

@@ -7,7 +7,7 @@ use horizon_launcher::backend::Appearance;
 use horizon_theme as tokens;
 use std::time::Duration;
 
-pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
+pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, MICRO, TITLE, UI, WORDMARK};
 pub const FONT: &str = tokens::FONT;
 pub const MONO: &str = tokens::MONO;
 pub const PIXEL: &str = tokens::PIXEL;

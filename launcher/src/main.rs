@@ -14,6 +14,7 @@ mod console;
 mod content_checks;
 mod cull;
 mod game_tools;
+mod home_instances;
 mod instance_content;
 mod instance_creation;
 mod instance_page;
@@ -142,6 +143,7 @@ struct Launcher {
     instance: instance_page::InstanceUi,
     instance_creation: instance_creation::CreateUi,
     local_instances: Vec<instances::LocalInstance>,
+    home_ui: home_instances::HomeUi,
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
@@ -161,7 +163,6 @@ struct Launcher {
     installing: Option<(String, f32)>,
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
-    picker_open: bool,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -287,6 +288,7 @@ impl Launcher {
             instance: instance_page::InstanceUi::new(cx),
             instance_creation: instance_creation::CreateUi::new(cx),
             local_instances: vec![],
+            home_ui: Default::default(),
             switches: 0,
             content_scroll: Scrollbar::default(),
             long_list: cull::Cull::default(),
@@ -310,7 +312,6 @@ impl Launcher {
             installing: None,
             install_error: None,
             confirm_remove: None,
-            picker_open: false,
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
@@ -397,7 +398,9 @@ impl Launcher {
                 self.mods.reset_lists();
             }
         }
-        self.picker_open = false;
+        if page == Page::Play {
+            self.home_ui.loaded = false;
+        }
         self.mods.ui.popup = None;
     }
 
@@ -785,13 +788,18 @@ impl Launcher {
     }
 
     fn play(&mut self) {
-        let Some(tag) = self.selected().cloned() else {
+        let Some(tag) = self.home_build().cloned() else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if self.client.is_some() || self.starting_client.is_some() || self.preparing {
             return;
         }
-        self.starting_pack = None;
+        if self.home_needs_port() {
+            self.open_instance(self.home_ui.id.clone());
+            return;
+        }
+        self.starting_pack = self.home_instance_work();
+        self.starting_home = Some(self.home_instance_folder());
         self.start_client(tag);
     }
 
@@ -1758,120 +1766,12 @@ impl Launcher {
             .child(foot)
     }
 
-    fn picker(&self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let label = self
-            .selected()
-            .cloned()
-            .unwrap_or_else(|| "No version".into());
-        // A block as tall as Play: "VERSION" over the tag, and a chevron.
-        let mut wrap = div().relative().child(
-            keyboard(div().id("picker"), &t)
-                .relative()
-                .flex()
-                .items_center()
-                .gap(px(16.))
-                .h(px(60.))
-                .pl(px(14.))
-                .pr(px(12.))
-                .bg(t.panel)
-                .border_2()
-                .border_color(t.outline)
-                .children(blocks::edges(t.bevel, t.lip, theme::BEVEL))
-                .cursor_pointer()
-                .hover(move |s| s.bg(t.raised))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .child(
-                            blocks::pixel(11., FontWeight::MEDIUM)
-                                .text_color(t.muted)
-                                .child("VERSION"),
-                        )
-                        .child(
-                            div()
-                                .font_family(theme::MONO)
-                                .text_size(px(15.))
-                                .text_color(t.ink)
-                                .child(label),
-                        ),
-                )
-                .child(blocks::icon("chevron-down", 20., t.muted))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.picker_open = !this.picker_open;
-                    cx.notify();
-                })),
-        );
-        if self.picker_open {
-            let mut menu = div()
-                .absolute()
-                .top(px(66.))
-                .right_0()
-                .w(px(240.))
-                .p(px(6.))
-                .border_2()
-                .border_color(t.outline)
-                .bg(t.surface)
-                .flex()
-                .flex_col();
-            for tag in &self.installed {
-                let selected = self.selected() == Some(tag);
-                let tag = tag.clone();
-                menu = menu.child(
-                    div()
-                        .id(SharedString::from(format!("pick-{tag}")))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .h(px(32.))
-                        .px(px(10.))
-                        .rounded(px(theme::RADIUS))
-                        .font_family(theme::MONO)
-                        .text_size(px(theme::CAPTION.px))
-                        .text_color(t.ink)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(t.plate_soft))
-                        .child(tag.clone())
-                        .when(selected, |d| {
-                            d.child(div().size(px(6.)).rounded_full().bg(t.accent))
-                        })
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.settings.selected = Some(tag.clone());
-                            this.settings.save();
-                            this.picker_open = false;
-                            cx.notify();
-                        })),
-                );
-            }
-            menu = menu.child(div().my(px(6.)).h(px(1.)).bg(t.rule)).child(
-                div()
-                    .id("manage")
-                    .flex()
-                    .items_center()
-                    .h(px(32.))
-                    .px(px(10.))
-                    .rounded(px(theme::RADIUS))
-                    .text_size(px(theme::LABEL.px))
-                    .text_color(t.muted)
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(t.plate_soft).text_color(t.ink))
-                    .child("Manage versions")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.go(Page::Versions);
-                        this.picker_open = false;
-                        cx.notify();
-                    })),
-            );
-            wrap = wrap.child(gpui::deferred(menu).with_priority(1));
-        }
-        wrap
-    }
-
     fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
+        if !self.home_ui.loaded {
+            self.refresh_home_instance();
+        }
         let t = self.theme;
-        let Some(tag) = self.selected().cloned() else {
+        let Some(tag) = self.home_build().cloned() else {
             // No hero without a version: the page starts below the top bar like the others.
             return div()
                 .flex()
@@ -1883,6 +1783,12 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
+                .child(
+                    div()
+                        .flex()
+                        .justify_center()
+                        .child(self.home_selector(browser_controls::Popup::HomeInstances, cx)),
+                )
                 .child(centered("No version installed yet.", &t).child(
                     button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -1898,7 +1804,11 @@ impl Launcher {
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
-        let play_label = if running { "Running" } else { "Play" };
+        let play_label = match (running, self.home_needs_port()) {
+            (true, _) => "Running",
+            (_, true) => "Set up instance",
+            _ => "Play",
+        };
         let mut play = button("play", play_label, Kind::Primary, &t)
             .min_w(px(200.))
             .h(px(60.))
@@ -1916,13 +1826,15 @@ impl Launcher {
             play = disabled(play);
         } else {
             play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.picker_open = false;
+                this.mods.ui.popup = None;
                 this.play();
                 cx.notify();
             }));
         }
         let actions = div()
             .flex()
+            .flex_wrap()
+            .gap(px(12.))
             .items_center()
             .justify_between()
             .child(
@@ -1937,8 +1849,10 @@ impl Launcher {
                 div()
                     .flex()
                     .items_center()
+                    .flex_wrap()
                     .gap(px(8.))
-                    .child(self.picker(cx))
+                    .child(self.home_selector(browser_controls::Popup::HomeInstances, cx))
+                    .child(self.home_selector(browser_controls::Popup::HomeBuild, cx))
                     .child(play),
             );
 
@@ -1961,7 +1875,9 @@ impl Launcher {
             prepare = disabled(prepare);
         } else {
             prepare = prepare.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.prepare();
+                if let Some(tag) = this.home_build().cloned() {
+                    this.prepare_version(tag);
+                }
                 cx.notify();
             }));
         }
