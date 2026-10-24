@@ -4,8 +4,6 @@
 //! game events and block changes) through its own sculk code on a fresh
 //! headless world, ticking in `ServerLevel.tick`'s order, and prints what
 //! changed after every tick in the format of `VanillaSculkOracle`.
-//! Keep this exact-tick rule oracle direct; LAN sculk_input separately
-//! checks a real player's movement reaching the authoritative sensor.
 use super::{Game, dispense_fixture};
 use horizon_client::{
     Result,
