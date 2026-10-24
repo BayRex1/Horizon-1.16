@@ -69,9 +69,9 @@ impl Launcher {
         })
     }
 
-    pub(super) fn home_selector(&self, popup: Popup, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(super) fn home_selector(&mut self, popup: Popup, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
-        let (caption, label, icon) = match popup {
+        let (caption, label, _icon) = match popup {
             Popup::HomeInstances => ("INSTANCE", self.home_instance_name(), "package"),
             Popup::HomeBuild => (
                 "VERSION",
@@ -82,6 +82,7 @@ impl Launcher {
             ),
             _ => unreachable!("Home selectors only choose an instance or build"),
         };
+        let instance_icon = self.instance_art(&self.home_ui.id.clone(), 34.);
         let trigger = keyboard(div().id(SharedString::from(format!("home-{caption}"))), &t)
             .relative()
             .flex()
@@ -96,7 +97,7 @@ impl Launcher {
             .cursor_pointer()
             .hover(move |style| style.bg(t.raised))
             .when(popup == Popup::HomeInstances, |button| {
-                button.child(blocks::icon(icon, 24., t.accent))
+                button.child(instance_icon)
             })
             .child(
                 div()
@@ -131,7 +132,7 @@ impl Launcher {
             .map_or_else(|| "Horizon".into(), |target| target.name)
     }
 
-    pub(super) fn home_menu(&self, popup: Popup, height: f32, cx: &mut Context<Self>) -> Div {
+    pub(super) fn home_menu(&mut self, popup: Popup, height: f32, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let mut menu = div()
             .id("home-menu-body")
@@ -176,15 +177,7 @@ impl Launcher {
                         .justify_start()
                         .gap(px(10.))
                         .when(self.home_ui.id == id, |button| button.bg(t.raised))
-                        .child(blocks::icon(
-                            if id == InstanceId::Horizon {
-                                "home"
-                            } else {
-                                "package"
-                            },
-                            24.,
-                            t.accent,
-                        ))
+                        .child(self.instance_art(&id, 38.))
                         .child(
                             div()
                                 .min_w_0()

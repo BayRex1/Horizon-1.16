@@ -16,6 +16,7 @@ pub(super) enum Origin {
 #[derive(Clone)]
 pub(super) struct ContentItem {
     key: String,
+    icon: horizon_launcher::content_icons::Icon,
     title: String,
     detail: String,
     version: String,
@@ -41,6 +42,10 @@ impl Launcher {
                 };
                 ContentItem {
                     key: format!("{}:{}", entry.source.label(), entry.project),
+                    icon: horizon_launcher::content_icons::Icon::Project(
+                        entry.source,
+                        entry.project.clone(),
+                    ),
                     title: entry.title.clone(),
                     detail,
                     version: entry.number.clone(),
@@ -72,6 +77,7 @@ impl Launcher {
                     .unwrap_or_else(|| "Resource pack · Local file".into());
                 items.push(ContentItem {
                     key: format!("local:{name}"),
+                    icon: horizon_launcher::content_icons::Icon::Archive(path.clone()),
                     title: path
                         .file_stem()
                         .unwrap_or_default()
@@ -97,6 +103,10 @@ impl Launcher {
                 let available = pack.mods.contains(&path);
                 items.push(ContentItem {
                     key: format!("ported:{}", row.key),
+                    icon: horizon_launcher::content_icons::Icon::ImportedItem {
+                        work: pack.work.clone(),
+                        key: row.key.clone(),
+                    },
                     title: if row.name.is_empty() {
                         row.key.clone()
                     } else {
@@ -138,11 +148,10 @@ impl Launcher {
         }
     }
 
-    pub(super) fn instance_content(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn instance_content(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut items = self
-            .instance
-            .content
+        let snapshot = self.instance.content.clone();
+        let mut items = snapshot
             .iter()
             .filter(|item| {
                 self.instance.kind.is_none_or(|kind| item.kind == kind)
@@ -302,8 +311,9 @@ impl Launcher {
             )
     }
 
-    fn instance_content_row(&self, item: &ContentItem, cx: &mut Context<Self>) -> Div {
+    fn instance_content_row(&mut self, item: &ContentItem, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        let icon = self.content_art_slot(item.icon.clone(), &item.title, 38.);
         let key = item.key.clone();
         let selected = self.instance.selected.contains(&key);
         let checkbox = keyboard(div().id(SharedString::from(format!("select-{key}"))), &t)
@@ -330,7 +340,7 @@ impl Launcher {
             .border_b_1()
             .border_color(t.bevel)
             .child(checkbox)
-            .child(blocks::slot(None, &item.title, 38., &t))
+            .child(icon)
             .child(
                 div()
                     .flex()

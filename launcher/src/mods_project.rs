@@ -60,9 +60,6 @@ pub(super) struct Browse {
     tags: HashMap<(SourceId, PackKind), Tags>,
     tags_asked: HashSet<(SourceId, PackKind)>,
     pub(super) tag_errors: HashMap<(SourceId, PackKind), String>,
-    /// Images on disk, by URL and size; `None` while they load or when they failed.
-    images: HashMap<(String, u32), Option<PathBuf>>,
-    image_queue: Option<std::sync::mpsc::Sender<(String, u32)>>,
 }
 
 /// What the background sends this module.
@@ -74,12 +71,8 @@ pub(super) enum Loaded {
         String,
         horizon_port_pack::check::Verdict,
     ),
-    Image((String, u32), Option<PathBuf>),
     Tags((SourceId, PackKind), Result<Tags, String>),
 }
-
-/// Images fetched at once.
-const IMAGE_WORKERS: usize = 4;
 
 impl Launcher {
     pub(super) fn mods_loaded(&mut self, loaded: Loaded) {
@@ -107,9 +100,6 @@ impl Launcher {
                     o.checked_versions.insert(version, verdict);
                     o.apply_checks();
                 }
-            }
-            Loaded::Image(key, path) => {
-                b.images.insert(key, path);
             }
             Loaded::Tags(key, Ok(tags)) => {
                 b.tag_errors.remove(&key);
@@ -164,47 +154,8 @@ impl Launcher {
         });
     }
 
-    /// The image of `url` at `size` when it is on disk; else asks for it once.
     fn mods_image(&mut self, url: &str, size: u32) -> Option<PathBuf> {
-        let key = (url.to_owned(), size);
-        if let Some(state) = self.mods.browse.images.get(&key) {
-            return state.clone();
-        }
-        let home = backend::game_home();
-        if let Some(p) = images::cached(&home, url, size) {
-            self.mods.browse.images.insert(key, Some(p.clone()));
-            return Some(p);
-        }
-        self.mods.browse.images.insert(key.clone(), None);
-        if images::refuse(url).is_some() {
-            return None;
-        }
-        let b = &mut self.mods.browse;
-        let queue = b.image_queue.get_or_insert_with(|| {
-            let (send, receive) = std::sync::mpsc::channel::<(String, u32)>();
-            let receive = std::sync::Arc::new(std::sync::Mutex::new(receive));
-            for _ in 0..IMAGE_WORKERS {
-                let (receive, tx, home) = (receive.clone(), self.mods.tx.clone(), home.clone());
-                std::thread::spawn(move || loop {
-                    let Ok(next) = receive.lock().map(|r| r.recv()) else {
-                        break;
-                    };
-                    let Ok((url, size)) = next else {
-                        break;
-                    };
-                    let path = images::fetch(&home, &url, size).ok();
-                    if tx
-                        .send(Event::Loaded(Loaded::Image((url, size), path)))
-                        .is_err()
-                    {
-                        break;
-                    }
-                });
-            }
-            send
-        });
-        let _ = queue.send(key);
-        None
+        self.remote_art(url, size)
     }
 
     /// A project's icon, `side` pixels: its image, or its first letter on a plate until then.
@@ -232,10 +183,10 @@ impl Launcher {
         self.mods.browse.tags.get(&key)
     }
 
-    /// Vanilla's mark, drawn from the player's prepared game files when there are some.
-    pub(super) fn vanilla_icon(&self) -> Option<PathBuf> {
-        let tag = self.selected().filter(|tag| backend::is_prepared(tag))?;
-        images::grass_block(&backend::game_home(), &backend::resources(tag))
+    pub(super) fn retry_mods_tags(&mut self) {
+        let key = (self.mods.source, self.mods.kind);
+        self.mods.browse.tags_asked.remove(&key);
+        self.mods.browse.tag_errors.remove(&key);
     }
 
     /// The open project's page.
@@ -523,13 +474,5 @@ impl Opened {
                 row.verdict = Some(*verdict);
             }
         }
-    }
-}
-
-impl Launcher {
-    pub(super) fn retry_mods_tags(&mut self) {
-        let key = (self.mods.source, self.mods.kind);
-        self.mods.browse.tags_asked.remove(&key);
-        self.mods.browse.tag_errors.remove(&key);
     }
 }

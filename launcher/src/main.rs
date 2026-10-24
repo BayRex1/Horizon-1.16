@@ -11,6 +11,7 @@ mod cli;
 mod cli_tools;
 mod collection;
 mod console;
+mod content_art;
 mod content_cards;
 mod content_checks;
 mod cull;
@@ -145,6 +146,7 @@ struct Launcher {
     instance_creation: instance_creation::CreateUi,
     local_instances: Vec<instances::LocalInstance>,
     home_ui: home_instances::HomeUi,
+    content_art: content_art::ContentArt,
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
@@ -290,6 +292,7 @@ impl Launcher {
             instance_creation: instance_creation::CreateUi::new(cx),
             local_instances: vec![],
             home_ui: Default::default(),
+            content_art: Default::default(),
             switches: 0,
             content_scroll: Scrollbar::default(),
             long_list: cull::Cull::default(),
@@ -479,7 +482,7 @@ impl Launcher {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let mut changed = false;
+        let mut changed = self.content_art.drain();
         self.perf.tick();
         match self.bench.as_mut().map(|b| b.tick(&self.perf)) {
             Some(perf::Step::Go(page)) => {
@@ -1565,20 +1568,12 @@ impl Launcher {
         // Horizon itself, with a grass block from the player's own prepared files.
         let tag = self.selected().cloned();
         let prepared = tag.as_deref().is_some_and(backend::is_prepared);
-        let grass = self.vanilla_icon();
+        let grass = self.instance_art(&InstanceId::Horizon, 44.);
         let on_play = self.page == Page::Play
             || (self.page == Page::Instance && self.instance.id == InstanceId::Horizon);
         list = list.child(
             blocks::side_item("side-horizon".into(), on_play, &t)
-                .child(match grass {
-                    Some(g) => div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(44.))
-                        .child(gpui::img(g).size(px(40.))),
-                    None => blocks::slot(None, "Horizon", 44., &t),
-                })
+                .child(grass)
                 .child(dot(if prepared { t.success } else { t.warn }))
                 .child(
                     div()
@@ -1614,9 +1609,10 @@ impl Launcher {
         {
             let id = target.id.clone();
             let open = on_packs && self.instance.id == id;
+            let icon = self.instance_art(&id, 44.);
             list = list.child(
                 blocks::side_item(format!("side-instance-{}", id.key()).into(), open, &t)
-                    .child(blocks::slot(None, &target.name, 44., &t))
+                    .child(icon)
                     .child(
                         div()
                             .flex()

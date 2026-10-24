@@ -348,8 +348,9 @@ impl Launcher {
             )
     }
 
-    fn instance_header(&self, cx: &mut Context<Self>) -> Div {
+    fn instance_header(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        let icon = self.instance_art(&self.instance.id.clone(), 60.);
         let tag = self.instance_build();
         let prepared = tag.as_deref().is_some_and(backend::is_prepared);
         let running =
@@ -428,7 +429,7 @@ impl Launcher {
                     .gap(px(14.))
                     .flex_1()
                     .min_w(px(230.))
-                    .child(blocks::slot(None, &self.instance.title, 60., &t))
+                    .child(icon)
                     .child(
                         div()
                             .flex()

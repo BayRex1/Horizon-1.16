@@ -38,6 +38,7 @@ impl Launcher {
     /// A finished step: the pack's new state, opened.
     pub(super) fn pack_done(&mut self, result: Result<Box<Imported>, String>) {
         self.pack_busy = false;
+        self.content_art.retry_missing();
         match result {
             Ok(pack) => {
                 self.mods.report_list.reset();
@@ -155,8 +156,13 @@ impl Launcher {
         if let Some(error) = &self.pack_error {
             page = page.child(notice(error.clone(), &t));
         }
-        for pack in &self.packs {
-            let slug = pack.slug.clone();
+        let packs = self
+            .packs
+            .iter()
+            .map(|pack| (pack.slug.clone(), pack.title().to_owned(), pack.summary()))
+            .collect::<Vec<_>>();
+        for (slug, title, summary) in packs {
+            let icon = self.instance_art(&InstanceId::Imported(slug.clone()), 44.);
             let open = button(
                 format!("open-pack-{slug}"),
                 "Open instance",
@@ -167,13 +173,18 @@ impl Launcher {
                 this.open_instance(InstanceId::Imported(slug.clone()));
                 cx.notify();
             }));
-            page = page.child(index_row(
-                0,
-                pack.title().to_owned(),
-                Some(div().child(pack.summary()).into_any_element()),
-                Some(open.into_any_element()),
-                &t,
-            ));
+            page = page.child(
+                div().flex().items_center().gap(px(12.)).child(icon).child(
+                    index_row(
+                        0,
+                        title,
+                        Some(div().child(summary).into_any_element()),
+                        Some(open.into_any_element()),
+                        &t,
+                    )
+                    .flex_1(),
+                ),
+            );
         }
         if !self.registry_packs.is_empty() {
             page = page.child(self.registry_pack_rows(cx));

@@ -438,6 +438,10 @@ impl Launcher {
                     modpack = p.kind == PackKind::Modpack;
                     if modpack && p.source == SourceId::Horizon {
                         let pack = horizon::pack::install(&p.id, &progress)?;
+                        horizon_launcher::content_icons::remember_project_icon(
+                            &pack.work,
+                            p.icon.as_deref(),
+                        )?;
                         return Ok(format!(
                             "Installed {} {} as its own profile with {}, each checked. Play it \
                              from the list above.",
@@ -453,6 +457,10 @@ impl Launcher {
                         })?;
                         let log = |line: String| progress(&line, 1.);
                         let pack = modpacks::import_and_port(&file, resources.as_deref(), &log)?;
+                        horizon_launcher::content_icons::remember_project_icon(
+                            &pack.work,
+                            p.icon.as_deref(),
+                        )?;
                         return Ok(format!(
                             "{} Play it from the list above.",
                             modpacks::outcome(&pack)
