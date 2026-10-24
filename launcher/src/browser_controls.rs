@@ -14,6 +14,7 @@ pub(super) enum Popup {
     InstanceBuild,
     HomeInstances,
     HomeBuild,
+    BrowserView,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -25,6 +26,7 @@ pub(super) enum LibraryView {
 
 pub(super) struct BrowserUi {
     pub(super) view: LibraryView,
+    pub(super) paging: horizon_launcher::pagination::Pagination,
     pub(super) popup: Option<Popup>,
     draft: Filters,
     expanded_filter: Option<FilterKind>,
@@ -35,6 +37,8 @@ pub(super) struct BrowserUi {
     sort_focus: FocusHandle,
     filter_focus: FocusHandle,
     more_focus: FocusHandle,
+    view_focus: FocusHandle,
+    view_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     source_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     sort_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     filter_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
@@ -46,6 +50,7 @@ impl BrowserUi {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             view: LibraryView::Browse,
+            paging: Default::default(),
             popup: None,
             draft: Filters::default(),
             expanded_filter: None,
@@ -56,6 +61,8 @@ impl BrowserUi {
             sort_focus: cx.focus_handle(),
             filter_focus: cx.focus_handle(),
             more_focus: cx.focus_handle(),
+            view_focus: cx.focus_handle(),
+            view_bounds: Default::default(),
             source_bounds: Default::default(),
             sort_bounds: Default::default(),
             filter_bounds: Default::default(),
@@ -116,6 +123,10 @@ impl Launcher {
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
                             this.mods.ui.view = view;
+                            this.mods.ui.paging.index = 0;
+                            if view == LibraryView::Browse {
+                                this.mods_search(0);
+                            }
                             this.mods.ui.popup = None;
                             this.mods.reset_lists();
                             cx.notify();
@@ -156,6 +167,7 @@ impl Launcher {
         let ui = &self.mods.ui;
         let (focus, bounds) = match popup {
             Popup::Source => (&ui.source_focus, ui.source_bounds.clone()),
+            Popup::BrowserView => (&ui.view_focus, ui.view_bounds.clone()),
             Popup::Sort | Popup::InstanceSort => (&ui.sort_focus, ui.sort_bounds.clone()),
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 (&ui.filter_focus, ui.filter_bounds.clone())
@@ -219,6 +231,7 @@ impl Launcher {
                         .child(self.browser_menu_button(Popup::Filters, filters, cx))
                 },
             )
+            .child(self.content_view_button(content_paging::Collection::Browser, cx))
     }
 
     pub(super) fn close_browser_popup(&mut self, window: &mut Window) -> bool {
@@ -227,6 +240,7 @@ impl Launcher {
         };
         window.focus(match popup {
             Popup::Source => &self.mods.ui.source_focus,
+            Popup::BrowserView => &self.mods.ui.view_focus,
             Popup::Sort | Popup::InstanceSort => &self.mods.ui.sort_focus,
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 &self.mods.ui.filter_focus
@@ -247,6 +261,7 @@ impl Launcher {
         let popup = self.mods.ui.popup?;
         let anchor = match popup {
             Popup::Source => self.mods.ui.source_bounds.clone(),
+            Popup::BrowserView => self.mods.ui.view_bounds.clone(),
             Popup::Sort | Popup::InstanceSort => self.mods.ui.sort_bounds.clone(),
             Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild | Popup::HomeBuild => {
                 self.mods.ui.filter_bounds.clone()
@@ -268,7 +283,8 @@ impl Launcher {
         .min(f32::from(viewport.width) - margin * 2.);
         let below = (f32::from(root.bottom() - bounds.bottom()) - gap - margin).max(0.);
         let above = (f32::from(bounds.top() - root.top()) - gap - margin).max(0.);
-        let desired_height: f32 = match popup {
+        let desired_height = match popup {
+            Popup::BrowserView => 190.,
             Popup::Source => 132.,
             Popup::Sort => 220.,
             Popup::InstanceSort | Popup::InstanceMore => 86.,
@@ -297,6 +313,7 @@ impl Launcher {
         );
         let body = match popup {
             Popup::Source => self.browser_source_menu(cx),
+            Popup::BrowserView => self.content_view_menu(popup, cx),
             Popup::Sort => self.browser_sort_menu(cx),
             Popup::Filters => self.browser_filter_menu(height, cx),
             Popup::HomeInstances | Popup::HomeBuild => self.home_menu(popup, height, cx),

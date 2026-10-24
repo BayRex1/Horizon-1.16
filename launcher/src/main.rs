@@ -14,6 +14,7 @@ mod console;
 mod content_art;
 mod content_cards;
 mod content_checks;
+mod content_paging;
 mod cull;
 mod game_tools;
 mod home_instances;

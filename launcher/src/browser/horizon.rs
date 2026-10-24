@@ -200,15 +200,29 @@ fn matches(p: &index::Project, text: &str) -> bool {
 
 /// The projects of the query's kind whose words match, for this game unless `everything`.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
-    index
+    search_page(index, query).projects
+}
+
+fn search_page(index: &Index, query: &Query) -> super::SearchPage {
+    let matches: Vec<_> = index
         .projects
         .iter()
-        .filter(|p| kind_of(&p.kind) == Some(query.kind) && matches(p, &query.text))
-        .filter(|p| query.everything || p.versions.iter().any(|v| v.game == GAME))
-        .filter_map(project_of)
-        .skip(query.offset)
-        .take(query.limit)
-        .collect()
+        .filter(|project| {
+            kind_of(&project.kind) == Some(query.kind) && matches(project, &query.text)
+        })
+        .filter(|project| {
+            query.everything || project.versions.iter().any(|version| version.game == GAME)
+        })
+        .collect();
+    super::SearchPage {
+        total: Some(matches.len()),
+        projects: matches
+            .into_iter()
+            .skip(query.offset)
+            .take(query.limit)
+            .filter_map(project_of)
+            .collect(),
+    }
 }
 
 /// The registry as a browser source.
@@ -221,6 +235,10 @@ impl Source for Registry {
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
         Ok(search(&*index()?, query))
+    }
+
+    fn search_page(&self, query: &Query) -> Result<super::SearchPage, String> {
+        Ok(search_page(&*index()?, query))
     }
 
     fn project(&self, id: &str) -> Result<Project, String> {

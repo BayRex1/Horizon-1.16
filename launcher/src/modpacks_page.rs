@@ -156,122 +156,158 @@ impl Launcher {
         if let Some(error) = &self.pack_error {
             page = page.child(notice(error.clone(), &t));
         }
-        let packs = self
-            .packs
-            .iter()
-            .map(|pack| (pack.slug.clone(), pack.title().to_owned(), pack.summary()))
-            .collect::<Vec<_>>();
-        for (slug, title, summary) in packs {
-            let icon = self.instance_art(&InstanceId::Imported(slug.clone()), 44.);
-            let open = button(
-                format!("open-pack-{slug}"),
-                "Open instance",
-                Kind::Secondary,
-                &t,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.open_instance(InstanceId::Imported(slug.clone()));
-                cx.notify();
-            }));
-            page = page.child(
-                div().flex().items_center().gap(px(12.)).child(icon).child(
-                    index_row(
-                        0,
-                        title,
-                        Some(div().child(summary).into_any_element()),
-                        Some(open.into_any_element()),
-                        &t,
+        let targets: Vec<_> = self
+            .instance_targets()
+            .into_iter()
+            .filter(|target| matches!(target.id, InstanceId::Imported(_) | InstanceId::Registry(_)))
+            .collect();
+        let total = targets.len();
+        self.mods.ui.paging.clamp(total);
+        let range = self.mods.ui.paging.range(total);
+        let start = range.start;
+        let list = self.mods.report_list.clone();
+        let scroll = self.content_scroll.handle.clone();
+        page = page.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(self.content_view_button(content_paging::Collection::Browser, cx)),
+        );
+        page = page.child(list.column(
+            &scroll,
+            range.len(),
+            8.,
+            |_| false,
+            |index| {
+                let target = &targets[start + index];
+                let instance = target.id.clone();
+                let key = instance.key();
+                let name = target.name.clone();
+                let summary = target.summary.clone();
+                let icon = self.instance_art(&instance, 56.);
+                let remove = self.registry_pack_remove(&instance, cx);
+                blocks::panel(&t)
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .p(px(16.))
+                    .mb(px(8.))
+                    .child(icon)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                blocks::pixel(20., FontWeight::MEDIUM)
+                                    .text_color(t.ink)
+                                    .truncate()
+                                    .child(name),
+                            )
+                            .child(text(theme::CAPTION).text_color(t.muted).child(summary)),
                     )
-                    .flex_1(),
-                ),
-            );
-        }
-        if !self.registry_packs.is_empty() {
-            page = page.child(self.registry_pack_rows(cx));
-        }
-        if self.packs.is_empty() && !self.registry_packs.is_empty() {
-            return page;
-        }
-        if self.packs.is_empty() {
+                    .child(
+                        button(
+                            format!("open-pack-{key}"),
+                            "Open instance",
+                            Kind::Secondary,
+                            &t,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                this.open_instance(instance.clone());
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .children(remove)
+            },
+        ));
+        page = page.child(self.content_pager(
+            content_paging::Collection::Browser,
+            Some(total),
+            range.len(),
+            range.end < total,
+            false,
+            cx,
+        ));
+        if total == 0 {
             page = page.child(centered(
-                "No modpack imported yet. Import one here or use Browse.",
+                "No modpacks installed. Browse Horizon or Modrinth, or import a pack.",
                 &t,
             ));
         }
         page
     }
 
-    /// The modpacks installed from Horizon's registry: each plays its own profile.
-    fn registry_pack_rows(&self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let mut list = div().flex().flex_col();
-        for (i, p) in self.registry_packs.iter().enumerate() {
-            let remove = p.work.clone();
-            let id = p.id.clone();
-            let open_id = id.clone();
-            let key = format!("horizon:{id}");
-            let confirming = self.confirm_remove.as_deref() == Some(key.as_str());
-            let right = div()
-                .flex()
-                .gap(px(8.))
-                .child(
-                    button(format!("play-pack-{id}"), "Play", Kind::Primary, &t).on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.open_instance(InstanceId::Registry(open_id.clone()));
-                            cx.notify();
-                        }),
-                    ),
-                )
-                .child(
-                    button(
-                        format!("remove-pack-{id}"),
-                        if confirming {
-                            "Remove for good"
-                        } else {
-                            "Remove"
-                        },
-                        if confirming {
-                            Kind::Secondary
-                        } else {
-                            Kind::Ghost
-                        },
-                        &t,
-                    )
-                    .when(confirming, |b| b.text_color(t.danger))
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            if this.confirm_remove.as_ref() == Some(&key) {
-                                match horizon_pack::remove(&remove) {
-                                    Ok(()) => this.packs_loaded = None,
-                                    Err(e) => this.pack_error = Some(e),
-                                }
-                                this.confirm_remove = None;
-                            } else {
-                                this.confirm_remove = Some(key.clone());
-                            }
-                            cx.notify();
-                        },
-                    )),
-                );
-            let detail = format!(
-                "{} from Horizon's registry, its own profile: {}",
-                p.version,
-                p.mods.join(", ")
+    fn registry_pack_remove(
+        &self,
+        instance: &InstanceId,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
+        let id = instance.registry_id()?.clone();
+        let key = format!("horizon:{id}");
+        let confirming = self.confirm_remove.as_ref() == Some(&key);
+        Some(
+            button(
+                format!("remove-pack-{id}"),
+                if confirming {
+                    "Remove pack + worlds?"
+                } else {
+                    "Remove"
+                },
+                Kind::Ghost,
+                &self.theme,
+            )
+            .when(confirming, |button| button.text_color(self.theme.danger))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if this.confirm_remove.as_ref() == Some(&key) {
+                    this.remove_registry_pack(&id);
+                    this.confirm_remove = None;
+                } else {
+                    this.confirm_remove = Some(key.clone());
+                }
+                cx.notify();
+            })),
+        )
+    }
+
+    fn remove_registry_pack(&mut self, id: &str) {
+        let Some(pack) = self.registry_packs.iter().find(|pack| pack.id == id) else {
+            return;
+        };
+        let home = horizon_pack::home(&pack.work);
+        if self.mods.busy.is_some()
+            || self.starting_client.is_some()
+            || self.client_home.as_ref() == Some(&home)
+        {
+            self.pack_error = Some(
+                "Stop this instance and wait for content operations before removing it.".into(),
             );
-            list = list.child(index_row(
-                i + 1,
-                p.name.clone(),
-                Some(
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .child(detail)
-                        .into_any_element(),
-                ),
-                Some(right.into_any_element()),
-                &t,
-            ));
+            return;
         }
-        list
+        match horizon_pack::remove(&pack.work) {
+            Err(error) => self.pack_error = Some(error),
+            Ok(()) => {
+                self.packs_loaded = None;
+                if self.mods.home == home {
+                    self.set_mods_target(backend::game_home(), "Horizon".into());
+                }
+                let instance = InstanceId::Registry(id.into());
+                self.instance.names.remove(&instance);
+                if self.home_ui.id == instance {
+                    self.home_ui.id = InstanceId::Horizon;
+                    self.home_ui.loaded = false;
+                }
+                if self.instance.id == instance {
+                    self.instance.id = InstanceId::Horizon;
+                    self.instance.loaded = false;
+                }
+            }
+        }
     }
 
     pub(super) fn pack_log_plate(&self, t: &Theme) -> Div {

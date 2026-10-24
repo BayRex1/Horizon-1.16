@@ -19,11 +19,10 @@ const KINDS: [(PackKind, &str, &str); 3] = [
     (PackKind::Modpack, "Modpacks", "archive"),
     (PackKind::ResourcePack, "Resource packs", "image"),
 ];
-const PAGE: usize = 20;
 
 pub(super) enum Event {
     /// A search's answer, for the search it was (stale answers are dropped) at that offset.
-    Found(u64, usize, Result<Vec<Project>, String>),
+    Found(u64, usize, Result<browser::SearchPage, String>),
     Progress(String, f32),
     Done(Result<String, String>, bool),
     Updates(std::path::PathBuf, HashMap<(SourceId, String), String>),
@@ -65,6 +64,7 @@ pub(super) struct Mods {
     installed_list: cull::Cull,
     pub(super) report_list: cull::Cull,
     more: bool,
+    total: Option<usize>,
     error: Option<String>,
     pub(super) installed: Vec<installed::Entry>,
     loaded: bool,
@@ -121,6 +121,7 @@ impl Mods {
             installed_list: cull::Cull::default(),
             report_list: cull::Cull::default(),
             more: false,
+            total: None,
             error: None,
             installed: Vec::new(),
             loaded: false,
@@ -193,6 +194,7 @@ impl Launcher {
         let mut instance_changed = false;
         let mut to_check = Vec::new();
         let mut loaded = Vec::new();
+        let mut retry_page = None;
         while let Ok(event) = self.mods.rx.try_recv() {
             changed = true;
             let m = &mut self.mods;
@@ -202,11 +204,20 @@ impl Launcher {
                     m.searched = true;
                     match result {
                         Ok(found) => {
-                            m.more = found.len() == PAGE;
-                            m.results.truncate(offset);
-                            m.results.extend(found.iter().cloned());
+                            m.total = found.total;
+                            if let Some(total) = found.total {
+                                m.ui.paging.clamp(total);
+                                if total > 0 && m.ui.paging.offset() != offset {
+                                    retry_page = Some(m.ui.paging.offset());
+                                }
+                            }
+                            m.more = found.total.map_or(
+                                found.projects.len() == m.ui.paging.size.count(),
+                                |total| offset + found.projects.len() < total,
+                            );
+                            m.results = found.projects;
                             m.error = None;
-                            to_check.extend(found);
+                            to_check.extend(m.results.iter().cloned());
                         }
                         Err(e) => m.error = Some(e),
                     }
@@ -279,6 +290,9 @@ impl Launcher {
                 }
             }
         }
+        if let Some(offset) = retry_page {
+            self.mods_search(offset);
+        }
         self.mods_check(to_check);
         for l in loaded {
             self.mods_loaded(l);
@@ -303,16 +317,17 @@ impl Launcher {
         m.checks
             .retain(|_, state| !matches!(state, Checking::Running));
         m.searching = true;
-        if offset == 0 {
-            m.results.clear();
-            m.more = false;
-            m.results_list.reset();
-            m.installed_list.reset();
-        }
+        m.ui.paging.index = offset / m.ui.paging.size.count();
+        m.results.clear();
+        m.more = false;
+        m.total = None;
+        m.error = None;
+        m.results_list.reset();
+        m.installed_list.reset();
         let query = Query {
             everything: m.everything,
             offset,
-            limit: PAGE,
+            limit: m.ui.paging.size.count(),
             filters: m.browse.filters.clone(),
             ..Query::new(&m.text, m.kind)
         };
@@ -320,9 +335,10 @@ impl Launcher {
         std::thread::spawn(move || {
             let result = browser::source(source)
                 .ok_or_else(|| format!("{} isn't set up.", source.label()))
-                .and_then(|s| s.search(&query));
+                .and_then(|s| s.search_page(&query));
             let about: HashMap<String, Vec<String>> = match (&result, source) {
                 (Ok(found), SourceId::Horizon) => found
+                    .projects
                     .iter()
                     .map(|p| (p.id.clone(), horizon::trust_and_capabilities(&p.id)))
                     .collect(),
@@ -561,7 +577,12 @@ impl Launcher {
                             this.mods.text.push_str(&line);
                         }
                     }
-                    Key::Edited => {}
+                    Key::Edited => {
+                        if this.mods.ui.view == browser_controls::LibraryView::Installed {
+                            this.mods.ui.paging.index = 0;
+                            this.mods.reset_lists();
+                        }
+                    }
                     Key::Pass => return,
                 }
                 if let Some((at, _)) = this.mods.text.char_indices().nth(100) {
@@ -615,7 +636,14 @@ impl Launcher {
             if self.mods.kind == PackKind::Modpack {
                 body = body.child(self.imported_packs(cx));
             } else {
-                body = body.child(self.mods_field(cx));
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(self.mods_field(cx))
+                        .child(self.content_view_button(content_paging::Collection::Browser, cx)),
+                );
                 body = match self.mods_installed_list(cx) {
                     Some(list) => body.child(list),
                     None => body.child(centered(
@@ -667,21 +695,37 @@ impl Launcher {
         out
     }
 
-    fn mods_installed_list(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn mods_installed_list(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let kind = self.mods.kind;
-        let entries: Vec<&installed::Entry> = self
+        let query = self.mods.text.to_lowercase();
+        let all_entries: Vec<installed::Entry> = self
             .mods
             .installed
             .iter()
-            .filter(|e| e.kind == kind)
+            .filter(|e| e.kind == kind && e.title.to_lowercase().contains(&query))
+            .cloned()
             .collect();
+        let total = all_entries.len();
+        self.mods.ui.paging.clamp(total);
+        let range = self.mods.ui.paging.range(total);
+        let entries = &all_entries[range.clone()];
         if entries.is_empty() {
             return None;
         }
         let busy = self.mods.busy.is_some();
+        let list_state = self.mods.installed_list.clone();
+        let scroll = self.content_scroll.handle.clone();
+        let retained = entries
+            .iter()
+            .position(|entry| self.mods.confirm_remove.as_ref() == Some(&entry.project));
         let row = |i: usize| {
-            let e = entries[i];
+            let e = &entries[i];
+            let icon = self.content_art_slot(
+                horizon_launcher::content_icons::Icon::Project(e.source, e.project.clone()),
+                &e.title,
+                52.,
+            );
             let key = (e.source, e.project.clone());
             let mut right = div().flex().items_center().gap(px(8.));
             if let Some(number) = self.mods.updates.get(&key) {
@@ -721,7 +765,7 @@ impl Launcher {
             .when(confirming, |b| b.text_color(t.danger))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if this.mods.confirm_remove.as_ref() == Some(&id) {
-                    let home = backend::game_home();
+                    let home = this.mods.home.clone();
                     this.mods.message = Some(
                         installed::remove(&home, &id).map(|e| format!("Removed {}.", e.title)),
                     );
@@ -786,19 +830,35 @@ impl Launcher {
                         .font_family(theme::MONO)
                         .child(format!("checked: {}", short_sum(&e.checksum))),
                 );
-            index_row(
-                i + 1,
-                e.title.clone(),
-                Some(detail.into_any_element()),
-                Some(right.into_any_element()),
-                &t,
-            )
+            blocks::panel(&t)
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .p(px(16.))
+                .mb(px(8.))
+                .child(icon)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(
+                            blocks::pixel(19., FontWeight::MEDIUM)
+                                .text_color(t.ink)
+                                .truncate()
+                                .child(e.title.clone()),
+                        )
+                        .child(text(theme::CAPTION).text_color(t.muted).child(detail)),
+                )
+                .child(right)
         };
-        let list = self.mods.installed_list.column(
-            &self.content_scroll.handle,
+        let list = list_state.column(
+            &scroll,
             entries.len(),
             8.,
-            |index| self.mods.confirm_remove.as_ref() == Some(&entries[index].project),
+            |index| retained == Some(index),
             row,
         );
         Some(
@@ -806,8 +866,15 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
-                .child(caps("Installed").text_color(t.muted))
-                .child(list),
+                .child(list)
+                .child(self.content_pager(
+                    content_paging::Collection::Browser,
+                    Some(total),
+                    range.len(),
+                    range.end < total,
+                    false,
+                    cx,
+                )),
         )
     }
 
@@ -838,20 +905,14 @@ impl Launcher {
                 },
             ));
         }
-        if self.mods.more {
-            let mut more = button("mods-more", "More", Kind::Ghost, &t);
-            if self.mods.searching {
-                more = disabled(more);
-            } else {
-                let offset = self.mods.results.len();
-                more = more.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods_search(offset);
-                    cx.notify();
-                }));
-            }
-            out = out.child(div().flex().pt(px(16.)).child(more));
-        }
-        out
+        out.child(self.content_pager(
+            content_paging::Collection::Browser,
+            self.mods.total,
+            result_count,
+            self.mods.more,
+            self.mods.searching,
+            cx,
+        ))
     }
 }
 

@@ -12,6 +12,7 @@ pub mod instance_profile;
 pub mod instances;
 pub mod modpacks;
 pub mod mojang;
+pub mod pagination;
 pub mod process;
 pub mod servers;
 pub mod signed;

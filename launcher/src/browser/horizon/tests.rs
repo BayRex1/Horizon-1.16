@@ -143,3 +143,30 @@ fn registry_versions_run_when_made_for_this_game() {
         .collect();
     assert_eq!(pick(Kind::Mod, &versions, false).unwrap().number, "0.1.0");
 }
+
+#[test]
+fn registry_pagination_reports_total_and_does_not_repeat_projects() {
+    let mut index = sample();
+    let template = index.project("coords_hud").unwrap().clone();
+    index.projects = (0..43)
+        .map(|number| {
+            let mut project = template.clone();
+            project.id = format!("mod_{number}");
+            project
+        })
+        .collect();
+    let mut query = Query::new("", Kind::Mod);
+    query.limit = 10;
+    query.offset = 20;
+    let page = search_page(&index, &query);
+    assert_eq!(page.total, Some(43));
+    assert_eq!(page.projects.len(), 10);
+    assert_eq!(page.projects.first().unwrap().id, "mod_20");
+    assert_eq!(page.projects.last().unwrap().id, "mod_29");
+    query.offset = 100;
+    let page = search_page(&index, &query);
+    assert_eq!(page.total, Some(43));
+    assert!(page.projects.is_empty());
+    query.kind = Kind::Modpack;
+    assert_eq!(search_page(&index, &query).total, Some(0));
+}
