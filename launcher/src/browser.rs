@@ -121,6 +121,21 @@ pub struct Project {
     /// The Minecraft versions its files list, and the loaders (`fabric`, `neoforge`, `minecraft`...).
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
+    pub metadata: ProjectMetadata,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProjectMetadata {
+    pub followers: u64,
+    pub updated: String,
+    pub client: bool,
+    pub server: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchPage {
+    pub projects: Vec<Project>,
+    pub total: Option<usize>,
 }
 
 impl Project {
@@ -210,6 +225,12 @@ impl Query {
 pub trait Source: Send + Sync {
     fn id(&self) -> SourceId;
     fn search(&self, query: &Query) -> Result<Vec<Project>, String>;
+    fn search_page(&self, query: &Query) -> Result<SearchPage, String> {
+        self.search(query).map(|projects| SearchPage {
+            projects,
+            total: None,
+        })
+    }
     fn project(&self, id: &str) -> Result<Project, String>;
     /// Versions, newest first.
     fn versions(&self, project: &Project) -> Result<Vec<Version>, String>;

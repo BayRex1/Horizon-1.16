@@ -143,6 +143,7 @@ pub(super) fn parse_mod(m: &Value) -> Option<Project> {
         kind,
         game_versions,
         loaders,
+        metadata: Default::default(),
     })
 }
 

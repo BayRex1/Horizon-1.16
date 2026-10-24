@@ -164,6 +164,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         kind: kind_of(&p.kind)?,
         game_versions,
         loaders: vec![LOADER.into()],
+        metadata: super::ProjectMetadata::default(),
     })
 }
 

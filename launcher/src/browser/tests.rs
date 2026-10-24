@@ -2,6 +2,32 @@ use super::*;
 use serde_json::json;
 use sha2::Digest;
 
+#[test]
+fn remote_pages_preserve_total_counts_and_card_metadata() {
+    let page = modrinth::parse_search_page(&json!({
+        "total_hits":347,
+        "hits":[{"project_id":"menu", "project_type":"mod", "slug":"mod-menu", "title":"Mod Menu",
+            "author":"Terraformers", "downloads":160_910_000, "follows":27_800,
+            "date_modified":"2026-10-22T00:00:00Z", "client_side":"required", "server_side":"unsupported",
+            "categories":["fabric","utility"], "versions":["26.3"]}]
+    }));
+    assert_eq!(page.total, Some(347));
+    assert_eq!(page.projects.len(), 1);
+    let project = &page.projects[0];
+    assert_eq!(project.metadata.followers, 27_800);
+    assert!(project.metadata.client);
+    assert!(!project.metadata.server);
+    assert_eq!(project.metadata.updated, "2026-10-22T00:00:00Z");
+    let mut query = Query::new("menu", Kind::Mod);
+    query.offset = 100;
+    query.limit = 50;
+    let url = modrinth::search_url(&query);
+    assert!(url.contains("offset=100&limit=50"));
+    assert!(modrinth::parse_search_page(&json!({"hits":[]}))
+        .total
+        .is_none());
+}
+
 fn v(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }

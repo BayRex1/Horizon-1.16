@@ -69,6 +69,21 @@ pub(super) fn search_url(query: &Query) -> String {
     url
 }
 
+pub(super) fn parse_search_page(found: &Value) -> super::SearchPage {
+    let projects = found["hits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(parse_hit)
+        .collect();
+    super::SearchPage {
+        projects,
+        total: found["total_hits"]
+            .as_u64()
+            .and_then(|total| usize::try_from(total).ok()),
+    }
+}
+
 fn strings(v: &Value) -> Vec<String> {
     v.as_array()
         .into_iter()
@@ -102,6 +117,7 @@ pub(super) fn parse_hit(hit: &Value) -> Option<Project> {
         kind,
         game_versions: strings(&hit["versions"]),
         loaders: strings(&hit["categories"]),
+        metadata: metadata(hit, "date_modified"),
     })
 }
 
@@ -126,7 +142,21 @@ pub(super) fn parse_project(p: &Value) -> Option<Project> {
         kind,
         game_versions: strings(&p["game_versions"]),
         loaders: strings(&p["loaders"]),
+        metadata: metadata(p, "updated"),
     })
+}
+
+fn metadata(project: &Value, updated_field: &str) -> super::ProjectMetadata {
+    let supported = |field: &str| matches!(project[field].as_str(), Some("required" | "optional"));
+    super::ProjectMetadata {
+        followers: project["follows"]
+            .as_u64()
+            .or_else(|| project["followers"].as_u64())
+            .unwrap_or(0),
+        updated: text(&project[updated_field]),
+        client: supported("client_side"),
+        server: supported("server_side"),
+    }
 }
 
 pub(super) fn parse_version(v: &Value) -> Option<Version> {
@@ -170,13 +200,11 @@ impl Source for Modrinth {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
-        let found = get(&search_url(query))?;
-        Ok(found["hits"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(parse_hit)
-            .collect())
+        self.search_page(query).map(|page| page.projects)
+    }
+
+    fn search_page(&self, query: &Query) -> Result<super::SearchPage, String> {
+        get(&search_url(query)).map(|found| parse_search_page(&found))
     }
 
     fn project(&self, id: &str) -> Result<Project, String> {

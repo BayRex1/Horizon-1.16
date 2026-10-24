@@ -162,7 +162,7 @@ impl Mods {
 }
 
 /// `51404735` → `51.4M`.
-fn count(n: u64) -> String {
+pub(super) fn count(n: u64) -> String {
     match n {
         0..1_000 => n.to_string(),
         1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
@@ -805,147 +805,37 @@ impl Launcher {
 
     fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let m = &self.mods;
-        if let Some(e) = &m.error {
-            return div().child(notice(e.clone(), &t));
-        }
-        if m.results.is_empty() {
-            let line = if m.searching || !m.searched {
-                "Searching…"
-            } else if m.source == SourceId::Horizon {
-                "Nothing in Horizon's registry matches yet."
-            } else if m.everything {
-                "Nothing found."
-            } else {
-                "Nothing found that runs in Horizon. Show everything lists the rest."
-            };
-            return centered(line, &t);
-        }
-        let result_count = m.results.len();
-        let rows = m.results_list.clone();
+        let result_count = self.mods.results.len();
+        let rows = self.mods.results_list.clone();
         let scroll = self.content_scroll.handle.clone();
-        let row = |i: usize| {
-            let project = self.mods.results[i].clone();
-            let icon = self.mods_icon(&project, 56.);
-            let p = &project;
-            let m = &self.mods;
-            let busy = m.busy.as_ref().map(|b| b.0.as_str());
-            let support = m.support(p);
-            let checking = p.kind == PackKind::Mod
-                && p.source != SourceId::Horizon
-                && matches!(
-                    m.checks.get(&(p.source, p.id.clone())),
-                    None | Some(Checking::Running)
-                )
-                && p.support().installable();
-            let color = match support {
-                Support::Works => t.success,
-                Support::Partial(_) => t.warn,
-                Support::No(_) => t.muted,
+        let mut out = div().flex().flex_col().gap(px(12.));
+        if let Some(error) = &self.mods.error {
+            out = out.child(notice(error.clone(), &t));
+        } else if result_count == 0 {
+            let label = if self.mods.searching || !self.mods.searched {
+                "Searching…"
+            } else {
+                "No projects match these filters."
             };
-            let mut right = div().flex().items_center().gap(px(8.)).child(blocks::badge(
-                support.label(),
-                color,
-                &t,
+            out = out.child(centered(label, &t));
+        } else {
+            out = out.child(rows.column(
+                &scroll,
+                result_count,
+                8.,
+                |_| false,
+                |index| {
+                    let project = self.mods.results[index].clone();
+                    self.content_browser_card(&project, cx)
+                },
             ));
-            let page_url = p.page.clone();
-            if !page_url.is_empty() {
-                right = right.child(
-                    button(
-                        SharedString::from(format!("mods-page-{}", p.id)),
-                        "Page",
-                        Kind::Ghost,
-                        &t,
-                    )
-                    .on_click(move |_, _, cx| cx.open_url(&page_url)),
-                );
-            }
-            if busy == Some(p.id.as_str()) {
-                right = right.child(caps("Installing").text_color(t.accent));
-            } else if m.entry(p).is_some() {
-                right = right.child(caps("Installed").text_color(t.muted));
-            } else if checking {
-                right = right.child(caps("Checking").text_color(t.muted));
-            } else if support.installable() {
-                let label = if p.kind == PackKind::Modpack {
-                    "Import"
-                } else {
-                    "Install"
-                };
-                let mut install = button(
-                    SharedString::from(format!("mods-install-{}", p.id)),
-                    label,
-                    Kind::Secondary,
-                    &t,
-                );
-                if busy.is_some() {
-                    install = disabled(install);
-                } else {
-                    let p = p.clone();
-                    install = install.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.mods_install(p.source, p.id.clone(), Some(p.clone()));
-                        cx.notify();
-                    }));
-                }
-                right = right.child(install);
-            }
-            let mut by = Vec::new();
-            if !p.author.is_empty() {
-                by.push(format!("by {}", p.author));
-            }
-            if p.source != SourceId::Horizon {
-                by.push(format!("{} downloads", count(p.downloads)));
-            }
-            by.push(format!("from {}", p.source.label()));
-            if !p.license.is_empty() {
-                by.push(p.license.clone());
-            }
-            let detail = div()
-                .flex()
-                .flex_col()
-                .child(div().truncate().child(p.summary.clone()))
-                .child(by.join(" · "))
-                .children(
-                    support
-                        .reason()
-                        .map(|r| div().text_color(t.ink_soft).child(r.to_string())),
-                )
-                .children(
-                    m.about
-                        .get(&p.id)
-                        .filter(|_| p.source == SourceId::Horizon)
-                        .map(|lines| div().text_color(t.ink_soft).child(lines.join(" · "))),
-                );
-            let open = p.clone();
-            let name = div()
-                .id(SharedString::from(format!("mods-open-{}", p.id)))
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .cursor_pointer()
-                .child(icon)
-                .child(div().hover(|s| s.underline()).child(p.title.clone()))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods_open(open.clone());
-                    cx.notify();
-                }));
-            index_row(
-                i + 1,
-                name,
-                Some(detail.into_any_element()),
-                Some(right.into_any_element()),
-                &t,
-            )
-        };
-        let list = rows.column(&scroll, result_count, 8., |_| false, row);
-        let mut out = div().flex().flex_col().child(list);
-        let m = &self.mods;
-        if m.more {
+        }
+        if self.mods.more {
             let mut more = button("mods-more", "More", Kind::Ghost, &t);
-            if m.searching {
+            if self.mods.searching {
                 more = disabled(more);
             } else {
-                let offset = m.results.len();
+                let offset = self.mods.results.len();
                 more = more.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.mods_search(offset);
                     cx.notify();

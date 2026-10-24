@@ -66,6 +66,7 @@ fn project(id: &str, kind: Kind) -> Project {
         kind,
         game_versions: vec![GAME.into()],
         loaders: vec!["minecraft".into()],
+        metadata: Default::default(),
     }
 }
 
