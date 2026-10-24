@@ -1124,12 +1124,6 @@ impl Launcher {
             }
             self.servers.open = None;
         }
-        let header = page_header(
-            "Servers",
-            "Host a world for your friends on this computer. Create one, press Start, and give them \
-             the address.",
-            &t,
-        );
         let actions = div()
             .flex()
             .items_center()
@@ -1153,12 +1147,7 @@ impl Launcher {
                     }))
                 }
             });
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .gap(px(32.))
-            .child(header)
-            .child(actions);
+        let mut page = div().flex().flex_col().gap(px(32.)).child(actions);
         if let Some(p) = self
             .servers
             .problem

@@ -7,10 +7,16 @@ use std::{collections::HashMap, path::PathBuf};
 pub(super) enum Tab {
     #[default]
     Content,
+    Worlds,
+    Files,
+    Logs,
     Settings,
 }
-const TABS: [(Tab, &str, &str); 2] = [
+const TABS: [(Tab, &str, &str); 5] = [
     (Tab::Content, "Content", "package"),
+    (Tab::Worlds, "Worlds", "globe"),
+    (Tab::Files, "Files", "folder"),
+    (Tab::Logs, "Logs", "terminal"),
     (Tab::Settings, "Settings", "sliders"),
 ];
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,6 +48,9 @@ pub(super) struct InstanceUi {
     pub(super) confirm_remove: Option<String>,
     pub(super) message: Option<String>,
     pub(super) loaded: bool,
+    files: Vec<(String, PathBuf, bool)>,
+    worlds: Vec<(String, PathBuf)>,
+    log: String,
     name_input: String,
     args_input: String,
     search_focus: FocusHandle,
@@ -68,6 +77,9 @@ impl InstanceUi {
             confirm_remove: None,
             message: None,
             loaded: false,
+            files: vec![],
+            worlds: vec![],
+            log: String::new(),
             name_input: String::new(),
             args_input: String::new(),
             search_focus: cx.focus_handle(),
@@ -192,7 +204,48 @@ impl Launcher {
         self.instance.name_input = self.instance.title.clone();
         self.instance.args_input = self.instance.preferences.arguments.clone();
         self.instance.content = self.instance_content_snapshot();
+        self.instance.files =
+            Self::instance_directory(&self.instance.home).unwrap_or_else(|error| {
+                self.instance.message = Some(error);
+                vec![]
+            });
+        self.instance.worlds = Self::instance_directory(&self.instance.home.join("saves"))
+            .unwrap_or_else(|error| {
+                self.instance.message = Some(error);
+                vec![]
+            })
+            .into_iter()
+            .filter(|(_, path, directory)| *directory && path.join("level.dat").is_file())
+            .map(|(name, path, _)| (name, path))
+            .collect();
+        self.instance.log = horizon_launcher::instance_profile::latest_log(&self.instance.home)
+            .unwrap_or_else(|error| error);
         self.instance.loaded = true;
+    }
+
+    fn instance_directory(
+        directory: &std::path::Path,
+    ) -> Result<Vec<(String, PathBuf, bool)>, String> {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(error) => return Err(format!("Could not read {}: {error}", directory.display())),
+        };
+        let mut files = vec![];
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let is_directory = entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_dir();
+            files.push((
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.path(),
+                is_directory,
+            ));
+        }
+        files.sort_by_key(|(name, _, directory)| (!directory, name.to_lowercase()));
+        Ok(files)
     }
 
     pub(super) fn instance_build(&self) -> Option<String> {
@@ -266,6 +319,9 @@ impl Launcher {
         let tabs = self.instance_tabs(cx);
         let body = match self.instance.tab {
             Tab::Content => self.instance_content(cx),
+            Tab::Worlds => self.instance_worlds(cx),
+            Tab::Files => self.instance_files(cx),
+            Tab::Logs => self.instance_logs(cx),
             Tab::Settings => self.instance_settings(cx),
         };
         div()
@@ -450,6 +506,132 @@ impl Launcher {
                     cx.notify();
                 }))
             }))
+    }
+
+    fn instance_worlds(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut list = div().flex().flex_col().gap(px(8.));
+        if self.instance.worlds.is_empty() {
+            return list.child(centered(
+                "No worlds in this instance yet. Play to create one.",
+                &t,
+            ));
+        }
+        for (name, path) in &self.instance.worlds {
+            let path = path.clone();
+            list = list.child(index_row(
+                0,
+                name.clone(),
+                Some(
+                    div()
+                        .font_family(theme::MONO)
+                        .child(short(&path))
+                        .into_any_element(),
+                ),
+                Some(
+                    button(
+                        format!("world-folder-{name}"),
+                        "Open folder",
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(move |_, _, cx| cx.open_with_system(&path))
+                    .into_any_element(),
+                ),
+                &t,
+            ));
+        }
+        let _ = cx;
+        list
+    }
+
+    fn instance_files(&self, _cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut list = div().flex().flex_col().gap(px(8.)).child(
+            text(theme::CAPTION)
+                .font_family(theme::MONO)
+                .text_color(t.muted)
+                .child(short(&self.instance.home)),
+        );
+        if self.instance.files.is_empty() {
+            return list.child(centered(
+                "This profile folder is created when you first play or add content.",
+                &t,
+            ));
+        }
+        for (name, path, directory) in &self.instance.files {
+            let path = path.clone();
+            list = list.child(index_row(
+                0,
+                name.clone(),
+                Some(
+                    div()
+                        .child(if *directory { "Folder" } else { "File" })
+                        .into_any_element(),
+                ),
+                Some(
+                    button(format!("instance-file-{name}"), "Open", Kind::Ghost, &t)
+                        .on_click(move |_, _, cx| cx.open_with_system(&path))
+                        .into_any_element(),
+                ),
+                &t,
+            ));
+        }
+        list
+    }
+
+    fn instance_logs(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let folder = self.instance.home.join("logs");
+        let log = self.instance.log.clone();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        button(
+                            "instance-log-folder",
+                            "Open logs folder",
+                            Kind::Secondary,
+                            &t,
+                        )
+                        .on_click(move |_, _, cx| cx.open_with_system(&folder)),
+                    )
+                    .child(
+                        button("instance-log-copy", "Copy log", Kind::Ghost, &t).on_click(
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(log.clone()))
+                            },
+                        ),
+                    )
+                    .child(
+                        button("instance-log-refresh", "Refresh", Kind::Ghost, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.reload_instance();
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                blocks::panel(&t)
+                    .bg(t.well)
+                    .p(px(16.))
+                    .font_family(theme::MONO)
+                    .text_size(px(12.))
+                    .line_height(px(19.))
+                    .text_color(t.ink_soft)
+                    .children(
+                        self.instance
+                            .log
+                            .lines()
+                            .map(|line| div().child(line.to_owned())),
+                    ),
+            )
     }
 
     fn instance_settings(&self, cx: &mut Context<Self>) -> Div {
