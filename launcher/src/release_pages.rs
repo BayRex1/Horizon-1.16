@@ -5,6 +5,8 @@ use super::*;
 pub(super) struct ReleaseUi {
     pub(super) installed: cull::Cull,
     pub(super) available: cull::Cull,
+    note: Option<String>,
+    notes_scroll: Scrollbar,
 }
 
 impl Launcher {
@@ -251,5 +253,96 @@ impl Launcher {
                 cx.notify();
             }))
             .into_any_element()
+    }
+
+    fn sponsor_spotlight(&self) -> Option<Div> {
+        let url = self.links.sponsor.clone();
+        if url.is_empty() {
+            return None;
+        }
+        let t = self.theme;
+        Some(blocks::panel(&t).bg(t.raised).flex().flex_wrap().items_center().justify_between().gap(px(20.)).p(px(24.))
+            .child(div().flex().flex_col().gap(px(8.)).flex_1().min_w(px(220.))
+                .child(blocks::pixel(30., FontWeight::MEDIUM).text_color(t.ink).child("Support the work"))
+                .child(text(theme::UI).text_color(t.ink_soft).child("Horizon is built in the open. Sponsorship helps fund ongoing development.")))
+            .child(button("sponsor", "Sponsor on GitHub", Kind::Primary, &t).h(px(46.)).px(px(22.))
+                .on_click(move |_, _, cx| cx.open_url(&url))))
+    }
+
+    pub(super) fn notes_page(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .children(self.sponsor_spotlight());
+        let releases = match &self.releases {
+            Load::Ready(releases) if !releases.is_empty() => releases,
+            Load::Ready(_) => return page.child(centered("No releases yet.", &t)),
+            Load::Loading => return page.child(centered("Loading patch notes…", &t)),
+            Load::Failed(error) => {
+                return page.child(notice(error.clone(), &t)).child(
+                    button("retry-notes", "Try again", Kind::Secondary, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.fetch_releases();
+                            cx.notify();
+                        },
+                    )),
+                )
+            }
+        };
+        let selected = releases
+            .iter()
+            .find(|release| self.release_ui.note.as_ref() == Some(&release.tag))
+            .unwrap_or(&releases[0]);
+        let index = div()
+            .id("release-index")
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .w(px(150.))
+            .flex_none()
+            .max_h(px(500.))
+            .overflow_y_scroll()
+            .children(releases.iter().map(|release| {
+                let tag = release.tag.clone();
+                button(format!("note-{tag}"), tag.clone(), Kind::Ghost, &t)
+                    .justify_start()
+                    .when(release.tag == selected.tag, |button| {
+                        button.bg(t.raised).text_color(t.ink)
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.release_ui.note = Some(tag.clone());
+                        cx.notify();
+                    }))
+            }));
+        let article = blocks::panel(&t)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .gap(px(16.))
+            .p(px(20.))
+            .child(version_tag(&selected.tag).text_color(t.ink))
+            .child(
+                text(theme::CAPTION)
+                    .text_color(t.muted)
+                    .child(selected.date.clone()),
+            )
+            .child(if selected.body.trim().is_empty() {
+                text(theme::UI)
+                    .child("No notes for this release.")
+                    .into_any_element()
+            } else {
+                markdown::render(&selected.body, &t)
+            });
+        page.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(18.))
+                .child(self.release_ui.notes_scroll.wrap(index, &t).flex_none())
+                .child(article),
+        )
     }
 }
