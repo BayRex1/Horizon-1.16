@@ -10,6 +10,7 @@ mod cli;
 mod cli_tools;
 mod collection;
 mod console;
+mod content_checks;
 mod cull;
 mod game_tools;
 mod internet;

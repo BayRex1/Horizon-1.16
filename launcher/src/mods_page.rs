@@ -19,8 +19,6 @@ const KINDS: [(PackKind, &str, &str); 3] = [
     (PackKind::Modpack, "Modpacks", "archive"),
     (PackKind::ResourcePack, "Resource packs", "image"),
 ];
-/// Java mods checked at once.
-const CHECKING: usize = 2;
 /// The sources to pick from; CurseForge is shown beside them as coming soon.
 const SOURCES: [(SourceId, &str); 2] = [
     (SourceId::Modrinth, "Modrinth"),
@@ -35,7 +33,7 @@ pub(super) enum Event {
     Done(Result<String, String>, bool),
     Updates(HashMap<(SourceId, String), String>),
     /// A Java mod's check: its jar read, or why it couldn't be.
-    Checked((SourceId, String), Result<Box<Check>, String>),
+    Checked(u64, (SourceId, String), Result<Box<Check>, String>),
     /// What a Horizon registry project says before install: signed or not, what it may do.
     About(HashMap<String, Vec<String>>),
     /// Registry files taken down that the launcher turned off.
@@ -57,9 +55,11 @@ pub(super) struct Mods {
     text: String,
     focus: FocusHandle,
     pub(super) focused: bool,
-    everything: bool,
+    pub(super) everything: bool,
     /// Which search is the current one; answers for older ones are dropped.
-    search: u64,
+    pub(super) search: u64,
+    pub(super) check_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(super) check_jobs: Option<Sender<content_checks::Request>>,
     searching: bool,
     searched: bool,
     results: Vec<Project>,
@@ -115,6 +115,8 @@ impl Mods {
             focused: false,
             everything: false,
             search: 0,
+            check_generation: Default::default(),
+            check_jobs: None,
             searching: false,
             searched: false,
             results: Vec::new(),
@@ -239,13 +241,14 @@ impl Launcher {
                     }
                 }
                 Event::Updates(found) => m.updates = found,
-                Event::Checked(key, result) => {
+                Event::Checked(generation, key, result) if generation == m.search => {
                     let state = match result {
                         Ok(c) => Checking::Done(c),
                         Err(e) => Checking::Failed(e),
                     };
                     m.checks.insert(key, state);
                 }
+                Event::Checked(..) => {}
                 Event::Loaded(l) => loaded.push(l),
                 Event::About(about) => {
                     // Rows grow by a line: measure them again (`cull`).
@@ -285,6 +288,9 @@ impl Launcher {
     pub(super) fn mods_search(&mut self, offset: usize) {
         let m = &mut self.mods;
         m.search += 1;
+        m.check_generation.store(m.search, Ordering::Relaxed);
+        m.checks
+            .retain(|_, state| !matches!(state, Checking::Running));
         m.searching = true;
         if offset == 0 {
             m.results.clear();
@@ -361,56 +367,6 @@ impl Launcher {
                     if on { "on" } else { "off" }
                 )
             }),
-        });
-    }
-
-    /// Checks the Java mods among `found` that aren't checked yet, a few at a time, on threads:
-    /// a cached check answers at once, else the jar is downloaded and read.
-    fn mods_check(&mut self, found: Vec<Project>) {
-        let m = &mut self.mods;
-        let todo: Vec<Project> = found
-            .into_iter()
-            .filter(|p| p.kind == PackKind::Mod && p.source != SourceId::Horizon)
-            .filter(|p| p.support().installable())
-            .filter(|p| !m.checks.contains_key(&(p.source, p.id.clone())))
-            .collect();
-        if todo.is_empty() {
-            return;
-        }
-        for p in &todo {
-            m.checks.insert((p.source, p.id.clone()), Checking::Running);
-        }
-        // A version other than 26.3 asked for: check the newest file for 1.21 and later.
-        let everything = m.everything || m.browse.filters.other_version();
-        let tx = m.tx.clone();
-        let queue = std::sync::Mutex::new(todo.into_iter());
-        std::thread::spawn(move || {
-            let home = backend::game_home();
-            std::thread::scope(|s| {
-                for _ in 0..CHECKING {
-                    s.spawn(|| {
-                        while let Some(p) = queue.lock().ok().and_then(|mut q| q.next()) {
-                            let result = browser::source(p.source)
-                                .ok_or_else(|| format!("{} isn't set up.", p.source.label()))
-                                .and_then(|source| {
-                                    java::check_project(&home, &*source, &p, everything, &|_| {})
-                                });
-                            // The project's page, if open, shows the verdict beside its version.
-                            if let Ok((version, check)) = &result {
-                                let key = (p.source, p.id.clone());
-                                let _ =
-                                    tx.send(Event::Loaded(super::mods_project::Loaded::Checked(
-                                        key,
-                                        version.id.clone(),
-                                        check.verdict,
-                                    )));
-                            }
-                            let result = result.map(|(_, check)| Box::new(check));
-                            let _ = tx.send(Event::Checked((p.source, p.id), result));
-                        }
-                    });
-                }
-            });
         });
     }
 
