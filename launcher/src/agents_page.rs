@@ -101,7 +101,6 @@ impl Launcher {
             .p(px(24.))
             .text_size(px(theme::UI.px))
             .line_height(px(21.))
-            .child(text(theme::HEADING).text_color(t.ink).child("Connect an AI agent"))
             .child(div().max_w(px(640.)).text_color(t.muted).child(
                 "Your own agent (Claude Code, Codex, Cursor or any MCP client) can drive the launcher and the game it starts, with the same commands as the terminal. It runs on your computer and talks to Horizon there; it asks before deleting anything.",
             ))
@@ -192,15 +191,22 @@ impl Launcher {
             );
         }
         Some(
-            section.child(
-                div()
-                    .id("agent-docs")
-                    .text_color(t.accent)
-                    .cursor_pointer()
-                    .hover(|s| s.opacity(0.8))
-                    .child("What an agent can do, and the commands")
-                    .on_click(|_, _, cx| cx.open_url(backend::AGENT_DOCS_URL)),
-            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(section_title("Connect an AI agent", "terminal", &t))
+                .child(
+                    section.child(
+                        div()
+                            .id("agent-docs")
+                            .text_color(t.accent)
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.8))
+                            .child("What an agent can do, and the commands")
+                            .on_click(|_, _, cx| cx.open_url(backend::AGENT_DOCS_URL)),
+                    ),
+                ),
         )
     }
 }

@@ -23,6 +23,7 @@ mod mods_project;
 mod perf;
 mod scrollbar;
 mod servers_page;
+mod settings_page;
 mod theme;
 mod titlebar;
 
@@ -129,6 +130,7 @@ const LOG_LINES: usize = 2000;
 struct Launcher {
     theme: Theme,
     page: Page,
+    settings_ui: settings_page::SettingsUi,
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
@@ -269,6 +271,7 @@ impl Launcher {
         let mut this = Self {
             theme: Theme::for_appearance(settings.appearance, window.appearance()),
             page: Page::from_env(),
+            settings_ui: Default::default(),
             switches: 0,
             content_scroll: Scrollbar::default(),
             long_list: cull::Cull::default(),
@@ -1420,6 +1423,7 @@ impl Launcher {
                     .child(text(theme::CAPTION).text_color(t.muted).child(how)),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.settings_ui.section = settings_page::Section::Account;
                 this.go(Page::Settings);
                 cx.notify();
             }));
@@ -1452,6 +1456,7 @@ impl Launcher {
                 if settings_open { t.accent } else { t.ink_soft },
             ))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.settings_ui.section = settings_page::Section::Account;
                 this.go(Page::Settings);
                 cx.notify();
             }));
@@ -2345,218 +2350,6 @@ impl Launcher {
             );
         }
         hero
-    }
-
-    fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let toggle = switch("auto-install", self.settings.auto_install(), &t).on_click(
-            cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.settings.install_new_versions = Some(!this.settings.auto_install());
-                this.settings.save();
-                if this.settings.auto_install() {
-                    this.install_update();
-                }
-                cx.notify();
-            }),
-        );
-        let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.settings.skip_opening = !this.settings.skip_opening;
-                this.settings.save();
-                cx.notify();
-            },
-        ));
-        // Linux: the launcher's entry in the applications menu (`horizon_launcher::desktop`).
-        let menu_entry = switch("desktop-entry", self.settings.desktop_entry(), &t).on_click(
-            cx.listener(|this, _: &ClickEvent, _, cx| {
-                let on = !this.settings.desktop_entry();
-                this.settings.desktop_entry = Some(on);
-                this.settings.save();
-                let _ = if on {
-                    horizon_launcher::desktop::install(backend::exe_path()).map(|_| ())
-                } else {
-                    horizon_launcher::desktop::remove()
-                };
-                cx.notify();
-            }),
-        );
-        let horizon = match (&self.updates.horizon, &self.update_error) {
-            (Some(r), _) => format!("{} available", r.tag),
-            (None, Some(e)) => e.clone(),
-            (None, None) if self.checked.is_some() => "Up to date".to_string(),
-            _ => "Checking…".to_string(),
-        };
-        let horizon_action = self
-            .updates
-            .horizon
-            .as_ref()
-            .filter(|_| self.installing.is_none())
-            .map(|_| {
-                button("settings-install", "Install", Kind::Secondary, &t)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.install_update();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            });
-        let launcher = match &self.self_update {
-            SelfUpdate::Downloading(v, p) => {
-                format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
-            }
-            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
-            SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
-            SelfUpdate::Idle => match &self.updates.launcher {
-                Some(r) => format!(
-                    "{}  ·  {} available",
-                    backend::VERSION,
-                    backend::launcher_version(&r.tag).unwrap_or_default()
-                ),
-                None if self.checked.is_some() && self.update_error.is_none() => {
-                    format!("{}  ·  up to date", backend::VERSION)
-                }
-                None => backend::VERSION.to_string(),
-            },
-        };
-        let launcher_action = match &self.self_update {
-            SelfUpdate::Ready(_) => Some(
-                button("restart-settings", "Restart", Kind::Secondary, &t)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.self_update = SelfUpdate::Failed(backend::restart());
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            ),
-            SelfUpdate::Downloading(..) => None,
-            _ => Some(
-                button("check", "Check now", Kind::Ghost, &t)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.check_updates();
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            ),
-        };
-        let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
-        let plain = |s: &str| div().child(s.to_string()).into_any_element();
-        let (accounts, n) = self.account_rows(cx);
-        let appearance = segments(
-            "appearance",
-            &[
-                (backend::Appearance::Dark, "Dark"),
-                (backend::Appearance::Light, "Light"),
-                (backend::Appearance::System, "System"),
-            ],
-            self.settings.appearance,
-            &t,
-            {
-                let this = cx.entity().downgrade();
-                move |choice, window, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        this.settings.appearance = choice;
-                        this.settings.save();
-                        this.theme = Theme::for_appearance(choice, window.appearance());
-                        cx.notify();
-                    });
-                }
-            },
-        );
-        let group = |label: &'static str, icon: &'static str| {
-            section_title(label, icon, &t).mt(px(20.)).mb(px(12.))
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(32.))
-            .child(page_header(
-                "Settings",
-                "Accounts, updates, and the launcher itself.",
-                &t,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(group("Account", "user").mt_0())
-                    .child(accounts)
-                    .child(group("Updates", "reload"))
-                    .child(index_row(
-                        n + 1,
-                        "Install new versions automatically",
-                        Some(plain(
-                            "Your selected version only changes if you were playing the newest one.",
-                        )),
-                        Some(toggle.into_any_element()),
-                        &t,
-                    ))
-                    .child(group("Launcher", "monitor"))
-                    .child(index_row(
-                        n + 3,
-                        "Appearance",
-                        Some(plain("Dark by default. System follows your computer's light or dark.")),
-                        Some(appearance.into_any_element()),
-                        &t,
-                    ))
-                    .child(index_row(
-                        n + 3,
-                        "Show the opening",
-                        Some(plain("The wordmark, while the release list loads.")),
-                        Some(opening.into_any_element()),
-                        &t,
-                    ))
-                    .child(group("Game", "gamepad"))
-                    .child(self.game_args_row(n + 4, cx))
-                    .child(group("AI", "terminal"))
-                    .child(self.no_ai_row(n + 4, cx))
-                    .child(group("About", "info-box"))
-                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
-                    .child(index_row(
-                        n + 6,
-                        "Launcher",
-                        Some(plain(&launcher)),
-                        launcher_action,
-                        &t,
-                    ))
-                    .child(index_row(
-                        n + 7,
-                        "Data folder",
-                        Some(mono(short(&backend::data_dir()))),
-                        None,
-                        &t,
-                    ))
-                    .child(index_row(
-                        n + 8,
-                        "Logs",
-                        Some(mono(format!(
-                            "{}  ·  crash reports beside it",
-                            short(&backend::logs_dir())
-                        ))),
-                        Some(
-                            button("open-logs", "Open", Kind::Secondary, &t)
-                                .on_click(|_, _, cx| {
-                                    let dir = backend::logs_dir();
-                                    let _ = std::fs::create_dir_all(&dir);
-                                    cx.open_with_system(&dir);
-                                })
-                                .into_any_element(),
-                        ),
-                        &t,
-                    ))
-                    .when(cfg!(target_os = "linux"), |d| {
-                        d.child(index_row(
-                            n + 9,
-                            "Applications menu",
-                            Some(plain(if self.settings.desktop_entry() {
-                                "Horizon and its icon are in your desktop's menu."
-                            } else {
-                                "Not in your desktop's menu."
-                            })),
-                            Some(menu_entry.into_any_element()),
-                            &t,
-                        ))
-                    }),
-            )
-            .child(self.collection_section(cx))
-            .children(self.agents_section(cx))
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in

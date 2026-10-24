@@ -352,7 +352,17 @@ impl Launcher {
                     this.collection.confirm_delete = !this.collection.confirm_delete;
                     cx.notify();
                 })),
-            );
+            )
+            .when(confirm, |actions| {
+                actions.child(
+                    button("data-delete-cancel", "Cancel", Kind::Ghost, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.collection.confirm_delete = false;
+                            cx.notify();
+                        },
+                    )),
+                )
+            });
         list = list.child(index_row(
             telemetry::SWITCHES.len() + 2,
             "Your data",
@@ -369,7 +379,6 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(text(theme::HEADING).text_color(t.ink).child("Data collection"))
             .child(text(theme::UI).max_w(px(600.)).text_color(t.muted).child(
                 "Each switch is off unless you turn it on. What it sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
             ))

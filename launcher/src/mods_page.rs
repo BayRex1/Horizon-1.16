@@ -732,7 +732,7 @@ impl Launcher {
                         .cursor_pointer()
                         // Its id sits under the row's own, so one name serves every row.
                         .child(switch("mods-switch-knob", on, &t))
-                        .child(text(theme::LABEL).text_color(t.ink_soft).child(if on {
+                        .child(text(theme::CAPTION).text_color(t.ink_soft).child(if on {
                             "On"
                         } else {
                             "Off"
