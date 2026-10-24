@@ -37,10 +37,10 @@ import urllib.request
 
 try:
     from . import lab
-    from .integration_env import game_environment
+    from .integration_env import game_environment, require_server_reports
 except ImportError:
     import lab
-    from integration_env import game_environment
+    from integration_env import game_environment, require_server_reports
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -364,6 +364,10 @@ def main():
     Game.extra = ['--offscreen'] if args.offscreen else []
     Game.server_thread = args.server_thread
     args.client, args.resources = args.client.resolve(), args.resources.resolve()
+    try:
+        require_server_reports(args.resources)
+    except ValueError as error:
+        parser.error(str(error))
     # Short: Unix socket paths are limited to about 100 bytes.
     with tempfile.TemporaryDirectory(prefix='hzf-', dir='/tmp') as directory:
         work = Path(directory)

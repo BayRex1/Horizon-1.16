@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from tools.integration_env import game_environment, run_game
+from tools.integration_env import game_environment, run_game, require_server_reports
 
 
 class IntegrationEnvironmentTests(unittest.TestCase):
@@ -31,3 +31,20 @@ class IntegrationEnvironmentTests(unittest.TestCase):
                                     capture_output=True, text=True, check=True).stdout) for _ in range(2)]
         self.assertFalse(set(runs[0]) & set(runs[1]))
         self.assertTrue(all(not Path(p).exists() for homes in runs for p in homes))
+
+
+class PreparedReportTests(unittest.TestCase):
+    def test_partial_report_install_shadows_complete_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            resources = Path(root) / 'horizon-client' / '26.3'
+            fallback = Path(root) / 'datagen' / 'out' / 'reports'
+            resources.mkdir(parents=True)
+            fallback.mkdir(parents=True)
+            for name in ('registries.json', 'commands.json'):
+                (fallback / name).write_text('{}')
+            self.assertEqual(require_server_reports(resources).resolve(), fallback)
+            (resources / 'registries.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'installed together'):
+                require_server_reports(resources)
+            (resources / 'commands.json').write_text('{}')
+            self.assertEqual(require_server_reports(resources), resources)

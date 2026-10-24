@@ -255,7 +255,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 import lab  # noqa: E402
-from integration_env import game_environment  # noqa: E402
+from integration_env import game_environment, require_server_reports  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
@@ -4308,7 +4308,8 @@ def check_deflect(host, guest, out):
     (Player.attack: AIM_DEFLECT on #redirectable_projectile; Ghast.isReflectedFireball). The ghast is caged
     (a window toward the host); the game runs at 4 ticks a second, and once the fireball is within 4.5 blocks
     the host looks at the ghast and clicks."""
-    x, y, z = (int(v // 1) for v in pos_of(host))
+    back = pos_of(host)
+    x, y, z = (int(v // 1) for v in back)
     guest('command', command='gamemode creative')
     host('command', command='gamemode survival')
     host('command', command='difficulty normal')
@@ -4329,15 +4330,23 @@ def check_deflect(host, guest, out):
     try:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            balls = [q for q in host.raw('simulation')['projectiles'] if q['kind'] == 'LargeFireball']
+            # Aim and click at the projectile the client actually sees. Holding
+            # non-player simulation keeps the reach window open while ordinary
+            # player input and its attack packet cross the connection.
+            balls = [q for q in host('status')['projectiles'] if q['kind'] == 'LargeFireball']
             near = min((math.dist(q['position'], eye) for q in balls), default=None)
             if near is not None and near < 4.5:
+                ball = min(balls, key=lambda q: math.dist(q['position'], eye))
+                host('command', command='tick freeze')
+                held_tick = host.raw('simulation')['game_time']
                 g = [m['pos'] for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast')][0]
-                host.raw('look-at', f'{g[0]:.2f}', f'{g[1] + 2:.2f}', f'{g[2]:.2f}')
-                host.wait(1)  # send the client's rotation before its attack packet
-                host.raw('mouse', 'left', 'down')
-                host.wait(1)  # consume the click in the client's normal input tick
-                host.raw('mouse', 'left', 'up')
+                host.script([f'look-at {g[0]:.2f} {g[1] + 2:.2f} {g[2]:.2f}',
+                             'wait 1', 'mouse left click', 'wait 1'])
+                host.until(lambda: host.raw('simulation')['projectiles'],
+                           lambda qs: any(q.get('id') == ball['id'] and q.get('player_owned') for q in qs),
+                           ticks=60)
+                assert host.raw('simulation')['game_time'] == held_tick, 'the deflection barrier advanced simulation'
+                host('command', command='tick unfreeze')
                 turned = near
                 break
         host('command', command='tick rate 20')
@@ -4346,8 +4355,11 @@ def check_deflect(host, guest, out):
         hurt = [h for pl in host.raw('hurtlog')['players'] if pl['name'] == (host.player if SERVER_THREAD else 'host') for h in pl['hurts']
                 if 'fireball' in h['source'] or 'explosion' in h['source']]
     finally:
+        host('command', command='tick unfreeze')
         host('command', command='tick rate 20')
         host('command', command='kill @e[type=minecraft:ghast]')
+        host('command', command=f'tp @s {back[0]} {back[1]} {back[2]}')
+        host.until(lambda: pos_of(host), lambda p: math.dist(p, back) < 0.1)
         host('command', command=f'fill {gx - 3} {gy - 1} {gz - 3} {gx + 24} {gy + 8} {gz + 3} minecraft:air')
         guest('command', command='gamemode survival')
     assert turned is not None, f'no fireball came within 4.5 blocks (nearest {near})'
@@ -4587,6 +4599,10 @@ def main():
     resources = lab.RESOURCES.resolve()
     if not (resources / 'horizon-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
+    try:
+        require_server_reports(resources)
+    except ValueError as error:
+        sys.exit(str(error))
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     print(f'LAN host mode: {"server-thread" if SERVER_THREAD else "in-frame"}')
@@ -4651,6 +4667,15 @@ def check_keep_inventory(host, guest, out):
     seen = {}
     host('command', command=f'setworldspawn {hx} {hy} {hz}')
     host('command', command='gamerule respawn_radius 0')
+    # Keep the inactive player alive and away from the death drops. Earlier
+    # fixtures may leave a personal respawn point or an unsafe waiting position.
+    host('command', command=f'fill {hx - 6} {hy - 1} {hz - 6} {hx + 6} {hy - 1} {hz + 6} minecraft:stone')
+    host('command', command=f'fill {hx - 6} {hy} {hz - 6} {hx + 6} {hy + 3} {hz + 6} minecraft:air')
+    for game, dz in ((host, -3), (guest, 3)):
+        waiting = (hx - 3.5, hy, hz + dz + 0.5)
+        game('command', command=f'spawnpoint @s {hx} {hy} {hz}')
+        game('command', command=f'tp @s {waiting[0]} {waiting[1]} {waiting[2]}')
+        game.until(lambda: pos_of(game), lambda p: math.dist(p, waiting) < 0.1)
     try:
         for keep in ('false', 'true'):
             host('command', command=f'gamerule keep_inventory {keep}')
@@ -5011,8 +5036,12 @@ def check_fishing(host, guest, out):
     tracked to the clients as a fishing bobber under its owner), lands on the ground and reels back
     in; cast into open water with Lure III, a fish bites and reeling in
     during the bite catches it for 1 (#1348)."""
+    # Both players need a safe floor for the entire other player's fishing wait.
+    apart(host, guest)
     hx, hy, hz = (int(v // 1) for v in pos_of(host))
     host('command', command='weather clear')
+    for game in (host, guest):
+        game('command', command='effect give @s minecraft:instant_health 1 5 true')
     seen = {}
     try:
         for game, other, dz in ((host, guest, -5), (guest, host, 5)):
@@ -5506,9 +5535,12 @@ def check_fixture_input(host, guest, out, kind, role):
     player.raw('look', 0, 0)
     try:
         if kind == 'sculk':
+            player.wait(2)  # finish setup movement before installing the listener
             host.raw('setblock', *sensor, 'minecraft:sculk_sensor')
             phase = lambda: host.raw('getblock', *sensor)['block']
             host.until(phase, lambda state: 'sculk_sensor_phase=inactive' in state)
+            player.wait(10)
+            assert 'sculk_sensor_phase=inactive' in phase(), 'setup activated the sensor before player input'
             player.raw('key', 'w', 'down')
             try:
                 player.wait(15)  # defined input duration; no wall-clock simulation sleep

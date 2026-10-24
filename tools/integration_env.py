@@ -36,3 +36,15 @@ def suite_lock():
     with (Path(tempfile.gettempdir()) / 'horizon-integration-gpu.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
+
+
+def require_server_reports(resources):
+    """Match Builtin.find: a registry report shadows later fallback directories."""
+    resources = Path(resources)
+    reports = next((p for p in (resources, resources / '../../datagen/out/reports',
+                                resources / '../datagen/out/reports')
+                    if (p / 'registries.json').is_file()), None)
+    if reports is None or not (reports / 'commands.json').is_file():
+        raise ValueError(f'incomplete prepared resources in {resources}: registries.json and '
+                         'commands.json must be installed together; prepare the pinned resources again')
+    return reports
