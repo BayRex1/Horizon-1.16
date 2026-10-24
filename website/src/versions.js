@@ -57,3 +57,5 @@ export function compareTags(a, b) {
 }
 
 export const newestFirst = (a, b) => compareTags(b, a);
+
+# Automated fix for issue #1609: slime blocks moved by pistons dont interact with the player. they just go into the player and dont p
