@@ -3,6 +3,7 @@ pub mod account;
 pub mod agents;
 pub mod backend;
 pub mod browser;
+pub mod content_icons;
 pub mod desktop;
 #[cfg(unix)]
 pub mod game_app;

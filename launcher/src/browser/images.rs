@@ -98,7 +98,10 @@ pub fn store(home: &Path, url: &str, size: u32, bytes: &[u8]) -> Result<PathBuf,
     let target = path(home, url, size);
     let folder = dir(home);
     fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    let part = target.with_extension("part");
+    // Independent artwork jobs can resolve different metadata keys to the same image URL.
+    static NEXT_PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT_PART.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = target.with_extension(format!("{}-{sequence}.part", std::process::id()));
     scaled
         .save_with_format(&part, image::ImageFormat::Png)
         .map_err(|e| format!("{}: {e}", part.display()))?;
@@ -263,5 +266,38 @@ mod tests {
         assert_eq!(icon.get_pixel(4, 40).0, [96, 64, 40, 255]);
         assert_eq!(icon.get_pixel(60, 40).0, [72, 48, 30, 255]);
         assert_eq!(icon.get_pixel(1, 1)[3], 0);
+    }
+
+    #[test]
+    fn concurrent_artwork_jobs_can_store_the_same_image() {
+        let home =
+            std::env::temp_dir().join(format!("horizon-images-concurrent-{}", std::process::id()));
+        let picture = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+        let mut bytes = std::io::Cursor::new(vec![]);
+        picture
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = bytes.into_inner();
+        let url = "https://cdn.modrinth.com/data/test/concurrent.png";
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let jobs = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        store(&home, url, ICON, &bytes)
+                    })
+                })
+                .collect::<Vec<_>>();
+            for job in jobs {
+                assert!(job.join().unwrap().is_ok());
+            }
+        });
+        let path = cached(&home, url, ICON).unwrap();
+        assert_eq!(image::open(&path).unwrap().width(), 8);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir(&home)).unwrap();
+        fs::remove_dir(home.join("mod-browser")).unwrap();
+        fs::remove_dir(home).unwrap();
     }
 }

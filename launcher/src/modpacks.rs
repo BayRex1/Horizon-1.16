@@ -173,6 +173,7 @@ pub fn import(path: &Path, log: Log) -> Result<Imported, String> {
     let work = ports_dir().join(slug(&name));
     log(format!("Importing {name} into {}", work.display()));
     pipeline::import(path, &work, log)?;
+    crate::content_icons::remember_import(&work, path)?;
     pipeline::inventory(&work, false, log)?;
     pipeline::report(&work, log)?;
     load(&work)
