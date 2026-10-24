@@ -1448,6 +1448,20 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
+            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
+                p.id == id as u32
+                    && matches!(
+                        p.kind,
+                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
+                    )
+            }) {
+                p.position = Vec3::new(position[0], position[1], position[2]);
+                if let Some((yaw, pitch)) = rotation {
+                    p.yaw = yaw;
+                    p.pitch = pitch;
+                }
+                return;
+            }
             // AbstractInterpolationHandler.interpolateTo: without a rotation,
             // the one it was heading for.
             let rotation = rotation.or_else(|| r.lerps.get(&id).and_then(|l| l.rotation));
@@ -2110,6 +2124,16 @@ impl Game<'_> {
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
                 if let Some(pl) = self.player.as_mut() {
                     pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
+                }
+            }
+            C::SetEntityMotion(p) => {
+                if let Some(projectile) = self
+                    .creatures
+                    .projectiles
+                    .iter_mut()
+                    .find(|q| q.id == p.id as u32)
+                {
+                    projectile.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
                 }
             }
             // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent

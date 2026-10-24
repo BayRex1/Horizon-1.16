@@ -193,7 +193,25 @@ impl Game<'_> {
         for p in &mut self.creatures.projectiles {
             p.previous = p.position;
             p.age += 1;
-            p.position = step(p.id, p.position);
+            if matches!(p.kind, ProjectileKind::LargeFireball { .. }) {
+                // AbstractHurtingProjectile.tick advances on the client between
+                // the tracker updates (ten ticks apart for a ghast's fireball).
+                let at = p.position;
+                let water = self
+                    .res
+                    .facts()
+                    .get(self.world.block(
+                        at.x.floor() as i32,
+                        at.y.floor() as i32,
+                        at.z.floor() as i32,
+                    ))
+                    .fluid
+                    == horizon_client::blocks::Fluid::Water;
+                p.apply_hurting_inertia(water);
+                p.position = p.position.add_vector(p.velocity);
+            } else {
+                p.position = step(p.id, p.position);
+            }
         }
         for t in &mut self.tridents {
             let id = t.id;
@@ -258,7 +276,8 @@ impl Game<'_> {
             out.push(json!({"id": t.id, "kind": "minecraft:trident", "position": at(t.position)}));
         }
         for p in &self.creatures.projectiles {
-            out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position)}));
+            out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position), "velocity": at(p.velocity),
+                "player_owned": p.owner == Some(horizon_client::mobs::Who::Player)}));
         }
         for (kind, p, _) in self.potions.thrown_entities() {
             out.push(json!({"kind": kind, "position": at(p)}));

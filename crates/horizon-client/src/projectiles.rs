@@ -550,6 +550,23 @@ impl Projectile {
         }
         (self.position.y > -128.0, Hit::None)
     }
+    /// AbstractHurtingProjectile.applyInertia, on both server and client.
+    pub fn apply_hurting_inertia(&mut self, water: bool) {
+        // WitherSkull.getInertia: 0.73 for dangerous skulls.
+        let inertia = match self.kind {
+            ProjectileKind::WitherSkull { dangerous: true } => 0.73,
+            _ if water => 0.8,
+            _ => 0.95,
+        };
+        let v = self.velocity;
+        let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
+        self.velocity = Vec3::new(
+            (v.x + v.x / len * 0.1) * inertia,
+            (v.y + v.y / len * 0.1) * inertia,
+            (v.z + v.z / len * 0.1) * inertia,
+        );
+    }
+
     /// One tick: returns whether to keep the projectile and what it hit.
     pub fn tick(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
         self.previous = self.position;
@@ -562,19 +579,7 @@ impl Projectile {
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
             | ProjectileKind::WitherSkull { .. } => {
-                // WitherSkull.getInertia: 0.73 for dangerous skulls.
-                let inertia = match self.kind {
-                    ProjectileKind::WitherSkull { dangerous: true } => 0.73,
-                    _ if water => 0.8,
-                    _ => 0.95,
-                };
-                let v = self.velocity;
-                let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
-                self.velocity = Vec3::new(
-                    (v.x + v.x / len * 0.1) * inertia,
-                    (v.y + v.y / len * 0.1) * inertia,
-                    (v.z + v.z / len * 0.1) * inertia,
-                );
+                self.apply_hurting_inertia(water);
             }
             // Arrows tick with `arrows::tick`.
             ProjectileKind::Arrow { .. } => {}
