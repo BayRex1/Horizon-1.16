@@ -8,6 +8,8 @@ pub(super) enum Popup {
     Source,
     Sort,
     Filters,
+    InstanceSort,
+    InstanceKinds,
     InstanceMore,
     InstanceBuild,
 }
@@ -152,8 +154,10 @@ impl Launcher {
         let ui = &self.mods.ui;
         let (focus, bounds) = match popup {
             Popup::Source => (&ui.source_focus, ui.source_bounds.clone()),
-            Popup::Sort => (&ui.sort_focus, ui.sort_bounds.clone()),
-            Popup::Filters | Popup::InstanceBuild => (&ui.filter_focus, ui.filter_bounds.clone()),
+            Popup::Sort | Popup::InstanceSort => (&ui.sort_focus, ui.sort_bounds.clone()),
+            Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild => {
+                (&ui.filter_focus, ui.filter_bounds.clone())
+            }
             Popup::InstanceMore => (&ui.more_focus, ui.more_bounds.clone()),
         };
         trigger
@@ -221,8 +225,10 @@ impl Launcher {
         };
         window.focus(match popup {
             Popup::Source => &self.mods.ui.source_focus,
-            Popup::Sort => &self.mods.ui.sort_focus,
-            Popup::Filters | Popup::InstanceBuild => &self.mods.ui.filter_focus,
+            Popup::Sort | Popup::InstanceSort => &self.mods.ui.sort_focus,
+            Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild => {
+                &self.mods.ui.filter_focus
+            }
             Popup::InstanceMore => &self.mods.ui.more_focus,
         });
         true
@@ -239,8 +245,10 @@ impl Launcher {
         let popup = self.mods.ui.popup?;
         let anchor = match popup {
             Popup::Source => self.mods.ui.source_bounds.clone(),
-            Popup::Sort => self.mods.ui.sort_bounds.clone(),
-            Popup::Filters | Popup::InstanceBuild => self.mods.ui.filter_bounds.clone(),
+            Popup::Sort | Popup::InstanceSort => self.mods.ui.sort_bounds.clone(),
+            Popup::Filters | Popup::InstanceKinds | Popup::InstanceBuild => {
+                self.mods.ui.filter_bounds.clone()
+            }
             Popup::InstanceMore => self.mods.ui.more_bounds.clone(),
         };
         let bounds = anchor.get()?;
@@ -259,7 +267,8 @@ impl Launcher {
         let desired_height: f32 = match popup {
             Popup::Source => 132.,
             Popup::Sort => 220.,
-            Popup::InstanceMore => 86.,
+            Popup::InstanceSort | Popup::InstanceMore => 86.,
+            Popup::InstanceKinds => 122.,
             Popup::InstanceBuild => (self.installed.len() as f32 * 36. + 16.).min(580.),
             Popup::Filters => 580.,
         };

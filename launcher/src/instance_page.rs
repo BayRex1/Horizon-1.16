@@ -36,6 +36,10 @@ pub(super) struct InstanceUi {
     pub(super) tab: Tab,
     pub(super) content: Vec<super::instance_content::ContentItem>,
     pub(super) query: String,
+    pub(super) kind: Option<horizon_launcher::browser::Kind>,
+    pub(super) updates_first: bool,
+    pub(super) selected: std::collections::BTreeSet<String>,
+    pub(super) confirm_remove: Option<String>,
     pub(super) message: Option<String>,
     pub(super) loaded: bool,
     name_input: String,
@@ -58,6 +62,10 @@ impl InstanceUi {
             tab: Tab::Content,
             content: vec![],
             query: String::new(),
+            kind: None,
+            updates_first: false,
+            selected: Default::default(),
+            confirm_remove: None,
             message: None,
             loaded: false,
             name_input: String::new(),
@@ -148,6 +156,8 @@ impl Launcher {
         self.pack_open = id.imported_slug().cloned();
         self.instance.tab = Tab::Content;
         self.instance.query.clear();
+        self.instance.kind = None;
+        self.instance.selected.clear();
         self.instance.message = None;
         self.go(Page::Instance);
         self.reload_instance();

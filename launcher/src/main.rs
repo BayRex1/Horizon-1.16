@@ -1064,10 +1064,11 @@ fn button(
 }
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
-fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
+fn switch(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
+    let id = id.into();
     let t = *t;
     let knob = if on { t.on_face } else { t.muted };
-    keyboard(div().id(id), &t)
+    keyboard(div().id(id.clone()), &t)
         .relative()
         .flex_none()
         .w(px(44.))
