@@ -1455,7 +1455,9 @@ impl Game<'_> {
                         horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
                     )
             }) {
-                p.position = Vec3::new(position[0], position[1], position[2]);
+                if path.is_some() {
+                    p.position = Vec3::new(position[0], position[1], position[2]);
+                }
                 if let Some((yaw, pitch)) = rotation {
                     p.yaw = yaw;
                     p.pitch = pitch;
