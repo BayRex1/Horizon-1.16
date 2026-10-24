@@ -46,11 +46,14 @@ pub struct Release {
 pub const ASSET: Option<&str> = Some("horizon-linux-x86_64.tar.gz");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub const ASSET: Option<&str> = Some("horizon-macos-arm64.zip");
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const ASSET: Option<&str> = Some("horizon-macos-x86_64.zip");
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub const ASSET: Option<&str> = Some("horizon-windows-x64.zip");
 #[cfg(not(any(
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
 )))]
 pub const ASSET: Option<&str> = None;
@@ -59,11 +62,14 @@ pub const ASSET: Option<&str> = None;
 pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-linux-x86_64.tar.gz");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-macos-arm64.zip");
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-macos-x86_64.zip");
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-windows-x64.zip");
 #[cfg(not(any(
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
 )))]
 pub const LAUNCHER_ASSET: Option<&str> = None;

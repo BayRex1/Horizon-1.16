@@ -36,6 +36,7 @@ done
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) ASSETS="horizon-server-linux-x86_64.tar.gz horizon-linux-x86_64.tar.gz" ;;
   Darwin-arm64) ASSETS=horizon-macos-arm64.zip ;;
+  Darwin-x86_64) ASSETS=horizon-macos-x86_64.zip ;;
   *) die "no Horizon release for $(uname -s) $(uname -m) yet: build it from source (docs/server.md)" ;;
 esac
 
