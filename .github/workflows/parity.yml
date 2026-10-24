@@ -39,6 +39,7 @@ jobs:
         run: bash tools/ci/vanilla-data.sh
       - name: The version constants are the pinned jar's
         run: python3 tools/gen_version_consts.py --check
+      # Includes lan_integration and friends_integration: real clients with server-thread hosts.
       - name: The harnesses this change can affect
         env:
           PARITY_HOSTS: ''

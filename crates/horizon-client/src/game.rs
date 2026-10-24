@@ -4046,6 +4046,9 @@ impl Game<'_> {
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
+        if self.agent.hold_server {
+            return Ok(());
+        }
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         if self.remote.is_some() {

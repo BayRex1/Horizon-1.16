@@ -70,6 +70,9 @@ class Failed(Exception):
 def game_env(screen):
     if sys.platform == 'darwin':
         return dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
+    if not shutil.which('vscreen') and os.environ.get('DISPLAY'):
+        # Also usable under xvfb-run on machines without the desktop helper.
+        return dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
     env = dict(os.environ, VSCREEN=screen)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout

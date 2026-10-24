@@ -243,7 +243,6 @@ import math
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -255,11 +254,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 import lab  # noqa: E402
+from integration_env import game_environment  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-# The host plays single player on its server thread (--server-thread).
-SERVER_THREAD = False
+# Match normal single player; --in-frame is the comparison path.
+SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
@@ -273,7 +273,7 @@ class Game:
         os.symlink(resources, self.work / '.local/horizon-client' / lab.VERSION)
         self.socket = self.work / 'c.sock'
         env = game_env(os.environ.get('VSCREEN', 'lan-e2e'))
-        env['HORIZON_HOME'] = str(self.work / 'home')
+        env = game_environment(env, self.work)
         self.d = Cli(ctl, self.socket, self.work, env)
         self.d.name = name
 
@@ -298,6 +298,17 @@ class Game:
 
     def wait(self, ticks):
         self.d('wait', ticks=ticks)
+
+    def until(self, observe, predicate, ticks=100):
+        """Wait for an observable answer, within the existing tick budget."""
+        last = observe()
+        for _ in range(ticks):
+            if predicate(last):
+                return last
+            self.wait(1)
+            last = observe()
+        assert predicate(last), f'{self.name}: state did not arrive within {ticks} ticks: {last}'
+        return last
 
     def close(self):
         try:
@@ -506,6 +517,8 @@ def check_sign(host, guest, out):
     host.shot(out, 'sign')
     assert placed and 'sign' in placed, f'the guest placed {placed}'
     host_unaffected(host, "the guest's sign")
+    guest.raw('key', 'esc', 'tap')
+    guest.raw('wait-for', 'screen', 'playing')
     return placed
 
 
@@ -650,7 +663,7 @@ def check_levels(host, guest, out):
         for name, step in LEVEL_STEPS:
             try:
                 steps[name] = step(host, guest, out)
-            except (Failed, AssertionError, StopIteration, KeyError) as e:
+            except (Failed, AssertionError, StopIteration, KeyError, TypeError, IndexError) as e:
                 steps[name], failed = repr(e), failed + [name]
                 for g in (host, guest):
                     back_to_game(g)
@@ -2370,7 +2383,8 @@ def check_predict(host, guest, out):
     seen = {}
     creaks = lambda game: sum(n for s, n in game('status')['heard'].items() if 'door' in s)
     heard = {'guest': creaks(guest), 'host': creaks(host)}
-    os.kill(host.pid, signal.SIGSTOP)
+    host.raw('server-hold', 'on')
+    held_at = host.raw('simulation')['game_time']
     try:
         guest.raw('interact', *wood)
         seen['guest_frozen'] = (state(guest, wood), state(guest, (wood[0], wood[1] + 1, wood[2])))
@@ -2378,8 +2392,9 @@ def check_predict(host, guest, out):
         seen['guest_heard_frozen'] = creaks(guest) - heard['guest']
         guest.raw('interact', *iron)
         seen['guest_iron_frozen'] = state(guest, iron)
+        assert host.raw('simulation')['game_time'] == held_at, 'server barrier advanced the world'
     finally:
-        os.kill(host.pid, signal.SIGCONT)
+        host.raw('server-hold', 'off')
     guest.wait(20)
     seen['guest_after'] = state(guest, wood)
     seen['host_after'] = state(host, wood)
@@ -2633,9 +2648,7 @@ def check_time(host, guest, out):
     guest.wait(20)
     # A stalled game runs at most 10 missed ticks when it wakes (DeltaTracker); the server's
     # game time, sent every second, moves the guest's clock on (ClientClockManager.tick).
-    os.kill(guest.pid, signal.SIGSTOP)
-    time.sleep(4)
-    os.kill(guest.pid, signal.SIGCONT)
+    guest.raw('stall', 4000)
     guest.wait(60)
     stalled = times()
     detail = {'paused': paused, 'after_stall': stalled}
@@ -4287,9 +4300,6 @@ def check_deflect(host, guest, out):
     (Player.attack: AIM_DEFLECT on #redirectable_projectile; Ghast.isReflectedFireball). The ghast is caged
     (a window toward the host); the game runs at 4 ticks a second, and once the fireball is within 4.5 blocks
     the host looks at the ghast and clicks."""
-    if SERVER_THREAD:
-        # The fireball's position and the host's hurts are read from the host's own level.
-        return 'skipped (in-frame only)'
     x, y, z = (int(v // 1) for v in pos_of(host))
     guest('command', command='gamemode creative')
     host('command', command='gamemode survival')
@@ -4311,19 +4321,21 @@ def check_deflect(host, guest, out):
     try:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            balls = [q for q in host.raw('status')['projectiles'] if q['kind'] == 'LargeFireball']
+            balls = [q for q in host.raw('simulation')['projectiles'] if q['kind'] == 'LargeFireball']
             near = min((math.dist(q['position'], eye) for q in balls), default=None)
             if near is not None and near < 4.5:
                 g = [m['pos'] for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast')][0]
                 host.raw('look-at', f'{g[0]:.2f}', f'{g[1] + 2:.2f}', f'{g[2]:.2f}')
+                host.wait(1)  # send the client's rotation before its attack packet
                 host.raw('mouse', 'left', 'down')
+                host.wait(1)  # consume the click in the client's normal input tick
                 host.raw('mouse', 'left', 'up')
                 turned = near
                 break
         host('command', command='tick rate 20')
         host.wait(60)
         ghast = [m for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast') and m['health'] > 0]
-        hurt = [h for pl in host.raw('hurtlog')['players'] if pl['name'] == 'host' for h in pl['hurts']
+        hurt = [h for pl in host.raw('hurtlog')['players'] if pl['name'] == (host.player if SERVER_THREAD else 'host') for h in pl['hurts']
                 if 'fireball' in h['source'] or 'explosion' in h['source']]
     finally:
         host('command', command='tick rate 20')
@@ -4513,8 +4525,22 @@ def run(ctl, out, resources, checks):
         guest.shot(out, 'joined')
         for name in checks:
             try:
-                results[name] = {'pass': True, 'detail': CHECK_FNS[name](host, guest, out)}
-            except (Failed, AssertionError, StopIteration, KeyError) as e:
+                # Cases assert their own deaths, menus and held actions before returning.
+                # Do not let those states turn later independent cases into false failures.
+                for game in (host, guest):
+                    game.raw('release')
+                    back_to_game(game)
+                    state = game('state')
+                    assert state.get('player') is not None, f'{game.name} lost its session before {name}: {state}'
+                    if state.get('screen') == 'dead' or state['player']['health'] <= 0:
+                        game.raw('respawn')
+                        game.until(lambda: game('state'),
+                                   lambda s: s.get('screen') == 'playing' and s['player']['health'] > 0,
+                                   ticks=40)
+                detail = CHECK_FNS[name](host, guest, out)
+                skipped = isinstance(detail, str) and detail.startswith('skipped')
+                results[name] = {'pass': not skipped, 'skipped': skipped, 'detail': detail}
+            except (Failed, AssertionError, StopIteration, KeyError, TypeError, IndexError) as e:
                 results[name] = {'pass': False, 'detail': repr(e)}
                 for g in (host, guest):
                     back_to_game(g)
@@ -4533,7 +4559,11 @@ def main():
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--check', action='append', choices=CHECKS, help='run only these checks (repeatable)')
     parser.add_argument('--out', default=str(ROOT / '.local/lan-e2e'), help='screenshots and game logs go here')
-    parser.add_argument('--server-thread', action='store_true', help="the host's world runs on its server thread")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--server-thread', dest='server_thread', action='store_true', default=True,
+                      help='host on its server thread (default; retained for existing callers)')
+    mode.add_argument('--in-frame', dest='server_thread', action='store_false',
+                      help='host the world in the window, for comparison')
     args = parser.parse_args()
     global SERVER_THREAD
     SERVER_THREAD = args.server_thread
@@ -4548,9 +4578,12 @@ def main():
     resources = lab.RESOURCES.resolve()
     if not (resources / 'horizon-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
-    out = Path(args.out)
+    out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    print(f'LAN host mode: {"server-thread" if SERVER_THREAD else "in-frame"}')
     results = run(bins / 'horizon-ctl', out, resources, args.check or CHECKS)
+    (out / 'results.json').write_text(json.dumps({'mode': 'server-thread' if SERVER_THREAD else 'in-frame',
+                                               'checks': results}, indent=2) + '\n')
     print(json.dumps(results, indent=1))
     sys.exit(0 if results and all(r['pass'] for r in results.values()) else 1)
 
@@ -4658,6 +4691,16 @@ def check_signs(host, guest, out):
     seen = {}
     for game, other, dz in ((host, guest, -2), (guest, host, 2)):
         spot = (hx + 2, hy, hz + dz)
+        for viewer in (game, other):
+            back_to_game(viewer)
+        # Earlier death/travel checks leave the players at different spawn points.
+        # Give this placement case its own floor, line of sight and reachable target.
+        host('command', command=f'fill {spot[0] - 3} {hy - 1} {spot[2] - 1} {spot[0] + 3} {hy - 1} {spot[2] + 1} minecraft:stone')
+        host('command', command=f'fill {spot[0] - 3} {hy} {spot[2] - 1} {spot[0] + 3} {hy + 3} {spot[2] + 1} minecraft:air')
+        for viewer, dx in ((game, -2), (other, 2)):
+            at = (spot[0] + dx + 0.5, hy, spot[2] + 0.5)
+            viewer('command', command=f'tp @s {at[0]} {at[1]} {at[2]}')
+            viewer.until(lambda: pos_of(viewer), lambda p: math.dist(p, at) < 0.1)
         game('command', command=f'setblock {spot[0]} {spot[1] - 1} {spot[2]} minecraft:stone')
         game('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
         game('command', command='gamemode survival')
@@ -4665,7 +4708,12 @@ def check_signs(host, guest, out):
         game('command', command='give @s minecraft:oak_sign 1')
         game.wait(10)
         game.raw('place', *spot, '--item', 'minecraft:oak_sign')
-        game.wait(10)
+        game.until(lambda: game('state').get('screen'), lambda s: s == 'sign', ticks=10)
+        # Drain the placement's initial block-entity data before typing. The
+        # reply travels on the same connection after that data, unlike a local
+        # screen check which may see the editor before the initial data arrives.
+        server_reply(game, f'data get block {spot[0]} {spot[1]} {spot[2]} front_text.messages',
+                     'following block data')
         opened = {g.name: g('state').get('screen') for g in (game, other)}
         game.shot(out, 'signs-editor')
         lines = [f'{game.name} wrote', 'line two']
@@ -4673,11 +4721,13 @@ def check_signs(host, guest, out):
         game.raw('key', 'enter', 'tap')
         game.raw('type', lines[1])
         game.raw('key', 'esc', 'tap')
-        game.wait(20)
+        game.until(lambda: game('state').get('screen'), lambda s: s == 'playing', ticks=20)
         back_to_game(other)
+        shown = {g.name: g.until(lambda: (g.raw('block', *spot).get('sign') or {}).get('front'),
+                                lambda front: front == lines + ['', ''], ticks=20)
+                 for g in (game, other)}
         seen[game.name] = {'opened': opened,
-                           'shown': {g.name: (g.raw('block', *spot).get('sign') or {}).get('front')
-                                     for g in (game, other)}}
+                           'shown': shown}
         other.shot(out, 'signs-shown')
     for name, s in seen.items():
         other = 'guest' if name == 'host' else 'host'
@@ -5269,12 +5319,8 @@ def check_digging(host, guest, out):
     before = heard('minecraft:block.stone.break')
     guest.raw('look-at', *at(stone))
     guest.raw('mouse', 'left', 'down')
-    time.sleep(0.4)
-    os.kill(guest.pid, signal.SIGSTOP)
-    try:
-        time.sleep(1.0)
-    finally:
-        os.kill(guest.pid, signal.SIGCONT)
+    guest.wait(8)
+    guest.raw('stall', 1000)
     resumed = {'guest': guest.raw('block', *stone).get('block'), 'server': host.raw('block', *stone).get('block'),
                'mining': guest('state').get('mining')}
     # Let go once it breaks: past it the crosshair reaches the floor.
@@ -5432,6 +5478,65 @@ def check_knockback(host, guest, out):
 
 CHECKS += ['knockback']
 CHECK_FNS.update(knockback=check_knockback)
+
+
+
+def check_fixture_input(host, guest, out, kind, role):
+    """Complement seeded rules with real client input and authoritative observations."""
+    player = host if role == 'host' else guest
+    hx, y, hz = (int(v // 1) for v in pos_of(host))
+    x, z = hx + 6, hz + (-8 if role == 'host' else 8)
+    sensor, dispenser, button = (x + 3, y, z + 1), (x, y, z + 3), (x, y, z + 2)
+    player('command', command='gamemode survival')
+    player('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 5} {y - 1} {z + 5} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z - 2} {x + 5} {y + 3} {z + 5} minecraft:air')
+    start = (x + 0.5, y, z + 0.5)
+    player('command', command=f'tp @s {start[0]} {start[1]} {start[2]} 0 0')
+    player.until(lambda: pos_of(player), lambda p: math.dist(p, start) < 0.1)
+    player.raw('look', 0, 0)
+    try:
+        if kind == 'sculk':
+            host.raw('setblock', *sensor, 'minecraft:sculk_sensor')
+            phase = lambda: host.raw('getblock', *sensor)['block']
+            host.until(phase, lambda state: 'sculk_sensor_phase=inactive' in state)
+            player.raw('key', 'w', 'down')
+            try:
+                player.wait(15)  # defined input duration; no wall-clock simulation sleep
+            finally:
+                player.raw('key', 'w', 'up')
+            moved = {'client': math.dist(pos_of(player), start),
+                     'server': math.dist(server_player(host, player)['position'], start)}
+            assert all(d > 1 for d in moved.values()), f'{role} did not walk on both sides: {moved}'
+            active = host.until(phase, lambda state: 'sculk_sensor_phase=active' in state, ticks=85)
+            for viewer in (host, guest):
+                viewer.until(lambda: state_of(viewer, sensor, 'sculk_sensor_phase'), lambda v: v == 'active')
+            return {'moved': moved, 'phase': active}
+        host.raw('setblock', *dispenser, 'minecraft:dispenser[facing=east]')
+        host.raw('container', *dispenser, 'minecraft:diamond', 1)
+        host.raw('setblock', *button, 'minecraft:stone_button[face=wall,facing=north]')
+        player.until(lambda: player.raw('block', *button)['block'], lambda v: v == 'minecraft:stone_button')
+        player.raw('interact', *button)
+        slots = host.until(lambda: host.raw('container', *dispenser)['slots'], lambda v: all(s is None for s in v))
+        dropped = {}
+        for viewer in (host, guest):
+            dropped[viewer.name] = viewer.until(
+                lambda: [e for e in viewer.raw('entities', 24, 'minecraft:item')['entities']
+                         if e.get('item', {}).get('item') == 'minecraft:diamond'
+                         and math.dist(e['pos'], (x + 1.5, y + 0.5, z + 3.5)) < 3],
+                lambda drops: len(drops) == 1 and drops[0]['item']['count'] == 1)
+        player.shot(out, f'{kind}-input')
+        return {'slots': slots, 'drops': dropped}
+    finally:
+        player.raw('key', 'w', 'up')
+        host('command', command=f'fill {x - 2} {y} {z - 2} {x + 5} {y + 3} {z + 5} minecraft:air')
+
+
+for _kind in ('sculk', 'dispenser'):
+    for _role in ('host', 'guest'):
+        _name = f'{_kind}_input_{_role}'
+        CHECKS.append(_name)
+        CHECK_FNS[_name] = lambda h, g, o, kind=_kind, role=_role: check_fixture_input(h, g, o, kind, role)
 
 
 if __name__ == '__main__':

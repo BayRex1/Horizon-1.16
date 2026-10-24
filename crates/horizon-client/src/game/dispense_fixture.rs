@@ -3,6 +3,9 @@
 //! every case (a dispenser or dropper with items, blocks and target entities
 //! around it) through `dispense_from` on a fresh headless world and prints what
 //! changed in the format of `VanillaDispenserOracle`.
+//! The synthetic worlds and direct use/mining/combat hooks deliberately match
+//! the oracle's seeded rule calls. Real input and packet handling belong to
+//! the complementary LAN integration checks, including the dispenser_input checks.
 use super::{
     Game,
     dispenser::{Slot, body_in_head, mob_set_slot, mob_slot_item},

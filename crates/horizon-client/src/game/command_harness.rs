@@ -6,6 +6,9 @@
 //! the player's `CommandResultCallback`; `tick` advances the game; `settle`
 //! waits until the terrain and entities around the player are loaded;
 //! `portal` sends the player through the nether portal it stands in.
+//! This is deterministic command/callback parity, not a client-input fixture.
+//! Keep its held player and explicit ticks; LAN command/feedback/travel checks
+//! exercise the player-facing client/server boundary separately.
 use super::Game;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
