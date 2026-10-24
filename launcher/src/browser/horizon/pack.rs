@@ -208,20 +208,25 @@ mod tests {
         zip.write_all(b"renderDistance:8\n").unwrap();
         zip.finish().unwrap();
         let size = |p: &Path| fs::metadata(p).unwrap().len();
+        let file_url = |path: &Path| {
+            let normalized = path.to_string_lossy().replace('\\', "/");
+            serde_json::to_string(&format!("file:///{}", normalized.trim_start_matches('/')))
+                .unwrap()
+        };
         let text = format!(
             r#"{{"schema": 1, "projects": [
               {{"id": "coords_hud", "kind": "mod", "name": "Coordinates HUD", "summary": "", "license": "MIT",
                 "source": "https://x.test", "versions": [{{"version": "0.1.0", "api": "0.1", "side": "client",
                 "capabilities": ["game-read", "hud", "chat"], "game": "26.3", "file": {{"name": "coords_hud-0.1.0.hmod",
-                "url": "file://{}", "size": {}, "sha256": "{hmod_sha}"}}}}]}},
+                "url": {}, "size": {}, "sha256": "{hmod_sha}"}}}}]}},
               {{"id": "cozy", "kind": "modpack", "name": "Cozy", "summary": "", "license": "MIT",
                 "source": "https://x.test", "versions": [{{"version": "1.0.0", "api": "1", "game": "26.3",
                 "requires": [{{"id": "coords_hud", "version": "0.1.0", "sha256": "{hmod_sha}"}}],
-                "file": {{"name": "cozy-1.0.0.hpack", "url": "file://{}", "size": {}, "sha256": "{}"}}}}]}}
+                "file": {{"name": "cozy-1.0.0.hpack", "url": {}, "size": {}, "sha256": "{}"}}}}]}}
             ]{extra}}}"#,
-            hmod.display(),
+            file_url(&hmod),
             size(&hmod),
-            hpack.display(),
+            file_url(&hpack),
             size(&hpack),
             idx::sha256_file(&hpack).unwrap()
         );

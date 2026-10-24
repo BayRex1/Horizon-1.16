@@ -7,6 +7,8 @@ pub mod desktop;
 #[cfg(unix)]
 pub mod game_app;
 pub mod heads;
+pub mod instance_profile;
+pub mod instances;
 pub mod modpacks;
 pub mod mojang;
 pub mod process;

@@ -252,7 +252,9 @@ pub fn profile_home(work: &Path) -> PathBuf {
 /// A modpack from Horizon's registry (`horizon-packs/<id>/`) plays its own profile the same way.
 pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
     if horizon_pack::is_pack(work) {
-        return horizon_pack::apply(cmd, work);
+        horizon_pack::apply(cmd, work)?;
+        crate::instance_profile::Preferences::load(&horizon_pack::home(work))?.apply(cmd);
+        return Ok(());
     }
     // Only mods that load together: the game would refuse the later of two sharing a namespace.
     let (mods, _) = pipeline::loadable(&carried(work));
@@ -260,6 +262,7 @@ pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
         return Err("Nothing is ported yet: port the pack first.".into());
     }
     let home = profile_home(work);
+    let preferences = crate::instance_profile::Preferences::load(&home)?;
     fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
     let options = home.join("options.txt");
     let own = backend::game_home().join("options.txt");
@@ -267,7 +270,15 @@ pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
         let _ = fs::copy(own, &options);
     }
     cmd.current_dir(&home).env("HORIZON_HOME", &home);
+    preferences.apply(cmd);
     for m in mods {
+        let key = m
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        if key.is_some_and(|key| preferences.disabled_ported.contains(key)) {
+            continue;
+        }
         cmd.arg("--dev-mod").arg(m);
     }
     Ok(())

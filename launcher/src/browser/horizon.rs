@@ -323,6 +323,15 @@ fn fetch(
 ) -> Result<PathBuf, String> {
     match file.url.strip_prefix("file://").filter(|_| local) {
         Some(path) => {
+            // A local fixture's file:///C:/... URI has one slash before the Windows drive.
+            let path = if cfg!(windows)
+                && path.starts_with('/')
+                && path.as_bytes().get(2) == Some(&b':')
+            {
+                &path[1..]
+            } else {
+                path
+            };
             let reader = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             download::save_from_anywhere(file, reader, folder, progress)
         }
