@@ -26,13 +26,13 @@ pub(super) enum Event {
     Found(u64, usize, Result<Vec<Project>, String>),
     Progress(String, f32),
     Done(Result<String, String>, bool),
-    Updates(HashMap<(SourceId, String), String>),
+    Updates(std::path::PathBuf, HashMap<(SourceId, String), String>),
     /// A Java mod's check: its jar read, or why it couldn't be.
     Checked(u64, (SourceId, String), Result<Box<Check>, String>),
     /// What a Horizon registry project says before install: signed or not, what it may do.
     About(u64, HashMap<String, Vec<String>>),
     /// Registry files taken down that the launcher turned off.
-    TakenDown(Vec<String>),
+    TakenDown(std::path::PathBuf, Vec<String>),
     /// A project page's part, an image or a filter's values (`mods_project`).
     Loaded(super::mods_project::Loaded),
 }
@@ -46,6 +46,8 @@ pub(super) enum Checking {
 
 pub(super) struct Mods {
     pub(super) ui: browser_controls::BrowserUi,
+    pub(super) home: std::path::PathBuf,
+    pub(super) target: String,
     pub(super) kind: PackKind,
     pub(super) source: SourceId,
     text: String,
@@ -64,12 +66,13 @@ pub(super) struct Mods {
     pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
-    installed: Vec<installed::Entry>,
+    pub(super) installed: Vec<installed::Entry>,
     loaded: bool,
     /// The project being installed, and the line and fraction of its download.
     pub(super) busy: Option<(String, String, f32)>,
     message: Option<Result<String, String>>,
-    updates: HashMap<(SourceId, String), String>,
+    pub(super) updates: HashMap<(SourceId, String), String>,
+    pub(super) pending_updates: VecDeque<(SourceId, String)>,
     confirm_remove: Option<String>,
     /// Java mods' checks, by source and project.
     pub(super) checks: HashMap<(SourceId, String), Checking>,
@@ -88,15 +91,12 @@ impl Mods {
         self.report_list.reset();
     }
 
-    /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
-    pub(super) fn on_modpacks(&self) -> bool {
-        self.kind == PackKind::Modpack
-    }
-
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
         Self {
             ui: browser_controls::BrowserUi::new(cx),
+            home: backend::game_home(),
+            target: "Horizon".into(),
             kind: if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("modpacks") {
                 PackKind::Modpack
             } else {
@@ -127,6 +127,7 @@ impl Mods {
             busy: None,
             message: None,
             updates: HashMap::new(),
+            pending_updates: VecDeque::new(),
             confirm_remove: None,
             checks: HashMap::new(),
             about: HashMap::new(),
@@ -207,6 +208,7 @@ impl Launcher {
     /// Called with the launcher's other work: what the background sent.
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
+        let mut instance_changed = false;
         let mut to_check = Vec::new();
         let mut loaded = Vec::new();
         while let Ok(event) = self.mods.rx.try_recv() {
@@ -235,16 +237,24 @@ impl Launcher {
                     }
                 }
                 Event::Done(result, modpack) => {
+                    instance_changed = true;
+                    if result.is_err() {
+                        m.pending_updates.clear();
+                    }
                     m.busy = None;
                     m.message = Some(result);
-                    m.installed = installed::Installed::load(&backend::game_home()).entries;
+                    m.installed = installed::Installed::load(&m.home).entries;
                     m.installed_list.reset();
                     if modpack {
                         // The Modpacks page reads its list again.
                         self.packs_loaded = None;
                     }
                 }
-                Event::Updates(found) => m.updates = found,
+                Event::Updates(home, found) if home == m.home => {
+                    m.updates = found;
+                    instance_changed = true;
+                }
+                Event::Updates(..) => {}
                 Event::Checked(generation, key, result) if generation == m.search => {
                     let state = match result {
                         Ok(c) => Checking::Done(c),
@@ -260,11 +270,15 @@ impl Launcher {
                     m.results_list.reset();
                 }
                 Event::About(..) => {}
-                Event::TakenDown(lines) => {
-                    m.message = Some(Ok(lines.join("\n")));
-                    m.installed = installed::Installed::load(&backend::game_home()).entries;
+                Event::TakenDown(home, lines) if home == m.home => {
+                    if !lines.is_empty() {
+                        m.message = Some(Ok(lines.join("\n")));
+                    }
+                    m.installed = installed::Installed::load(&m.home).entries;
                     m.installed_list.reset();
+                    instance_changed = true;
                 }
+                Event::TakenDown(..) => {}
             }
         }
         // `HORIZON_LAUNCHER_PROJECT=<slug>` (with `HORIZON_LAUNCHER_PAGE=mods`): opens that
@@ -286,6 +300,16 @@ impl Launcher {
         self.mods_check(to_check);
         for l in loaded {
             self.mods_loaded(l);
+        }
+        if instance_changed {
+            if self.page == Page::Instance {
+                self.reload_instance();
+            }
+            if self.mods.busy.is_none() {
+                if let Some((source, project)) = self.mods.pending_updates.pop_front() {
+                    self.mods_install(source, project, None);
+                }
+            }
         }
         changed
     }
@@ -331,7 +355,7 @@ impl Launcher {
 
     /// Reads the registry's index again when something installed came from it, and turns off
     /// what it took down since (`horizon::turn_off_revoked`).
-    fn mods_taken_down(&mut self) {
+    pub(super) fn mods_taken_down(&mut self) {
         if !self
             .mods
             .installed
@@ -341,20 +365,19 @@ impl Launcher {
             return;
         }
         let tx = self.mods.tx.clone();
+        let home = self.mods.home.clone();
         std::thread::spawn(move || {
             let Ok(index) = horizon::index() else {
                 return;
             };
-            let lines = horizon::turn_off_revoked(&index, &backend::game_home());
-            if !lines.is_empty() {
-                let _ = tx.send(Event::TakenDown(lines));
-            }
+            let lines = horizon::turn_off_revoked(&index, &home);
+            let _ = tx.send(Event::TakenDown(home, lines));
         });
     }
 
     /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does.
     fn mods_switch(&mut self, e: &installed::Entry) {
-        let home = backend::game_home();
+        let home = self.mods.home.clone();
         let Some(id) = horizon::mod_id(e) else {
             return;
         };
@@ -376,12 +399,13 @@ impl Launcher {
     }
 
     /// Looks for newer versions of what the browser installed.
-    fn mods_check_updates(&mut self) {
+    pub(super) fn mods_check_updates(&mut self) {
         let entries = self.mods.installed.clone();
         if entries.is_empty() {
             return;
         }
         let tx = self.mods.tx.clone();
+        let home = self.mods.home.clone();
         std::thread::spawn(move || {
             let mut found = HashMap::new();
             for e in entries {
@@ -392,7 +416,7 @@ impl Launcher {
                     found.insert((e.source, e.project.clone()), v.number);
                 }
             }
-            let _ = tx.send(Event::Updates(found));
+            let _ = tx.send(Event::Updates(home, found));
         });
     }
 
@@ -412,6 +436,7 @@ impl Launcher {
             .filter(|tag| backend::is_prepared(tag))
             .map(|tag| backend::resources(tag));
         let tx = self.mods.tx.clone();
+        let home = self.mods.home.clone();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
             let progress = |line: &str, f: f32| {
@@ -451,7 +476,6 @@ impl Launcher {
                             modpacks::outcome(&pack)
                         ));
                     }
-                    let home = backend::game_home();
                     let done = installed::install(&*source, &p, everything, &home, &progress)?;
                     let names: Vec<String> = done
                         .iter()
@@ -562,7 +586,7 @@ impl Launcher {
         let t = self.theme;
         if !self.mods.loaded {
             self.mods.loaded = true;
-            self.mods.installed = installed::Installed::load(&backend::game_home()).entries;
+            self.mods.installed = installed::Installed::load(&self.mods.home).entries;
             self.mods_check_updates();
             self.mods_taken_down();
             self.mods_search(0);

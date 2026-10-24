@@ -14,6 +14,8 @@ mod console;
 mod content_checks;
 mod cull;
 mod game_tools;
+mod instance_content;
+mod instance_page;
 mod internet;
 mod markdown;
 mod mcp;
@@ -36,6 +38,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::instances::{self, InstanceId};
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -55,6 +58,7 @@ enum Page {
     Servers,
     Notes,
     Settings,
+    Instance,
 }
 
 impl Page {
@@ -67,6 +71,7 @@ impl Page {
             Ok("versions") => Page::Versions,
             Ok("notes") => Page::Notes,
             Ok("settings") => Page::Settings,
+            Ok("instance") => Page::Instance,
             _ => Page::Play,
         }
     }
@@ -133,6 +138,8 @@ struct Launcher {
     page: Page,
     settings_ui: settings_page::SettingsUi,
     release_ui: release_pages::ReleaseUi,
+    instance: instance_page::InstanceUi,
+    local_instances: Vec<instances::LocalInstance>,
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
@@ -212,12 +219,12 @@ struct Launcher {
     registry_packs: Vec<horizon_launcher::browser::horizon::pack::Installed>,
     packs_loaded: Option<Instant>,
     pack_open: Option<String>,
-    pack_filter: Option<horizon_port_pack::report::Status>,
     pack_busy: bool,
     pack_log: VecDeque<String>,
     pack_error: Option<String>,
     /// The game starting now plays this pack's profile (its work folder).
     starting_pack: Option<std::path::PathBuf>,
+    starting_home: Option<std::path::PathBuf>,
     /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
     mods: mods_page::Mods,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
@@ -275,6 +282,8 @@ impl Launcher {
             page: Page::from_env(),
             settings_ui: Default::default(),
             release_ui: Default::default(),
+            instance: instance_page::InstanceUi::new(cx),
+            local_instances: vec![],
             switches: 0,
             content_scroll: Scrollbar::default(),
             long_list: cull::Cull::default(),
@@ -339,11 +348,11 @@ impl Launcher {
             registry_packs: Vec::new(),
             packs_loaded: None,
             pack_open: None,
-            pack_filter: None,
             pack_busy: false,
             pack_log: VecDeque::new(),
             pack_error: None,
             starting_pack: None,
+            starting_home: None,
             mods: mods_page::Mods::new(cx),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
@@ -503,6 +512,8 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        let home = self.starting_home.take().unwrap_or_else(backend::game_home);
+                        let imported = self.starting_pack.is_some();
                         if let Some(work) = self.starting_pack.take() {
                             if let Err(e) =
                                 horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
@@ -517,6 +528,22 @@ impl Launcher {
                             }
                         }
                         backend::append_game_args(&mut cmd);
+                        if !imported {
+                            if let Err(error) = std::fs::create_dir_all(&home) {
+                                self.client_error =
+                                    Some(format!("Could not open instance folder: {error}"));
+                                continue;
+                            }
+                            cmd.current_dir(&home).env("HORIZON_HOME", &home);
+                            match horizon_launcher::instance_profile::Preferences::load(&home) {
+                                Ok(preferences) => preferences.apply(&mut cmd),
+                                Err(error) => {
+                                    self.client_error = Some(error);
+                                    continue;
+                                }
+                            }
+                        }
+                        horizon_launcher::browser::horizon::before_play(&home);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
@@ -751,44 +778,7 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        let minecraft = self
-            .settings
-            .minecraft_dir
-            .clone()
-            .unwrap_or_else(|| horizon_prepare::artifacts::minecraft_dir(None));
-        self.prepare_log.clear();
-        self.prepare_error = None;
-        self.prepare_log
-            .push_back("Checking Java and your Minecraft install".into());
-        let tx = self.tx.clone();
-        // The checks may download the server jar, so they run on the thread too.
-        std::thread::spawn(move || {
-            let log = |line| {
-                let _ = tx.send(Msg::Line(Job::Prepare, line));
-            };
-            let result = backend::preparer(&tag, &minecraft, &log)
-                .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
-                .and_then(|(p, _)| match p {
-                    backend::Preparer::Process(cmd) => {
-                        backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
-                    }
-                    backend::Preparer::InProcess(options) => {
-                        backend::prepare_in_process(&options, &log).map(|_| true)
-                    }
-                });
-            match result {
-                // A process sends its own Exit when it ends.
-                Ok(false) => {}
-                Ok(true) => {
-                    let _ = tx.send(Msg::Exit(Job::Prepare, Ok(())));
-                }
-                Err(e) => {
-                    let _ = tx.send(Msg::Exit(Job::Prepare, Err(e)));
-                }
-            }
-        });
-        self.preparing = true;
-        self.prepare_started = Some(Instant::now());
+        self.prepare_version(tag);
     }
 
     fn play(&mut self) {
@@ -1563,7 +1553,8 @@ impl Launcher {
         let tag = self.selected().cloned();
         let prepared = tag.as_deref().is_some_and(backend::is_prepared);
         let grass = self.vanilla_icon();
-        let on_play = self.page == Page::Play;
+        let on_play = self.page == Page::Play
+            || (self.page == Page::Instance && self.instance.id == InstanceId::Horizon);
         list = list.child(
             blocks::side_item("side-horizon".into(), on_play, &t)
                 .child(match grass {
@@ -1581,7 +1572,13 @@ impl Launcher {
                         .flex()
                         .flex_col()
                         .min_w_0()
-                        .child(title("Horizon".into()))
+                        .child(title(
+                            self.instance
+                                .names
+                                .get(&InstanceId::Horizon)
+                                .cloned()
+                                .unwrap_or_else(|| "Horizon".into()),
+                        ))
                         .child(sub(if tag.is_none() {
                             "No version installed"
                         } else if prepared {
@@ -1592,27 +1589,31 @@ impl Launcher {
                         .into())),
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.go(Page::Play);
+                    this.open_instance(InstanceId::Horizon);
                     cx.notify();
                 })),
         );
-        let on_packs = self.page == Page::Mods && self.mods.on_modpacks();
-        for p in &self.packs {
-            let slug = p.slug.clone();
-            let open = on_packs && self.pack_open.as_ref() == Some(&p.slug);
+        let on_packs = self.page == Page::Instance;
+        for target in self
+            .instance_targets()
+            .into_iter()
+            .filter(|target| target.id != InstanceId::Horizon)
+        {
+            let id = target.id.clone();
+            let open = on_packs && self.instance.id == id;
             list = list.child(
-                blocks::side_item(format!("side-pack-{slug}").into(), open, &t)
-                    .child(blocks::slot(None, p.title(), 44., &t))
+                blocks::side_item(format!("side-instance-{}", id.key()).into(), open, &t)
+                    .child(blocks::slot(None, &target.name, 44., &t))
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .min_w_0()
-                            .child(title(p.title().to_string()))
-                            .child(sub(p.summary())),
+                            .child(title(target.name))
+                            .child(sub(target.summary)),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.show_modpack(Some(slug.clone()));
+                        this.open_instance(id.clone());
                         cx.notify();
                     })),
             );
@@ -2757,6 +2758,7 @@ impl Render for Launcher {
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
+            Page::Instance => self.instance_page(cx),
         };
         self.art.free_replaced(window);
         // The new page fades in and rises a few pixels.
@@ -3066,6 +3068,49 @@ fn main() {
             cx.on_window_closed(shut_down).detach();
             cx.activate(true);
         });
+}
+
+impl Launcher {
+    fn prepare_version(&mut self, tag: String) {
+        let minecraft = self
+            .settings
+            .minecraft_dir
+            .clone()
+            .unwrap_or_else(|| horizon_prepare::artifacts::minecraft_dir(None));
+        self.prepare_log.clear();
+        self.prepare_error = None;
+        self.prepare_log
+            .push_back("Checking Java and your Minecraft install".into());
+        let tx = self.tx.clone();
+        // The checks may download the server jar, so they run on the thread too.
+        std::thread::spawn(move || {
+            let log = |line| {
+                let _ = tx.send(Msg::Line(Job::Prepare, line));
+            };
+            let result = backend::preparer(&tag, &minecraft, &log)
+                .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
+                .and_then(|(p, _)| match p {
+                    backend::Preparer::Process(cmd) => {
+                        backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
+                    }
+                    backend::Preparer::InProcess(options) => {
+                        backend::prepare_in_process(&options, &log).map(|_| true)
+                    }
+                });
+            match result {
+                // A process sends its own Exit when it ends.
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = tx.send(Msg::Exit(Job::Prepare, Ok(())));
+                }
+                Err(e) => {
+                    let _ = tx.send(Msg::Exit(Job::Prepare, Err(e)));
+                }
+            }
+        });
+        self.preparing = true;
+        self.prepare_started = Some(Instant::now());
+    }
 }
 
 #[cfg(test)]

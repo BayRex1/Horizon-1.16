@@ -8,6 +8,8 @@ pub(super) enum Popup {
     Source,
     Sort,
     Filters,
+    InstanceMore,
+    InstanceBuild,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -28,9 +30,11 @@ pub(super) struct BrowserUi {
     source_focus: FocusHandle,
     sort_focus: FocusHandle,
     filter_focus: FocusHandle,
+    more_focus: FocusHandle,
     source_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     sort_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     filter_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
+    more_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     pub(super) root_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
 }
 
@@ -47,9 +51,11 @@ impl BrowserUi {
             source_focus: cx.focus_handle(),
             sort_focus: cx.focus_handle(),
             filter_focus: cx.focus_handle(),
+            more_focus: cx.focus_handle(),
             source_bounds: Default::default(),
             sort_bounds: Default::default(),
             filter_bounds: Default::default(),
+            more_bounds: Default::default(),
             root_bounds: Default::default(),
         }
     }
@@ -113,6 +119,12 @@ impl Launcher {
                     ))
                 }),
             )
+            .child(
+                text(theme::CAPTION)
+                    .ml_auto()
+                    .text_color(t.muted)
+                    .child(format!("Instance: {}", self.mods.target)),
+            )
     }
 
     pub(super) fn browser_menu_button(
@@ -141,7 +153,8 @@ impl Launcher {
         let (focus, bounds) = match popup {
             Popup::Source => (&ui.source_focus, ui.source_bounds.clone()),
             Popup::Sort => (&ui.sort_focus, ui.sort_bounds.clone()),
-            Popup::Filters => (&ui.filter_focus, ui.filter_bounds.clone()),
+            Popup::Filters | Popup::InstanceBuild => (&ui.filter_focus, ui.filter_bounds.clone()),
+            Popup::InstanceMore => (&ui.more_focus, ui.more_bounds.clone()),
         };
         trigger
             .relative()
@@ -209,7 +222,8 @@ impl Launcher {
         window.focus(match popup {
             Popup::Source => &self.mods.ui.source_focus,
             Popup::Sort => &self.mods.ui.sort_focus,
-            Popup::Filters => &self.mods.ui.filter_focus,
+            Popup::Filters | Popup::InstanceBuild => &self.mods.ui.filter_focus,
+            Popup::InstanceMore => &self.mods.ui.more_focus,
         });
         true
     }
@@ -219,14 +233,15 @@ impl Launcher {
         _viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.page != Page::Mods {
+        if !matches!(self.page, Page::Mods | Page::Instance | Page::Play) {
             return None;
         }
         let popup = self.mods.ui.popup?;
         let anchor = match popup {
             Popup::Source => self.mods.ui.source_bounds.clone(),
             Popup::Sort => self.mods.ui.sort_bounds.clone(),
-            Popup::Filters => self.mods.ui.filter_bounds.clone(),
+            Popup::Filters | Popup::InstanceBuild => self.mods.ui.filter_bounds.clone(),
+            Popup::InstanceMore => self.mods.ui.more_bounds.clone(),
         };
         let bounds = anchor.get()?;
         let root = self.mods.ui.root_bounds.get()?;
@@ -244,6 +259,8 @@ impl Launcher {
         let desired_height: f32 = match popup {
             Popup::Source => 132.,
             Popup::Sort => 220.,
+            Popup::InstanceMore => 86.,
+            Popup::InstanceBuild => (self.installed.len() as f32 * 36. + 16.).min(580.),
             Popup::Filters => 580.,
         };
         let use_below = below >= desired_height.min(260.) || below >= above;
@@ -261,6 +278,7 @@ impl Launcher {
             Popup::Source => self.browser_source_menu(cx),
             Popup::Sort => self.browser_sort_menu(cx),
             Popup::Filters => self.browser_filter_menu(height, cx),
+            _ => self.instance_menu(popup, height, cx),
         };
         Some(
             body.id("browser-popover")
