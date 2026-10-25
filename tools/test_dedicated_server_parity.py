@@ -131,7 +131,7 @@ class Server:
         env = game_environment(os.environ, self.scratch.name)
         self.process = subprocess.Popen(list(map(str, command)), cwd=directory, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace', env=lab.game_env())
+                                        encoding='utf-8', errors='replace')
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
