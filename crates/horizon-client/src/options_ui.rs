@@ -1340,10 +1340,10 @@ impl OptionsUi {
                         Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
                     ),
                     Row::Buttons(
-                        open("AEI Settings...", Page::Aei),
-                        Some(open("Extras...", Page::Extras)),
+                        open("Extras...", Page::Extras),
+                        Some(open("Mods...", Page::Mods)),
                     ),
-                    Row::Buttons(open("Mods...", Page::Mods), None),
+                    Row::Buttons(open("AEI Settings...", Page::Aei), None),
                     // No AI hides the AI Agent page and everything AI.
                     if s.extras.no_ai {
                         Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
@@ -4304,9 +4304,9 @@ mod tests {
                 Page::Graphics,
                 Page::GraphicsAdvanced,
                 Page::Controller,
-                Page::Aei,
                 Page::Extras,
                 Page::Mods,
+                Page::Aei,
                 Page::Agent,
             ]
         );
