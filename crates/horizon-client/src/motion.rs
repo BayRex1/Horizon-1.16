@@ -1259,21 +1259,22 @@ impl MotionWorld<'_, '_, '_> {
                 continue;
             }
             let powder_snow = name == "minecraft:powder_snow";
+            let lava_cauldron = name == "minecraft:lava_cauldron";
             // getEntityInsideCollisionShape is the whole block but for powder
             // snow (its collision shape, the whole block when it is empty),
             // filled cauldrons, end portals and tripwires; Horizon doesn't
-            // follow the player into those last three.
+            // follow the player into the last three, nor into water and
+            // powder snow cauldrons.
             if matches!(
                 name,
                 "minecraft:water_cauldron"
-                    | "minecraft:lava_cauldron"
                     | "minecraft:powder_snow_cauldron"
                     | "minecraft:end_portal"
                     | "minecraft:tripwire"
             ) {
                 continue;
             }
-            let inside = !powder_snow || {
+            let inside = !(powder_snow || lava_cauldron) || {
                 let context = self.context();
                 let binding = self.collision_binding;
                 let shape = binding.collision_shape_with_context(
@@ -1282,16 +1283,24 @@ impl MotionWorld<'_, '_, '_> {
                     p,
                     &context,
                 )?;
-                shape.is_empty() || shape.boxes() == VoxelShape::block().boxes() || {
-                    let boxes: Vec<_> = shape
-                        .moved(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
-                        .boxes()
-                        .to_vec();
-                    self.player
-                        .dimensions
-                        .bounds(from)
-                        .collided_along_vector(to.subtract(from), &boxes)
-                }
+                let corner = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+                // LavaCauldronBlock.FILLED_SHAPE: the cauldron's shape and the
+                // lava, Block.column(12, 4, 15).
+                let lava = lava_cauldron.then(|| {
+                    Aabb::new(
+                        corner.add_vector(Vec3::new(2.0 / 16.0, 4.0 / 16.0, 2.0 / 16.0)),
+                        corner.add_vector(Vec3::new(14.0 / 16.0, 15.0 / 16.0, 14.0 / 16.0)),
+                    )
+                });
+                (powder_snow && (shape.is_empty() || shape.boxes() == VoxelShape::block().boxes()))
+                    || {
+                        let mut boxes: Vec<_> = shape.moved(corner).boxes().to_vec();
+                        boxes.extend(lava);
+                        self.player
+                            .dimensions
+                            .bounds(from)
+                            .collided_along_vector(to.subtract(from), &boxes)
+                    }
             };
             if inside && visited.insert(p.pack()) {
                 // CactusBlock and CampfireBlock.entityInside (`entity.hurt`).
@@ -1315,6 +1324,13 @@ impl MotionWorld<'_, '_, '_> {
                     }
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
+                    }
+                    // LavaCauldronBlock.entityInside: CLEAR_FREEZE,
+                    // LAVA_IGNITE (Entity.lavaIgnite) and Entity.lavaHurt.
+                    "minecraft:lava_cauldron" => {
+                        self.player.ticks_frozen = 0;
+                        self.player.ignite_for_ticks(300)?;
+                        self.environment_hurt("minecraft:lava", 4.0)?;
                     }
                     _ => {}
                 }
