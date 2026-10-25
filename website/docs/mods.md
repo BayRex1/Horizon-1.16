@@ -17,6 +17,7 @@ Horizon mods are written in Rust, compiled to WebAssembly and run in a sandbox. 
 **What a mod can do today**
 
 - **Client mods** read the same things the F3 screen shows (your position, health, food, the time), draw text panels on the HUD, show chat lines only you see, and add chat commands. They work in single player and on any server, and a server cannot see them.
+- **AEI integrations** add native recipe categories, recipes, workstation catalysts and container click areas. Use manifest API `0.3` with the `aei` capability; see the [SDK guide](https://github.com/ludovic111/horizon/blob/main/docs/aei-api.md).
 - **Content mods** add blocks and items from data and assets: models, textures, recipes, loot tables and tags, with no code. They work in single player today. This is also what the launcher's [modpack](/docs/modpacks) carry-over produces.
 - **Server mods**, which run where the world is simulated, are planned.
 

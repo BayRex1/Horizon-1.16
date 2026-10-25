@@ -322,6 +322,10 @@ impl KeyBinds {
     pub fn mapping_for(&self, key: &str) -> Option<&'static str> {
         MAPPINGS.iter().map(|m| m.0).find(|n| self.get(n) == key)
     }
+    /// Whether a physical keyboard key is currently assigned to a game action.
+    pub fn is_bound(&self, key: KeyCode) -> bool {
+        key_name(key).is_some_and(|name| self.mapping_for(name).is_some())
+    }
     /// Translate a physical key into the default key of the mapping it is
     /// bound to, so game code written against vanilla defaults follows the
     /// player's bindings. `None` means the key now does nothing; mouse

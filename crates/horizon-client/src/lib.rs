@@ -2,6 +2,8 @@
 //! bindings between the validated simulation pieces and the game loop.
 #![forbid(unsafe_code)]
 pub mod advancements;
+pub mod aei_keybinds;
+mod aei_textures;
 pub mod ambience;
 pub mod animate_tick;
 pub mod arrows;
@@ -152,6 +154,7 @@ pub mod random_sequences;
 pub mod random_tick_sections;
 pub mod recipe_book;
 pub mod recipe_book_screen;
+pub mod recipe_lookup;
 pub mod reconnect;
 pub mod save;
 pub mod scoreboard;

@@ -4447,6 +4447,12 @@ impl Game<'_> {
                 }));
                 Ok(true)
             }
+            KeyCode::KeyE
+                if self.spectator()
+                    && (!self.settings.extras.aei_enabled || !self.settings.extras.aei_visible) =>
+            {
+                Ok(true)
+            }
             KeyCode::KeyE => {
                 // The inventory opens without telling the server.
                 self.screen = if self.creative {

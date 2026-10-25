@@ -14,8 +14,8 @@ const GUEST_MANIFEST: &str = r#"
 id = "test_guest"
 name = "Test Guest"
 version = "0.1.0"
-api = "0.1"
-capabilities = ["chat", "storage"]
+api = "0.3"
+capabilities = ["chat", "storage", "aei"]
 "#;
 const UI_MANIFEST: &str = r#"
 id = "test_ui_guest"
@@ -42,6 +42,8 @@ fn mods_dir() -> &'static Path {
                 "horizon-mods-test-guest",
                 "-p",
                 "horizon-mods-test-ui-guest",
+                "-p",
+                "aei-integration",
                 "--target-dir",
             ])
             .arg(&target)
@@ -59,6 +61,13 @@ fn mods_dir() -> &'static Path {
             ("coords_hud", std::fs::read_to_string(example).unwrap()),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
+            (
+                "aei_integration",
+                std::fs::read_to_string(
+                    root.join("crates/horizon-mod-sdk/examples/aei-integration/horizon-mod.toml"),
+                )
+                .unwrap(),
+            ),
         ];
         for (name, manifest) in mods {
             let core = std::fs::read(built.join(format!("{name}.wasm"))).unwrap();
@@ -445,4 +454,89 @@ capabilities = ["registries"]
     assert!(matches!(&mods.entries()[1].status, Status::Failed(e) if e.contains("own namespace")));
     // Content has no hooks: the game's per-tick mod work stays skipped.
     assert!(!mods.is_running());
+}
+
+#[test]
+fn aei_sdk_registers_requests_and_clears_retained_integrations() {
+    let mut mods = load("aei_integration.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let plugin = mods
+        .aei_plugins()
+        .next()
+        .expect("SDK registration retained");
+    assert_eq!(plugin.categories[0].id, "aei_example:pressing");
+    assert_eq!(plugin.recipes[0].slots[0].alternatives[0].count, 9);
+    assert_eq!(plugin.catalysts[0].item, "minecraft:anvil");
+    assert_eq!(plugin.click_areas[0].screen, "minecraft:anvil");
+    assert_eq!(mods.drain(), [Output::AeiChanged]);
+    assert!(mods.command("aei_example"));
+    assert_eq!(
+        mods.drain(),
+        [Output::AeiShow {
+            kind: horizon_mods::aei::Lookup::Category,
+            value: "aei_example:pressing".into()
+        }]
+    );
+    assert!(mods.command("aei_example clear"));
+    assert!(mods.aei_plugins().next().unwrap().categories.is_empty());
+    assert_eq!(mods.drain(), [Output::AeiChanged]);
+    assert!(mods.command("aei_example restore"));
+    assert_eq!(mods.aei_plugins().next().unwrap().categories.len(), 1);
+}
+
+#[test]
+fn aei_registration_disappears_when_the_mod_traps() {
+    let mut mods = load("horizon_mods_test_guest.hmod");
+    assert!(mods.command("aei_register"));
+    assert_eq!(mods.drain(), [Output::AeiChanged]);
+    assert_eq!(mods.aei_plugins().count(), 1);
+    assert!(mods.command("aei_invalid"));
+    assert!(matches!(
+        mods.drain().as_slice(),
+        [Output::Feedback { error: true, .. }]
+    ));
+    assert_eq!(
+        mods.aei_plugins().next().unwrap().categories[0].id,
+        "test_guest:pressing"
+    );
+    assert!(mods.command("panic"));
+    assert_eq!(mods.aei_plugins().count(), 0);
+}
+
+#[test]
+fn aei_import_requires_a_declared_capability() {
+    let dir = mods_dir().join("undeclared_aei");
+    std::fs::create_dir_all(&dir).unwrap();
+    let package = Package::read(&mods_dir().join("aei_integration.hmod")).unwrap();
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-mod-sdk/examples/aei-integration/horizon-mod.toml"),
+    )
+    .unwrap()
+    .replace("[\"aei\"]", "[]");
+    std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
+    std::fs::write(dir.join("mod.wasm"), package.wasm.unwrap()).unwrap();
+    let mods = Mods::load(&[dir], |_| true, |_| false);
+    assert_eq!(
+        mods.entries()[0].status,
+        Status::Failed("uses capability aei, missing from horizon-mod.toml".into())
+    );
+}
+
+#[test]
+fn aei_requests_are_bounded_per_hook_call() {
+    let mut mods = load("horizon_mods_test_guest.hmod");
+    assert!(mods.command("aei_spam"));
+    let outputs = mods.drain();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|o| matches!(o, Output::AeiShow { .. }))
+            .count(),
+        8
+    );
+    assert!(matches!(
+        outputs.last(),
+        Some(Output::Feedback { error: true, .. })
+    ));
 }

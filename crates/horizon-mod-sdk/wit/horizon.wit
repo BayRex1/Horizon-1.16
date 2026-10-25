@@ -163,6 +163,64 @@ interface ui-events {
     settings-opened: func();
 }
 
+/// Capability `aei` (manifest API 0.3): retained native recipe viewer integration.
+/// Registration is replaced atomically and removed when the mod stops.
+interface aei {
+    record stack {
+        item: string,
+        count: u32,
+    }
+    enum role { input, output, render-only }
+    record slot {
+        role: role,
+        /// Pixels relative to the recipe's content area, before its four-pixel border.
+        x: u32,
+        y: u32,
+        /// Alternative item stacks, cycled by the viewer.
+        alternatives: list<stack>,
+    }
+    record category {
+        /// Owned identifier, e.g. `my_mod:crusher`.
+        id: string,
+        title: string,
+        icon: string,
+        width: u32,
+        height: u32,
+    }
+    record recipe {
+        id: string,
+        category: string,
+        slots: list<slot>,
+    }
+    record catalyst {
+        item: string,
+        categories: list<string>,
+    }
+    record click-area {
+        /// Menu id (e.g. `minecraft:crafting`) or the open container's block id.
+        screen: string,
+        /// Pixels relative to the container panel's top-left corner.
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        categories: list<string>,
+    }
+    record plugin {
+        categories: list<category>,
+        recipes: list<recipe>,
+        catalysts: list<catalyst>,
+        click-areas: list<click-area>,
+    }
+    /// Categories and recipes must belong to the calling mod's namespace.
+    /// References may target its own categories or native Minecraft categories.
+    register: func(plugin: plugin) -> result<_, string>;
+    enum lookup { recipes, uses, category }
+    /// Request a native lookup. Empty lookups leave the current screen unchanged.
+    /// `value` is an item id, or a category id for `category`.
+    show: func(kind: lookup, value: string) -> result<_, string>;
+}
+
 /// What the game calls. Only the hooks `init` asks for are ever called.
 interface events {
     record registration {
@@ -194,6 +252,7 @@ world horizon-mod {
     import chat;
     import hud;
     import storage;
+    import aei;
     export events;
 }
 

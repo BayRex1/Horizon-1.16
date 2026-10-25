@@ -15,8 +15,8 @@ pub const WASM: &str = "mod.wasm";
 pub const API: &str = "0.1";
 /// The manifest `api` lines this build loads. 0.2 is 0.1 plus content:
 /// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
-/// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
-pub const APIS: [&str; 2] = [API, "0.2"];
+/// `data/<id>/horizon/` (docs/modpacks.md). 0.3 adds native AEI integration. Code still links the additive WIT API 0.1.
+pub const APIS: [&str; 3] = [API, "0.2", "0.3"];
 /// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
 /// to those, docs/mods.md) and the game's own.
 const RESERVED_NAMESPACES: [&str; 3] = ["minecraft", "c", "horizon"];
@@ -37,7 +37,7 @@ pub struct Manifest {
     pub description: String,
     #[serde(default)]
     pub authors: Vec<String>,
-    /// The API line the mod was built for: `0.1`, or `0.2` for content.
+    /// The API line the mod was built for: `0.1`, `0.2` for content, or `0.3` for AEI.
     pub api: String,
     #[serde(default)]
     pub side: Side,
@@ -84,15 +84,18 @@ pub enum Capability {
     /// A screen the mod owns and a settings page in Options > Mods, drawn
     /// with the menus' own widgets (interface `ui`, calls `ui-events`).
     Ui,
+    /// Native recipe viewer integrations (manifest API 0.3).
+    Aei,
 }
 impl Capability {
-    pub const ALL: [Capability; 6] = [
+    pub const ALL: [Capability; 7] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
         Capability::Registries,
         Capability::Ui,
+        Capability::Aei,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -103,6 +106,7 @@ impl Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Aei => "aei",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -119,6 +123,7 @@ impl Capability {
             Capability::Storage => "save its own settings to disk",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
+            Capability::Aei => "add recipe categories and container shortcuts to AEI",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -150,6 +155,7 @@ impl fmt::Display for Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Aei => "aei",
         };
         f.write_str(name)
     }
@@ -189,6 +195,9 @@ impl Manifest {
                 "{MANIFEST}: capability {c} is experimental and may change in any release: \
                  add experimental = [\"{c}\"] to use it"
             ));
+        }
+        if m.capabilities.contains(&Capability::Aei) && m.api != "0.3" {
+            return Err(format!("{MANIFEST}: capability aei needs api = \"0.3\""));
         }
         if !m.namespaces.is_empty() && !m.capabilities.contains(&Capability::Registries) {
             return Err(format!(
@@ -403,11 +412,31 @@ capabilities = ["game-read", "hud"]
     }
 
     #[test]
+    fn aei_is_an_additive_capability_on_manifest_api_03() {
+        let manifest = EXAMPLE
+            .replace("api = \"0.1\"", "api = \"0.3\"")
+            .replace("\"hud\"", "\"hud\", \"aei\"");
+        let parsed = Manifest::parse(&manifest).unwrap();
+        assert!(parsed.check_imports(["horizon:mods/aei@0.1.0"]).is_ok());
+        assert!(
+            Manifest::parse(&manifest.replace("0.3", "0.2"))
+                .unwrap_err()
+                .contains("aei needs")
+        );
+        assert!(
+            Manifest::parse(EXAMPLE)
+                .unwrap()
+                .check_imports(["horizon:mods/aei@0.1.0"])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn refuses_bad_ids_and_apis() {
         let bad_id = EXAMPLE.replace("coords_hud", "Coords HUD");
         assert!(Manifest::parse(&bad_id).unwrap_err().contains("is not"));
-        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.3\"");
-        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.3"));
+        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.9\"");
+        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.9"));
         let unknown = format!("{EXAMPLE}network = true\n");
         assert!(Manifest::parse(&unknown).is_err());
     }

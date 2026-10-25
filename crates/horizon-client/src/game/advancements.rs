@@ -809,6 +809,9 @@ impl Game<'_> {
     /// `ToastManager` with the `AdvancementToast` and the `RecipeToast`,
     /// one at a time.
     pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch) {
+        if !self.settings.extras.recipe_book_enabled {
+            self.adv.toasts.retain(|toast| !toast.is_recipe());
+        }
         let multiplier = f64::from(self.settings.notification_display_time);
         let Some(t) = self.adv.toasts.front_mut() else {
             return;

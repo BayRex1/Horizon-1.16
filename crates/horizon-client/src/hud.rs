@@ -434,6 +434,7 @@ impl HudAtlas {
         }
         if full {
             images.extend(atlas_sprites(root, &images));
+            images.extend(crate::aei_textures::images()?);
         }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
         if let Some(edition) = images

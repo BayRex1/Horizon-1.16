@@ -32,7 +32,7 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{aei as aei_host, chat, game, hud, log as mod_log, storage},
 };
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
@@ -86,6 +86,13 @@ pub enum Output {
     OpenScreen { owner: usize },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
     CloseScreen { owner: usize },
+    /// Retained AEI registration changed; fetch the running mods' registrations.
+    AeiChanged,
+    /// A bounded request to the native recipe browser.
+    AeiShow {
+        kind: crate::aei::Lookup,
+        value: String,
+    },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -153,6 +160,8 @@ struct State {
     out: Vec<Output>,
     panel: Option<Panel>,
     ui: UiState,
+    aei: Option<crate::aei::Plugin>,
+    aei_registered: bool,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -290,6 +299,8 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             ui: UiState::default(),
+            aei: None,
+            aei_registered: false,
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -367,6 +378,7 @@ impl Mods {
         let entry = &mut self.entries[i];
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
+        run.store.data_mut().aei_registered = false;
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
@@ -473,6 +485,14 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref())
             .flat_map(|r| r.hooks.commands.iter().map(String::as_str))
+    }
+
+    /// The running mods' retained AEI registrations. Stopped/unloaded mods
+    /// cannot leave categories, shortcuts or recipes behind.
+    pub fn aei_plugins(&self) -> impl Iterator<Item = &crate::aei::Plugin> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.run.as_ref()?.store.data().aei.as_ref())
     }
 
     /// The running mods' HUD panels.
@@ -754,4 +774,105 @@ fn storage_key_ok(key: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
     chars_ok && key != "." && key != ".."
+}
+
+impl aei_host::Host for State {
+    fn register(&mut self, plugin: aei_host::Plugin) -> Result<(), String> {
+        if self.aei_registered {
+            return Err("AEI may be registered once per hook call".into());
+        }
+        let plugin = native_aei_plugin(plugin);
+        crate::aei::validate(&self.id, &plugin)?;
+        self.aei_registered = true;
+        self.aei = Some(plugin);
+        self.out.push(Output::AeiChanged);
+        Ok(())
+    }
+    fn show(&mut self, kind: aei_host::Lookup, value: String) -> Result<(), String> {
+        if !crate::aei::identifier(&value) {
+            return Err("AEI expects a namespaced item or category id".into());
+        }
+        if self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::AeiShow { .. }))
+            .count()
+            >= 8
+        {
+            return Err("Too many AEI requests in one call".into());
+        }
+        let kind = match kind {
+            aei_host::Lookup::Recipes => crate::aei::Lookup::Recipes,
+            aei_host::Lookup::Uses => crate::aei::Lookup::Uses,
+            aei_host::Lookup::Category => crate::aei::Lookup::Category,
+        };
+        self.out.push(Output::AeiShow { kind, value });
+        Ok(())
+    }
+}
+
+fn native_aei_plugin(plugin: aei_host::Plugin) -> crate::aei::Plugin {
+    use crate::aei as a;
+    a::Plugin {
+        categories: plugin
+            .categories
+            .into_iter()
+            .map(|c| a::Category {
+                id: c.id,
+                title: c.title,
+                icon: c.icon,
+                width: c.width,
+                height: c.height,
+            })
+            .collect(),
+        recipes: plugin
+            .recipes
+            .into_iter()
+            .map(|r| a::Recipe {
+                id: r.id,
+                category: r.category,
+                slots: r
+                    .slots
+                    .into_iter()
+                    .map(|s| a::Slot {
+                        x: s.x,
+                        y: s.y,
+                        role: match s.role {
+                            aei_host::Role::Input => a::Role::Input,
+                            aei_host::Role::Output => a::Role::Output,
+                            aei_host::Role::RenderOnly => a::Role::RenderOnly,
+                        },
+                        alternatives: s
+                            .alternatives
+                            .into_iter()
+                            .map(|s| a::Stack {
+                                item: s.item,
+                                count: s.count,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        catalysts: plugin
+            .catalysts
+            .into_iter()
+            .map(|c| a::Catalyst {
+                item: c.item,
+                categories: c.categories,
+            })
+            .collect(),
+        click_areas: plugin
+            .click_areas
+            .into_iter()
+            .map(|a| crate::aei::ClickArea {
+                screen: a.screen,
+                x: a.x,
+                y: a.y,
+                width: a.width,
+                height: a.height,
+                categories: a.categories,
+            })
+            .collect(),
+    }
 }

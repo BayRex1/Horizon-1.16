@@ -288,6 +288,20 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
+                self.aei_cycle_sync();
+                if arg(2)? == "up" && self.screen == Screen::Options {
+                    self.options_key_released(physical)?;
+                }
+                if matches!(arg(2)?, "down" | "tap")
+                    && horizon_client::keybinds::key_name(physical)
+                        .is_some_and(|input| self.aei_shortcut(input))
+                {
+                    if arg(2)? != "down" {
+                        self.physical_keys.remove(&physical);
+                        self.aei_cycle_sync();
+                    }
+                    return ok();
+                }
                 // The zoom extra sees the key as the keyboard hook does.
                 let action = arg(2)?;
                 self.extras_key(physical, action != "up", action == "repeat");
@@ -295,7 +309,9 @@ impl Game<'_> {
                     self.extras_key(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
-                let typing = matches!(self.screen, Screen::Chat | Screen::Options);
+                let typing = matches!(self.screen, Screen::Chat | Screen::Options)
+                    || self.aei_search_focused()
+                    || self.aei_modal();
                 let key = if typing && arg(2)? != "up" {
                     key
                 } else {
@@ -331,6 +347,10 @@ impl Game<'_> {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
                         self.physical_keys.remove(&physical);
+                        self.aei_cycle_sync();
+                        if self.screen == Screen::Options {
+                            self.options_key_released(physical)?;
+                        }
                         self.debug_key(physical, horizon_client::debug_keys::KeyAction::Release);
                     }
                     other => {
@@ -555,6 +575,9 @@ impl Game<'_> {
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
                     Screen::WorldOptions => self.world_options_text(Some(text)),
+                    Screen::Inventory | Screen::Creative if self.aei_search_focused() => {
+                        self.aei_search_text(text)
+                    }
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
@@ -599,6 +622,7 @@ impl Game<'_> {
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
+                    "aei" => Page::Aei,
                     "credits" => Page::Credits,
                     "horizon" => Page::Horizon,
                     "agent" => Page::Agent,

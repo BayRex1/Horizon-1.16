@@ -165,8 +165,14 @@ impl Game<'_> {
     }
     pub(super) fn options_key(&mut self, key: KeyCode, text: Option<&str>) -> Result<()> {
         let mut ui = std::mem::take(&mut self.ui.options);
+        ui.binding_modifiers = self.aei_modifiers();
         let events = ui.key(&mut self.settings, &self.gui.atlas, key, text);
         self.ui.options = ui;
+        self.handle_option_events(events)
+    }
+    pub(super) fn options_key_released(&mut self, key: KeyCode) -> Result<()> {
+        self.ui.options.binding_modifiers = self.aei_modifiers();
+        let events = self.ui.options.key_released(&mut self.settings, key);
         self.handle_option_events(events)
     }
     /// Ctrl+A/C/V/X in the options' search boxes; false when none has focus.
@@ -189,6 +195,7 @@ impl Game<'_> {
         self.ui.options.selected_key.is_some()
     }
     pub(super) fn options_bind_mouse(&mut self, button: MouseButton) -> Result<()> {
+        self.ui.options.binding_modifiers = self.aei_modifiers();
         let events = self.ui.options.bind_mouse(&mut self.settings, button);
         self.handle_option_events(events)
     }
@@ -199,6 +206,9 @@ impl Game<'_> {
                 Event::Changed => {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
+                    if !self.settings.extras.aei_enabled {
+                        self.aei_sync_visibility();
+                    }
                     self.sync_mods();
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();

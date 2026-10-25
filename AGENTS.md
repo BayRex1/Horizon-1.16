@@ -20,6 +20,11 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   with that agent's own "Generated with" line. Ludovic's agents use
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **English by default.** Use English for code, identifiers, comments, documentation and default UI text.
+  Keep translations in localization resources rather than language-specific code branches.
+- **AEI follows the JEI jar.** Before changing AEI visuals or behavior, inspect/decompile the pinned
+  local JEI jar and follow its implementation. See [docs/aei-reference.md](docs/aei-reference.md) for
+  the checksum, reference classes and workflow. Keep jars and decompiled source outside the public tree.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
@@ -117,6 +122,7 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 | Other entities | L: `entities.rs`, `projectiles.rs`, `arrows.rs`; G: `boats.rs`, `minecarts.rs`, `mounts.rs`, `armor_stands.rs`, `paintings.rs`, `frames.rs`, `fireworks.rs`, `tnt.rs`, `explosion.rs` |
 | Player actions | game.rs (`fn use_hand`, `fn use_item`, `fn attack`, `fn tick_mining`, `fn break_block`); G: `hand.rs`, `combat.rs`, `consume.rs`, `potions.rs`, `shield.rs`, `crossbow.rs`, `trident.rs`, `fishing.rs`; L: `motion.rs` + `motion/` (movement), `collisions.rs`, `items.rs`, `item_data.rs` |
 | Inventory and containers | L: `menu.rs` (`AbstractContainerMenu.clicked`), `container_screen.rs`, `containers.rs`, `creative.rs`, `crafting.rs`, `recipe_book*.rs`, `stations.rs`, `merchant.rs`; game.rs `fn menu_ops`, `fn click_inventory`; G: `stations.rs`, `trading.rs`, `recipe_book.rs`, `machines.rs` |
+| AEI item/recipe browser | G: `aei.rs`, `aei/{layout,search,index,integration}.rs`; L: `recipe_lookup.rs`, `aei_textures.rs`; SDK: `horizon-mod-sdk/wit/horizon.wit` (`aei`), runtime: `horizon-mods/src/aei.rs`; [API](docs/aei-api.md), `tools/aei_e2e.py` |
 | Commands | parse: L: `command/` (`args.rs`, `selector.rs`, `tree_*.rs`, `vanilla.rs`); run: G: `commands.rs` (dispatch) + `commands/*.rs` (`admin`, `execute`, `items`, `players`, `world_cmds`...); L: `scoreboard_cmd.rs`, `data_cmd.rs`, `nbt_path.rs`; G: `functions.rs`, `command_blocks.rs` |
 | UI screens | `Screen` enum in game.rs; L: `title.rs` + `title/`, `options_ui.rs`, `multiplayer.rs`, `pack_screen.rs`, `graphics_ui.rs`, `screen_draw.rs`, `ui.rs` (widgets), `hud.rs`, `hud_layout.rs`, `hud_overlays.rs`, `chat.rs`, `tab_list.rs`; G: `startup_menu.rs`, `screens.rs` (pause, death), `options.rs`, `lan_screen.rs`, `chat.rs`, `sign_edit.rs`, `books.rs` |
 | Multiplayer client | L: `net.rs` (network thread); G: `remote.rs` (`fn handle_packet`, `fn tick_remote`), `remote_*.rs` (mob data, objects, projectiles, vehicles, stations) |

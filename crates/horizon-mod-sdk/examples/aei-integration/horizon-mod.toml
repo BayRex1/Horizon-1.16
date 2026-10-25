@@ -1,0 +1,6 @@
+id = "aei_example"
+name = "AEI Integration Example"
+version = "0.1.0"
+api = "0.3"
+side = "client"
+capabilities = ["aei"]

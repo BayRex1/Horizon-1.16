@@ -447,6 +447,40 @@ impl Providers {
             floats: HashMap::new(),
         }
     }
+    /// Probability of a positive compost layer after the first layer. Evaluate
+    /// providers symbolically so a viewer never consumes the world's RNG.
+    pub fn positive_chance(&self, value: &Value) -> Option<f64> {
+        fn probability(value: &Value, table: &HashMap<String, Value>, depth: u8) -> Option<f64> {
+            if depth > 16 {
+                return None;
+            }
+            match value {
+                Value::Number(n) => Some(if n.as_f64()? > 0.0 { 1.0 } else { 0.0 }),
+                Value::String(id) => probability(table.get(id)?, table, depth + 1),
+                Value::Object(object) => match object.get("type")?.as_str()? {
+                    "minecraft:number_dispatcher" => {
+                        probability(object.get("default")?, table, depth + 1)
+                    }
+                    "minecraft:weighted_list" => {
+                        let mut total = 0.0;
+                        let mut positive = 0.0;
+                        for entry in object.get("distribution")?.as_array()? {
+                            let weight = entry.get("weight")?.as_f64()?;
+                            if weight < 0.0 {
+                                return None;
+                            }
+                            total += weight;
+                            positive += weight * probability(entry.get("data")?, table, depth + 1)?;
+                        }
+                        (total > 0.0).then_some(positive / total)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        probability(value, &self.ints, 0)
+    }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
         items
             .get(&stack.item)
@@ -644,5 +678,22 @@ mod tests {
             .sum();
         assert!((250..450).contains(&paid), "{paid}");
         assert!((0..100).all(|_| (1..=2).contains(&create_experience(1, 1.7, &mut random))));
+    }
+}
+
+#[cfg(test)]
+mod aei_provider_tests {
+    use super::*;
+    #[test]
+    fn compost_probability_uses_normal_layers_without_sampling_the_rng() {
+        let providers = Providers::empty();
+        let provider = serde_json::json!({"type":"minecraft:number_dispatcher","cases":[{"value":1}],"default":{"type":"minecraft:weighted_list","distribution":[{"data":1,"weight":30},{"data":0,"weight":70}]}});
+        assert_eq!(providers.positive_chance(&provider), Some(0.3));
+        assert_eq!(providers.positive_chance(&serde_json::json!(1)), Some(1.0));
+        assert_eq!(providers.positive_chance(&serde_json::json!(0)), Some(0.0));
+        assert_eq!(
+            providers.positive_chance(&serde_json::json!("missing:provider")),
+            None
+        );
     }
 }

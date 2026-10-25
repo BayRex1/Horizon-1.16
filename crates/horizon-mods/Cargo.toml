@@ -7,6 +7,7 @@ rust-version = "1.86"
 description = "Horizon's mod runtime: sandboxed WebAssembly components (docs/mods.md)"
 
 [dependencies]
+horizon-mod-sdk = { path = "../horizon-mod-sdk" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1.6"

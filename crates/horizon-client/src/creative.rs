@@ -318,6 +318,13 @@ impl Creative {
     pub fn search_items(&self) -> &[ItemStack] {
         &self.search_items
     }
+    /// Prepared tooltip lines for every creative stack, including component variants.
+    pub fn search_tooltips(&self) -> impl Iterator<Item = (&str, &[String])> {
+        self.search_items
+            .iter()
+            .zip(&self.search_index)
+            .map(|(stack, entry)| (stack.item.as_ref(), entry.lines.as_slice()))
+    }
     /// Indices into `search_items` that CreativeModeInventoryScreen.refreshSearchResults
     /// shows for `term`: the whole tab when empty, the tag tree after `#`, else
     /// the name tree, both over vanilla's suffix arrays (substring matches,

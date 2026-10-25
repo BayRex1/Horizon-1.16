@@ -262,6 +262,8 @@ impl Game<'_> {
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {
+        let plugins = self.mods.mods.aei_plugins().cloned().collect();
+        self.aei_replace_plugins(plugins);
         let mut names = self.mods.mods.commands().peekable();
         self.mods.tree = names
             .peek()
@@ -364,6 +366,15 @@ impl Game<'_> {
     fn show_mod_output(&mut self) {
         for output in self.mods.mods.drain() {
             let line = match output {
+                Output::AeiChanged => {
+                    let plugins = self.mods.mods.aei_plugins().cloned().collect();
+                    self.aei_replace_plugins(plugins);
+                    continue;
+                }
+                Output::AeiShow { kind, value } => {
+                    self.aei_apply_request(kind, &value);
+                    continue;
+                }
                 Output::Chat { name, text } => {
                     let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
                     line.push(Text::literal(text));

@@ -12,8 +12,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 | Part | Where | State |
 |---|---|---|
-| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, ui; tick, frame, chat and command hooks |
-| SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, ui, aei; manifest APIs 0.1–0.3; tick, frame, chat and command hooks |
+| SDK for mod authors | `crates/horizon-mod-sdk` | WIT 0.1, manifest APIs 0.1–0.3 |
 | Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / check`, and the registry's CI (`registry build / review / list`) |
@@ -85,6 +85,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
+| `aei` | `aei` (manifest API 0.3) | register native recipe categories, recipes, catalysts and container click areas; request recipe, usage or category lookups ([API guide](aei-api.md)) |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
 | `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
 
@@ -101,6 +102,19 @@ it (logged), and two mods cannot share a name (the first one loaded keeps it).
 The chat box colours and Tab-completes a mod's commands like vanilla's, for
 every player whatever their permission level, and takes any text after the
 name (the mod reads it as `args`; API 0.1 has no way to declare argument types).
+
+### Native AEI integrations
+
+Manifest `api = "0.3"` adds the opt-in `aei` capability. The SDK exposes typed
+`horizon_mod_sdk::aei` records and `register` / `show` functions. The host retains
+the registration, renders it natively and removes it when the mod stops or reloads.
+Older manifest APIs and the existing WIT 0.1 interfaces keep working; the new WIT
+import is additive and does not change the events ABI.
+
+See [the AEI API guide](aei-api.md) and the runnable
+[`aei-integration` example](../crates/horizon-mod-sdk/examples/aei-integration).
+These are native equivalents of JEI's category, recipe, catalyst and GUI handler
+registration concepts. Java JEI plugins and `.jar` files do not execute in Horizon.
 
 ### Planned interfaces
 

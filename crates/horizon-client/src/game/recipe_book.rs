@@ -15,6 +15,7 @@ use horizon_client::{
         self as screen, ButtonView, Call, Drawn, GhostView, ItemCall, OverlayRecipe, OverlayView,
         Screen as Layout, Search, TabView,
     },
+    recipe_lookup::RecipeLookup,
     text::{Style, Text},
     ui::EditBox,
 };
@@ -64,6 +65,8 @@ struct View {
 #[derive(Default)]
 pub(super) struct RecipeUi {
     book: Option<Book>,
+    /// AEI's all-recipes result/usage index; built lazily with the recipe book.
+    lookup: Option<RecipeLookup>,
     tab: Option<Tab>,
     search: Option<EditBox>,
     page: usize,
@@ -110,7 +113,10 @@ fn sprite(name: &str) -> String {
 impl Game<'_> {
     /// The book the open screen has, if any.
     fn active_book(&self) -> Option<BookType> {
-        if self.screen != Screen::Inventory || self.station.is_some() {
+        if !self.settings.extras.recipe_book_enabled
+            || self.screen != Screen::Inventory
+            || self.station.is_some()
+        {
             return None;
         }
         if self.mount_active() {
@@ -201,7 +207,7 @@ impl Game<'_> {
     /// unlocked: its crafting station and result join the toast still
     /// queued or shown, or a new one.
     pub(super) fn recipe_toast(&mut self, recipes: &[String]) {
-        if recipes.is_empty() || self.adv.quiet {
+        if !self.settings.extras.recipe_book_enabled || recipes.is_empty() || self.adv.quiet {
             return;
         }
         self.ensure_book();
@@ -338,7 +344,7 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
-    fn ensure_book(&mut self) {
+    pub(super) fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
             let mut book = Book::build(self.res.recipes(), self.res.items());
             book.set_display_ids(&self.res.stations().recipe_index);
@@ -351,6 +357,44 @@ impl Game<'_> {
             search.text_color = u32::MAX;
             self.recipe_ui.search = Some(search);
         }
+    }
+    pub(super) fn aei_all_recipe_entries(&mut self) -> Vec<Entry> {
+        self.ensure_book();
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map(|book| book.entries.clone())
+            .unwrap_or_default()
+    }
+    /// The loaded recipe displays that make or use `item`, including recipes
+    /// the player has not unlocked in the vanilla recipe book.
+    pub(super) fn aei_recipe_entries(&mut self, item: &str, uses: bool) -> Vec<Entry> {
+        self.ensure_book();
+        if self.recipe_ui.lookup.is_none()
+            && let Some(book) = self.recipe_ui.book.as_ref()
+        {
+            self.recipe_ui.lookup = Some(RecipeLookup::build(book));
+        }
+        let indices = self
+            .recipe_ui
+            .lookup
+            .as_ref()
+            .map(|lookup| {
+                if uses {
+                    lookup.uses_of(item)
+                } else {
+                    lookup.recipes_for(item)
+                }
+                .to_vec()
+            })
+            .unwrap_or_default();
+        let Some(book) = self.recipe_ui.book.as_ref() else {
+            return Vec::new();
+        };
+        indices
+            .into_iter()
+            .filter_map(|index| book.entries.get(index).cloned())
+            .collect()
     }
     /// Rebuilds the tab and button lists when anything they depend on changed.
     fn refresh_book_view(&mut self, book_type: BookType) {

@@ -2,9 +2,11 @@
 
 Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, an FPS counter, a
 keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
-inventory sorting. **Every one is off by default**: a fresh
-install looks and behaves exactly like vanilla 26.3, and turning an extra off
-again restores vanilla's behaviour completely.
+inventory sorting. **These optional extras are off by default**; turning them off
+restores vanilla's behaviour. The AEI item browser starts enabled and visible in inventories;
+**Ctrl+R** hides or shows it, and remembers that choice between sessions.
+**Horizon Settings → AEI Settings** has its master switch, an independent switch
+for the vanilla recipe book, and remappable shortcuts. See [AEI settings](aei-api.md#settings-and-shortcuts).
 
 ## Where they live
 
@@ -36,9 +38,8 @@ extras stay out of the way of other input and options work.
 the folder. Unknown or broken lines fall back to the defaults.
 
 The zoom key is a Horizon setting stored in that file (`zoomKey:key.keyboard.z`)
-and bound on the Extras page, not in vanilla's Key Binds screen: Horizon has no
-Horizon category in Controls, and adding one would put a non-vanilla mapping into
-`options.txt`.
+and bound on the Extras page. AEI shortcuts also appear in their own category in
+Controls, but remain in `horizon-extras.txt`; they never add mappings to `options.txt`.
 
 ## The extras
 

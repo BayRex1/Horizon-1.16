@@ -76,6 +76,95 @@ mute a test run's stream in the mixer: PipeWire remembers the mute for every
 later `horizon-client`. The launcher starts the game as "Horizon" for that
 reason.
 
+### AEI item and recipe browser
+
+AEI is visible by default in survival, creative and adventure inventories and containers.
+In spectator, **E** opens a read-only inventory browser; item actions remain disabled. **Ctrl+R**
+hides or shows it, including while its search is focused. Visibility is remembered
+between containers and game sessions. The first use of Ctrl+R shows a one-time
+blue Minecraft system toast explaining how to bring AEI back; this hint is
+remembered too. Its default text is in English.
+Press **R** over an item to see its recipes, or **U** to see its uses. These contextual
+shortcuts are remappable under Controls and do not unhide AEI.
+
+The catalogue follows JEI 19's default layout: up to 9 columns and 16 rows of
+18-pixel cells, page navigation above, search below, aligned six GUI pixels from
+the right edge. The crafting-table button next to search opens every loaded
+recipe category, including mod categories; clicking a recipe category title also
+opens the complete browser while keeping that category selected. Search matches localized
+item names and identifiers; right-click the field to clear it. Left-click an
+item for recipes, right-click for uses. The catalogue stays visible beside the
+recipe window. Category tabs cover all twelve native JEI categories and loaded mod categories;
+the arrows and mouse wheel change pages. **Page Up/Down** changes recipe pages;
+**Shift + Page Up/Down** changes categories. Navigation wraps at both ends, and
+buttons with only one page/category are disabled. A lookup with no matching
+recipes or uses leaves the current screen and history unchanged. Ingredients cycle through accepted
+variants and support the same clicks and R/U shortcuts. **Escape** closes the
+recipe view immediately and clears its history, returning to the inventory or
+container. **Backspace** returns to the previous recipe, and does nothing when
+there is no previous recipe. In a focused search field, Backspace edits the query;
+Escape still closes an open recipe view. In the inventory, Escape closes the
+inventory without hiding AEI.
+
+Hold **Shift** to pause ingredient cycling. With the cursor over a recipe,
+**Left/Right arrow** selects the previous/next alternative; the mouse wheel also
+steps while paused. Linked inputs and outputs move together. Releasing Shift
+resumes the remaining cycle interval. These three controls are remappable in AEI Settings.
+
+Inside a workstation, AEI puts categories supported by that station first. Within
+those categories, recipes whose inputs are available in your inventory and the
+station's input slots come first, followed by recipes with fewer missing input
+slots. The catalogue also prioritizes those results. Counts and alternative
+ingredients share the available stock; items cannot be counted twice. Changing
+inventory contents refreshes the ordering. Ordinary inventories and unrelated
+containers keep the normal catalogue order. This ordering does not hide recipes
+or recursively assume you have crafted intermediate materials.
+
+The search field supports selection, cursor movement, Ctrl+A (select all),
+Ctrl+C (copy), Ctrl+X (cut), Ctrl+V (paste), and Ctrl+Backspace/Delete (delete a
+word). macOS uses Cmd for clipboard shortcuts. Right-click clears the query.
+
+| Prefix | Search field | Example |
+| --- | --- | --- |
+| none | Item name or identifier | `iron ingot` |
+| `@` | Mod display name or namespace | `@minecraft` |
+| `#` | Tooltip text, including prepared creative variants | `#sharpness` |
+| `$` | Loaded item tags, the native equivalent of ore-dictionary groups | `$minecraft:logs` |
+| `%` | Creative category name or identifier | `%"Building Blocks"` |
+
+Spaces and `&&` mean AND; `|` means OR. AND binds more tightly than OR, and
+parentheses group expressions. Quotes keep spaces and operators inside one
+term. Queries are case-insensitive. Examples:
+
+```text
+@minecraft && $logs
+#"attack damage" && %combat
+(@minecraft | @example) && (iron | gold)
+%"Building Blocks" && (stone | wood)
+```
+
+A malformed query turns the field red; hover it for the syntax error. Mod,
+tag and tab filters use the content actually loaded by Horizon, including mod
+namespace aliases. Search metadata is cached and refreshed when resources,
+language or advanced-tooltip settings change.
+
+The UI is rendered in Rust, using JEI `19.27.0.340`'s `IngredientListOverlay`,
+`IngredientGridWithNavigation`, `RecipesGui`, `CraftingGridHelper` and
+`AbstractCookingCategory` as layout references. The pinned jar and source workflow are recorded in
+[AEI reference notes](aei-reference.md). No JEI jar is needed at runtime.
+Recipe coverage includes crafting, stonecutting, smelting, blasting, smoking,
+campfire cooking, smithing, composting, fuel, brewing, anvil and grindstone.
+The displays use Horizon's loaded data and native workstation rules; mod categories
+use the native [AEI SDK API](aei-api.md).
+The **+** button fills a compatible open crafting grid or workstation; **Shift+click**
+moves the maximum amount. Hover a disabled button for missing items and red input
+highlights. The output is taken manually. See [recipe transfer](aei-api.md#recipe-transfer).
+Bookmarks are not implemented.
+
+AEI's master switch, the vanilla recipe book switch and all AEI shortcuts are in
+**Horizon Settings → AEI Settings**. The shortcuts also appear in **Controls → Key Binds → AEI**;
+see [AEI settings](aei-api.md#settings-and-shortcuts) for defaults and persistence.
+
 ### Agent control (`horizon-ctl` and MCP)
 
 AI agents and scripts play Horizon through `horizon-ctl`, a command line that

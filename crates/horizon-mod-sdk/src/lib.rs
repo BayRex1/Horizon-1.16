@@ -21,7 +21,7 @@
 //! ```
 //!
 //! Every interface but `log` is a capability: list the ones the mod uses in
-//! `horizon-mod.toml` (`game-read`, `chat`, `hud`, `storage`, `ui`).
+//! `horizon-mod.toml` (`game-read`, `chat`, `hud`, `storage`, `ui`, `aei`).
 //!
 //! Widgets (capability `ui`): a mod shows a screen it owns with
 //! [`ui::open_screen`] and a page in Options > Mods with
@@ -38,7 +38,7 @@ wit_bindgen::generate!({
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
-pub use horizon::mods::{chat, game, hud, log, storage, ui};
+pub use horizon::mods::{aei, chat, game, hud, log, storage, ui};
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.
@@ -172,4 +172,29 @@ macro_rules! export_mod {
             );
         };
     };
+}
+
+impl aei::Plugin {
+    /// An empty AEI registration. Fill the lists, then call [`aei::register`].
+    pub fn new() -> Self {
+        Self {
+            categories: Vec::new(),
+            recipes: Vec::new(),
+            catalysts: Vec::new(),
+            click_areas: Vec::new(),
+        }
+    }
+}
+impl Default for aei::Plugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl aei::Stack {
+    pub fn new(item: &str, count: u32) -> Self {
+        Self {
+            item: item.into(),
+            count,
+        }
+    }
 }

@@ -877,6 +877,8 @@ pub enum Page {
     Horizon,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
+    /// Native item and recipe browser settings and shortcuts.
+    Aei,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -888,6 +890,7 @@ enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
+    ResetAeiKeys,
     /// Controller binds: wait for a button, reset one, reset all.
     PadKey(&'static str),
     ResetPadKey(&'static str),
@@ -984,6 +987,7 @@ pub struct OptionsUi {
     pub(crate) scrollbar_drag_y: Option<f32>,
     /// Key Binds: the mapping waiting for a key.
     pub selected_key: Option<&'static str>,
+    pub binding_modifiers: crate::aei_keybinds::Modifiers,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -1021,6 +1025,7 @@ impl Default for OptionsUi {
             slider_value: None,
             scrollbar_drag_y: None,
             selected_key: None,
+            binding_modifiers: Default::default(),
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -1091,12 +1096,43 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         Page::Extras => {
             "Optional additions, all off by default: the game stays vanilla until you turn one on."
         }
+        Page::Aei => "Configure AEI, the vanilla recipe book and recipe browsing shortcuts.",
         Page::Agent => "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
         Page::Mods => {
             "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on."
         }
         _ => return None,
     })
+}
+fn binding<'a>(s: &'a Settings, name: &str) -> &'a str {
+    if crate::aei_keybinds::definition(name).is_some() {
+        s.extras.aei_keys.get(name)
+    } else {
+        s.keys.get(name)
+    }
+}
+fn binding_default(name: &str) -> &'static str {
+    crate::aei_keybinds::definition(name).map_or_else(|| KeyBinds::default_of(name), |m| m.3)
+}
+fn binding_label(name: &str) -> Text {
+    crate::aei_keybinds::definition(name).map_or_else(|| tr(name), |m| Text::literal(m.2))
+}
+fn binding_conflicts(s: &Settings, name: &str) -> Vec<&'static str> {
+    let key = binding(s, name);
+    if key == "key.keyboard.unknown" {
+        return Vec::new();
+    }
+    MAPPINGS
+        .iter()
+        .map(|m| m.0)
+        .chain(crate::aei_keybinds::MAPPINGS.iter().map(|m| m.1))
+        .filter(|other| {
+            *other != name
+                && binding(s, other) == key
+                && (binding(s, name) != binding_default(name)
+                    || binding(s, other) != binding_default(other))
+        })
+        .collect()
 }
 /// Rows of an OptionsList: (big?, options) or a header.
 enum Row {
@@ -1189,13 +1225,14 @@ impl OptionsUi {
             Page::Extras => "Horizon Extras",
             Page::Credits => "credits_and_attribution.screen.title",
             Page::Horizon => "Horizon Settings",
+            Page::Aei => "AEI Settings",
             Page::Agent => "AI Agent",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
         (width / 2.0).floor()
             + match self.page() {
-                Page::KeyBinds | Page::PadBinds => 178.0,
+                Page::KeyBinds | Page::PadBinds | Page::Aei => 178.0,
                 Page::Language => 118.0,
                 _ => 163.0,
             }
@@ -1303,9 +1340,10 @@ impl OptionsUi {
                         Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
                     ),
                     Row::Buttons(
-                        open("Extras...", Page::Extras),
-                        Some(open("Mods...", Page::Mods)),
+                        open("AEI Settings...", Page::Aei),
+                        Some(open("Extras...", Page::Extras)),
                     ),
+                    Row::Buttons(open("Mods...", Page::Mods), None),
                     // No AI hides the AI Agent page and everything AI.
                     if s.extras.no_ai {
                         Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
@@ -1640,7 +1678,7 @@ impl OptionsUi {
                 top = 0.0;
                 bottom = 0.0;
             }
-            Page::KeyBinds => {
+            Page::KeyBinds | Page::Aei => {
                 top = 38.0;
                 out.push(Widget {
                     x: 0.0,
@@ -1654,33 +1692,71 @@ impl OptionsUi {
                     },
                     list: false,
                 });
-                let mut mappings: Vec<(&str, &str)> =
-                    MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
-                let query = self.settings_search.value.to_lowercase();
-                mappings.retain(|(name, _)| {
-                    query.is_empty() || lang::get(name).to_lowercase().contains(&query)
+                let mut mappings: Vec<(&str, &str)> = MAPPINGS
+                    .iter()
+                    .filter(|_| page != Page::Aei)
+                    .map(|(n, _, c)| (*n, *c))
+                    .chain(crate::aei_keybinds::MAPPINGS.iter().map(|m| (m.1, "aei")))
+                    .collect();
+                let query = if page == Page::Aei {
+                    String::new()
+                } else {
+                    self.settings_search.value.to_lowercase()
+                };
+                mappings.retain(|(name, category)| {
+                    query.is_empty()
+                        || binding_label(name).plain().to_lowercase().contains(&query)
+                        || (*category == "aei" && "aei".contains(&query))
                 });
                 mappings.sort_by(|a, b| {
                     let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
                     let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
                     ca.cmp(&cb)
-                        .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
+                        .then_with(|| binding_label(a.0).plain().cmp(&binding_label(b.0).plain()))
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
+                if page == Page::Aei {
+                    for item in [crate::extras::Item::Aei, crate::extras::Item::RecipeBook] {
+                        let mut widget = self.extra_button(s, item);
+                        widget.x = row_left + 2.0;
+                        widget.y = y;
+                        widget.w = 338.0;
+                        out.push(widget);
+                        y += 24.0;
+                    }
+                    out.push(Widget {
+                        x: row_left + 2.0,
+                        y: y + 3.0,
+                        w: 340.0,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: Text::literal(
+                                "Click a shortcut, then press a key or combination.",
+                            ),
+                            color: rgba(170, 170, 170, 255),
+                            centered: false,
+                        },
+                        list: false,
+                    });
+                    y += 20.0;
+                }
                 let mut last_category = "";
                 for (name, category) in mappings {
                     if category != last_category {
                         last_category = category;
-                        let label =
+                        let label = (if category == "aei" {
+                            Text::literal("AEI")
+                        } else {
                             Text::translate(&format!("key.category.minecraft.{category}"), &[])
-                                .with_style(&Style {
-                                    bold: Some(true),
-                                    underlined: Some(true),
-                                    ..Style::default()
-                                });
+                        })
+                        .with_style(&Style {
+                            bold: Some(true),
+                            underlined: Some(true),
+                            ..Style::default()
+                        });
                         out.push(Widget {
                             x: 0.0,
                             y: y + 7.0,
@@ -1701,15 +1777,19 @@ impl OptionsUi {
                         w: 200.0,
                         h: 9.0,
                         kind: WKind::Text {
-                            text: tr(name),
+                            text: binding_label(name),
                             color: u32::MAX,
                             centered: false,
                         },
                         list: false,
                     });
-                    let key = s.keys.get(name).to_owned();
-                    let mut message = keybinds::display_name(&key);
-                    let conflicts = s.keys.conflicts(name);
+                    let key = binding(s, name);
+                    let mut message = if crate::aei_keybinds::definition(name).is_some() {
+                        crate::aei_keybinds::display(key)
+                    } else {
+                        keybinds::display_name(key)
+                    };
+                    let conflicts = binding_conflicts(s, name);
                     if !conflicts.is_empty() {
                         message = Text::literal("[ ")
                             .append(message.with_color(text::WHITE))
@@ -1727,9 +1807,16 @@ impl OptionsUi {
                             .with_color(text::YELLOW);
                     }
                     let reset_x = scrollbar_x - 50.0 - 10.0;
-                    let change_x = reset_x - 5.0 - 75.0;
-                    let name_static = MAPPINGS.iter().find(|m| m.0 == name).map_or("", |m| m.0);
-                    out.push(button(change_x, y, 75.0, message, Act::Key(name_static)));
+                    let change_width = if category == "aei" { 120.0 } else { 75.0 };
+                    let change_x = reset_x - 5.0 - change_width;
+                    let name_static = name;
+                    out.push(button(
+                        change_x,
+                        y,
+                        change_width,
+                        message,
+                        Act::Key(name_static),
+                    ));
                     if !conflicts.is_empty() {
                         out.push(Widget {
                             x: change_x - 6.0,
@@ -1751,7 +1838,7 @@ impl OptionsUi {
                         tr("controls.reset"),
                         Act::ResetKey(name_static),
                     );
-                    out.push(if s.keys.is_default(name) {
+                    out.push(if binding(s, name) == binding_default(name) {
                         inactive(reset)
                     } else {
                         reset
@@ -1765,7 +1852,11 @@ impl OptionsUi {
                     h - 27.0,
                     150.0,
                     tr("controls.resetAll"),
-                    Act::ResetKeys,
+                    if page == Page::Aei {
+                        Act::ResetAeiKeys
+                    } else {
+                        Act::ResetKeys
+                    },
                 ));
                 out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
             }
@@ -2188,11 +2279,11 @@ impl OptionsUi {
                 WKind::Button { label, active, act } => {
                     ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
                     if hover && let Act::Key(name) = act {
-                        let conflicts = s.keys.conflicts(name);
+                        let conflicts = binding_conflicts(s, name);
                         if !conflicts.is_empty() {
                             let names = conflicts
                                 .iter()
-                                .map(|c| lang::get(c))
+                                .map(|c| binding_label(c).plain())
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             let full = Text::translate(
@@ -2494,11 +2585,19 @@ impl OptionsUi {
                         }
                         Act::Key(name) => self.selected_key = Some(name),
                         Act::ResetKey(name) => {
-                            s.keys.set(name, KeyBinds::default_of(name));
+                            let value = binding_default(name);
+                            if !s.extras.set_key(name, value.to_owned()) {
+                                s.keys.set(name, value);
+                            }
                             events.push(Event::Changed);
                         }
                         Act::ResetKeys => {
                             s.keys.reset_all();
+                            s.extras.aei_keys = Default::default();
+                            events.push(Event::Changed);
+                        }
+                        Act::ResetAeiKeys => {
+                            s.extras.aei_keys = Default::default();
                             events.push(Event::Changed);
                         }
                         Act::PadKey(action) => self.selected_pad_action = Some(action),
@@ -2704,6 +2803,12 @@ impl OptionsUi {
         let Some(name) = self.selected_key.take() else {
             return Vec::new();
         };
+        let value =
+            if crate::aei_keybinds::definition(name).is_some() && value != "key.keyboard.unknown" {
+                self.binding_modifiers.chord(&value)
+            } else {
+                value
+            };
         if !s.extras.set_key(name, value.clone()) {
             s.keys.set(name, &value);
         }
@@ -2716,6 +2821,31 @@ impl OptionsUi {
         button: winit::event::MouseButton,
     ) -> Vec<Event> {
         self.bind_key(s, keybinds::mouse_name(button))
+    }
+    /// A modifier pressed alone binds on release; pressing another key first records a chord.
+    pub fn key_released(&mut self, s: &mut Settings, key: winit::keyboard::KeyCode) -> Vec<Event> {
+        use winit::keyboard::KeyCode as K;
+        if self
+            .selected_key
+            .is_some_and(|name| crate::aei_keybinds::definition(name).is_some())
+            && matches!(
+                key,
+                K::ControlLeft
+                    | K::ControlRight
+                    | K::ShiftLeft
+                    | K::ShiftRight
+                    | K::AltLeft
+                    | K::AltRight
+                    | K::SuperLeft
+                    | K::SuperRight
+            )
+        {
+            let value = keybinds::key_name(key)
+                .unwrap_or("key.keyboard.unknown")
+                .to_owned();
+            return self.bind_key(s, value);
+        }
+        Vec::new()
     }
     /// Keys while the options are open. Returns events; `handled` false lets
     /// Escape fall through.
@@ -2758,6 +2888,23 @@ impl OptionsUi {
             return vec![Event::Changed];
         }
         if self.selected_key.is_some() {
+            if self
+                .selected_key
+                .is_some_and(|name| crate::aei_keybinds::definition(name).is_some())
+                && matches!(
+                    key,
+                    K::ControlLeft
+                        | K::ControlRight
+                        | K::ShiftLeft
+                        | K::ShiftRight
+                        | K::AltLeft
+                        | K::AltRight
+                        | K::SuperLeft
+                        | K::SuperRight
+                )
+            {
+                return Vec::new();
+            }
             // KeyBindsScreen.keyPressed: Escape unbinds.
             let value = if key == K::Escape {
                 "key.keyboard.unknown".to_owned()
@@ -2799,6 +2946,95 @@ impl OptionsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aei_modifier_only_bindings_commit_on_release_without_overwriting_chords() {
+        use winit::keyboard::KeyCode;
+        let mut settings = Settings::default();
+        let mut ui = OptionsUi {
+            selected_key: Some("horizon.aei.pauseCycle"),
+            ..Default::default()
+        };
+        assert_eq!(ui.key_released(&mut settings, KeyCode::ShiftLeft).len(), 1);
+        assert_eq!(
+            binding(&settings, "horizon.aei.pauseCycle"),
+            "key.keyboard.left.shift"
+        );
+        ui.selected_key = Some("horizon.aei.pauseCycle");
+        ui.binding_modifiers.control = true;
+        ui.bind_key(&mut settings, "key.keyboard.space".into());
+        ui.binding_modifiers.control = false;
+        assert!(
+            ui.key_released(&mut settings, KeyCode::ControlLeft)
+                .is_empty()
+        );
+        assert_eq!(
+            binding(&settings, "horizon.aei.pauseCycle"),
+            "ctrl+key.keyboard.space"
+        );
+    }
+
+    #[test]
+    fn aei_settings_and_controls_share_rebindings_and_reset_without_touching_vanilla() {
+        let mut settings = Settings::default();
+        let vanilla = settings.keys.clone();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Aei);
+        let (widgets, _, _, _) = ui.layout(&settings, 640.0, 360.0);
+        assert_eq!(
+            widgets
+                .iter()
+                .filter(|widget| matches!(
+                    &widget.kind,
+                    WKind::Button {
+                        act: Act::Key(_),
+                        ..
+                    }
+                ))
+                .count(),
+            crate::aei_keybinds::MAPPINGS.len()
+        );
+        assert!(widgets.iter().any(|widget| matches!(
+            &widget.kind,
+            WKind::Button {
+                act: Act::Extra(crate::extras::Item::RecipeBook),
+                ..
+            }
+        )));
+        ui.selected_key = Some("horizon.aei.toggle");
+        ui.binding_modifiers = crate::aei_keybinds::Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        ui.bind_key(&mut settings, "key.keyboard.k".into());
+        assert_eq!(
+            binding(&settings, "horizon.aei.toggle"),
+            "ctrl+key.keyboard.k"
+        );
+        settings.extras.aei_enabled = false;
+        settings.extras.recipe_book_enabled = false;
+        let restored = crate::extras::Extras::parse(&settings.extras.serialize());
+        assert_eq!(restored, settings.extras);
+        assert!(restored.aei_visible);
+        assert!(!restored.aei_enabled && !restored.recipe_book_enabled);
+        ui.show(Page::KeyBinds);
+        ui.settings_search.set_value("AEI");
+        let (widgets, _, _, _) = ui.layout(&settings, 640.0, 360.0);
+        assert_eq!(
+            widgets
+                .iter()
+                .filter(|widget| matches!(
+                    &widget.kind,
+                    WKind::Button {
+                        act: Act::Key(_),
+                        ..
+                    }
+                ))
+                .count(),
+            crate::aei_keybinds::MAPPINGS.len()
+        );
+        assert_eq!(settings.keys, vanilla);
+    }
 
     #[test]
     fn accessibility_sliders_and_toggles_survive_options_round_trip() {
@@ -4068,6 +4304,7 @@ mod tests {
                 Page::Graphics,
                 Page::GraphicsAdvanced,
                 Page::Controller,
+                Page::Aei,
                 Page::Extras,
                 Page::Mods,
                 Page::Agent,

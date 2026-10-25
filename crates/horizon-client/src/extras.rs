@@ -1,8 +1,9 @@
 //! Horizon's optional extras (zoom, FPS counter, keystroke overlay): their
 //! settings, kept in `horizon-extras.txt` next to `options.txt` so that file
 //! stays exactly vanilla's, and the logic behind them. Every extra is off by
-//! default; see `docs/extras.md`. Horizon's own switches outside the Extras page
-//! (No AI, Agent Control, Discord Rich Presence) are kept here too.
+//! default, except AEI, which starts visible; see `docs/extras.md`. Horizon's
+//! own switches outside the Extras page (No AI, Agent Control, Discord Rich
+//! Presence) are kept here too.
 use std::{collections::VecDeque, fs, path::Path};
 
 pub const FILE: &str = "horizon-extras.txt";
@@ -108,6 +109,14 @@ pub struct Extras {
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
     pub sort_key: String,
+    /// AEI starts visible; Ctrl+R changes this independently of the open container.
+    pub aei_visible: bool,
+    /// Master switch, independent of the visibility shortcut.
+    pub aei_enabled: bool,
+    pub recipe_book_enabled: bool,
+    pub aei_keys: crate::aei_keybinds::Bindings,
+    /// The hide/show shortcut has already shown its one-time explanation.
+    pub aei_toggle_hint_seen: bool,
     /// No AI: every AI feature hidden and off (`horizon_core::no_ai`; the launcher writes it too).
     pub no_ai: bool,
     /// Agents may control the game the player starts: it opens its control socket for
@@ -143,6 +152,11 @@ impl Default for Extras {
             mouse_tweaks_wheel: true,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
+            aei_visible: true,
+            aei_enabled: true,
+            recipe_book_enabled: true,
+            aei_keys: Default::default(),
+            aei_toggle_hint_seen: false,
             no_ai: false,
             agent_control: false,
             discord_presence: true,
@@ -212,6 +226,13 @@ impl Extras {
                 horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
                 "agentControl" => e.agent_control = flag(e.agent_control),
                 "discordPresence" => e.discord_presence = flag(e.discord_presence),
+                "aeiEnabled" => e.aei_enabled = flag(e.aei_enabled),
+                "recipeBookEnabled" => e.recipe_book_enabled = flag(e.recipe_book_enabled),
+                key if crate::aei_keybinds::definition(key).is_some() => {
+                    e.aei_keys.set(key, value);
+                }
+                "aeiVisible" => e.aei_visible = flag(e.aei_visible),
+                "aeiToggleHintSeen" => e.aei_toggle_hint_seen = flag(e.aei_toggle_hint_seen),
                 _ => {}
             }
         }
@@ -219,7 +240,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\naeiVisible:{}\naeiToggleHintSeen:{}\naeiEnabled:{}\nrecipeBookEnabled:{}\ndiscordPresence:{}\n{}",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -251,12 +272,26 @@ impl Extras {
             horizon_core::no_ai::KEY,
             bool_text(self.no_ai),
             bool_text(self.agent_control),
+            bool_text(self.aei_visible),
+            bool_text(self.aei_toggle_hint_seen),
+            bool_text(self.aei_enabled),
+            bool_text(self.recipe_book_enabled),
             bool_text(self.discord_presence),
+            self.aei_keys.serialize(),
         )
     }
+    /// Toggle the browser, returning whether its shortcut hint should appear.
+    pub fn toggle_aei(&mut self) -> bool {
+        self.aei_visible = !self.aei_visible;
+        !std::mem::replace(&mut self.aei_toggle_hint_seen, true)
+    }
+
     /// Binds the extra key `name` (`ZOOM_KEY`, `SORT_KEY`); false for
     /// another name (a vanilla mapping).
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
+        if self.aei_keys.set(name, &value) {
+            return true;
+        }
         match name {
             ZOOM_KEY => self.zoom_key = value,
             SORT_KEY => self.sort_key = value,
@@ -474,6 +509,8 @@ pub enum Item {
     AgentControl,
     /// On the Horizon Settings page.
     DiscordPresence,
+    Aei,
+    RecipeBook,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -555,6 +592,8 @@ impl Item {
             Item::NoAi => "No AI",
             Item::AgentControl => "Agent Control",
             Item::DiscordPresence => "Discord Rich Presence",
+            Item::Aei => "AEI",
+            Item::RecipeBook => "Vanilla recipe book",
         }
     }
     /// The switch this setting belongs to: it does nothing while that is off.
@@ -568,7 +607,7 @@ impl Item {
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
             Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
-            | AutoReconnect | NoAi | AgentControl | DiscordPresence => {
+            | AutoReconnect | NoAi | AgentControl | DiscordPresence | Aei | RecipeBook => {
                 return None;
             }
         })
@@ -618,6 +657,10 @@ impl Item {
             Item::DiscordPresence => {
                 "Shows Playing Horizon on your Discord profile while Discord runs: menus, single player or multiplayer, the dimension and the time played. Never a world's name or a server's address."
             }
+            Item::Aei => "Enable AEI's item list, recipe viewer and shortcuts.",
+            Item::RecipeBook => {
+                "Show Minecraft's recipe book button, panel and recipe notifications."
+            }
             Item::AgentControl => {
                 "Your own AI agent can play this game through horizon-ctl or an MCP client, on this computer only."
             }
@@ -654,6 +697,8 @@ impl Item {
             Item::NoAi => e.no_ai,
             Item::AgentControl => e.agent_control,
             Item::DiscordPresence => e.discord_presence,
+            Item::Aei => e.aei_enabled,
+            Item::RecipeBook => e.recipe_book_enabled,
             _ => return None,
         })
     }
@@ -712,6 +757,8 @@ impl Item {
             Item::NoAi => e.no_ai = !e.no_ai,
             Item::AgentControl => e.agent_control = !e.agent_control,
             Item::DiscordPresence => e.discord_presence = !e.discord_presence,
+            Item::Aei => e.aei_enabled = !e.aei_enabled,
+            Item::RecipeBook => e.recipe_book_enabled = !e.recipe_book_enabled,
             Item::ZoomKey | Item::SortKey => {}
         }
     }
@@ -730,7 +777,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn everything_is_off_by_default_and_round_trips() {
+    fn optional_extras_start_off_and_settings_round_trip() {
         let d = Extras::default();
         assert!(!d.fullbright && !d.dynamic_lights);
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
@@ -763,6 +810,23 @@ mod tests {
         e.sort_key = "key.keyboard.r".into();
         e.discord_presence = false;
         assert_eq!(Extras::parse(&e.serialize()), e);
+    }
+
+    #[test]
+    fn aei_defaults_visible_and_remembers_its_toggle_and_hint() {
+        // An existing configuration without AEI keys gains the visible browser.
+        let mut e = Extras::parse("zoom:false\n");
+        assert!(e.aei_visible);
+        assert!(!e.aei_toggle_hint_seen);
+        assert!(e.toggle_aei());
+        assert!(!e.aei_visible);
+        let mut reloaded = Extras::parse(&e.serialize());
+        assert!(!reloaded.aei_visible);
+        assert!(reloaded.aei_toggle_hint_seen);
+        assert!(!reloaded.toggle_aei());
+        assert!(reloaded.aei_visible);
+        assert!(!reloaded.toggle_aei());
+        assert!(!reloaded.aei_visible);
     }
 
     #[test]

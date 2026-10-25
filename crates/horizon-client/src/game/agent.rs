@@ -667,6 +667,9 @@ impl Game<'_> {
         if self.title.is_some() {
             v["menu"] = self.title_value();
         }
+        if self.aei_container_screen() && self.title.is_none() {
+            v["aei"] = self.aei_screen_value();
+        }
         if self.screen == Screen::Inventory && self.title.is_none() {
             let mut slots = Vec::new();
             for i in self.slots() {
@@ -682,6 +685,7 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            v["aei"] = self.aei_screen_value();
             // The recipe book's buttons (GUI pixels): the book button, then
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
@@ -1580,6 +1584,9 @@ impl Game<'_> {
                     .trim_start_matches('/');
                 if text.is_empty() {
                     return Err("command TEXT".into());
+                }
+                if self.mod_command(text) {
+                    return ok(json!({"ok":true}));
                 }
                 let command = format!("/{text}");
                 // Single player's console is its server thread's.

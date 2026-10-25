@@ -178,7 +178,7 @@ pub struct Settings {
     pub horizon: crate::graphics::Graphics,
     /// Controller settings (`horizon-controller.txt`, Horizon's own).
     pub controller: crate::gamepad::PadSettings,
-    /// Horizon's optional extras (`horizon-extras.txt`), all off by default.
+    /// Horizon's extras (`horizon-extras.txt`); AEI starts visible.
     pub extras: crate::extras::Extras,
     /// The Horizon mods turned on (`horizon-mods.txt`), all off by default.
     pub mods: crate::mod_list::ModList,

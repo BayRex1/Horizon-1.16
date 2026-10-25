@@ -148,6 +148,7 @@ const PAGES: Ty = Ty::Enum(&[
     "extras",
     "horizon",
     "agent",
+    "aei",
 ]);
 
 /// `--confirm`, required by destructive commands: the player agreed.
