@@ -8,11 +8,12 @@ Every run uses fresh temporary game, launcher and XDG homes.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 import tempfile
 import time
+
+from tools import lab
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_CATEGORIES = {'minecraft:crafting','minecraft:stonecutting','minecraft:smelting',
@@ -23,11 +24,16 @@ NATIVE_CATEGORIES = {'minecraft:crafting','minecraft:stonecutting','minecraft:sm
 
 def run(args, mode, output):
     folder = Path(tempfile.mkdtemp(prefix=mode + '-', dir=output))
-    env = os.environ.copy()
+    home = folder / 'home'
+    env = lab.game_env(
+        HORIZON_HOME=home,
+        HORIZON_LAUNCHER_HOME=folder / 'launcher',
+        XDG_DATA_HOME=folder / 'xdg-data',
+        XDG_CONFIG_HOME=folder / 'xdg-config',
+        HORIZON_TELEMETRY_URL='off',
+    )
     for key in ('HORIZON_HOME', 'HORIZON_LAUNCHER_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME'):
-        env[key] = tempfile.mkdtemp(prefix=key.lower() + '-', dir=folder)
-    env.update(HORIZON_LAUNCHER_NO_SELF_UPDATE='1', HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
-    home = Path(env['HORIZON_HOME'])
+        Path(env[key]).mkdir(parents=True, exist_ok=True)
     (home / 'options.txt').write_text('guiScale:2\n')
     socket = folder / 'ctl.sock'
     command = [str(args.bin_dir / 'horizon-client'), '--resources', str(args.resources),
