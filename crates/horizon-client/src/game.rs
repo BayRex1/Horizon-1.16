@@ -1168,6 +1168,8 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// The crafting table the 3x3 grid belongs to (`CraftingMenu.access`).
+    craft_table: Option<[i32; 3]>,
     /// A quick craft drag over inventory slots: (button, game slots so far).
     inv_drag: Option<(i32, Vec<usize>)>,
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
@@ -2916,6 +2918,7 @@ impl Game<'_> {
         }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
+            self.craft_table = Some(pos);
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
             self.container_opener_event(key, true);
@@ -5428,6 +5431,7 @@ impl Game<'_> {
             }
         }
         self.craft_size = 2;
+        self.craft_table = None;
         if let Some(key) = self.container.take() {
             self.container_opener_event(key, false);
             self.post_block_game_event(
@@ -7882,8 +7886,12 @@ impl Game<'_> {
             (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
         ((3..=21).contains(&height) && top_ok).then_some((left, width, height))
     }
-    /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal.
+    /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal,
+    /// only in the Overworld and the Nether (`inPortalDimension`).
     fn try_light_portal(&mut self, at: [i32; 3]) -> Result<bool> {
+        if !matches!(self.dim, Dim::Overworld | Dim::Nether) {
+            return Ok(false);
+        }
         for x_axis in [true, false] {
             if let Some((origin, width, height)) = self.portal_shape(at, x_axis) {
                 let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
@@ -11712,7 +11720,11 @@ impl<'a> Game<'a> {
         let inventory = vec![None; 36];
         let now = Instant::now();
         let look = options.look;
-        let particles = horizon_client::particles::ParticleEngine::new(&root, &gui.atlas.sprites);
+        let particles = horizon_client::particles::ParticleEngine::new(
+            &root,
+            &gui.atlas.sprites,
+            &gui.atlas.translucent,
+        );
         Ok(Game {
             res: res.clone(),
             rest_loader: None,
@@ -11749,6 +11761,7 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
+            craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
             inv_clicks: Default::default(),
@@ -12101,6 +12114,8 @@ enum PendingWorldEntry {
     Server {
         address: String,
         name: String,
+        /// A transfer's carried-over server cookies (`TransferState`).
+        cookies: Option<horizon_client::net::Cookies>,
     },
 }
 
@@ -12175,8 +12190,12 @@ impl Game<'_> {
             }) => {
                 self.open_world(&folder, name.as_deref(), seed, creative, create.as_deref())?;
             }
-            Some(PendingWorldEntry::Server { address, name }) => {
-                self.connect_server(&address, &name)?;
+            Some(PendingWorldEntry::Server {
+                address,
+                name,
+                cookies,
+            }) => {
+                self.connect_server_with_cookies(&address, &name, cookies)?;
             }
             None => {}
         }

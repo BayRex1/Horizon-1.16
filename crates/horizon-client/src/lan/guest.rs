@@ -404,6 +404,17 @@ impl Guest {
     pub fn eye_height(&self) -> f64 {
         if self.sneaking { 1.27 } else { 1.62 }
     }
+    /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
+    /// its block interaction range is 4.5, 5 in creative.
+    pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
+        let eye = [
+            self.position[0],
+            self.position[1] + self.eye_height(),
+            self.position[2],
+        ];
+        let range = if self.creative() { 5.0 } else { 4.5 };
+        within_block_range(eye, range + buffer, pos)
+    }
     /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
     /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
     /// 45 off hand.
@@ -521,6 +532,22 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(i32::from(mode)),
             ));
         }
+        // PotionContents: the potion by its `minecraft:potion` id.
+        if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
+            synced_id(
+                "minecraft:potion",
+                &horizon_world::datafix::dynamic::namespaced(potion),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::POTION_CONTENTS,
+                horizon_protocol::item::Component::Potion {
+                    potion: Some(id),
+                    color: None,
+                    rest: Vec::new(),
+                },
+            ));
+        }
         // A loaded crossbow's ammunition.
         if !d.charged.is_empty() {
             let charged = d
@@ -568,10 +595,40 @@ fn network_stack(
     Some(stack)
 }
 
+/// `Player.isWithinBlockInteractionRange`: `eye` closer than `range` to the
+/// box of the block at `pos` (`AABB.distanceToSqr`).
+pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
+    (0..3)
+        .map(|k| {
+            let lo = f64::from(pos[k]);
+            (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
+        })
+        .sum::<f64>()
+        < range * range
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon_protocol::item::{Component, component};
+
+    #[test]
+    fn potions_go_as_potion_registry_ids() {
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:potion", "minecraft:swiftness") => Some(14),
+            _ => None,
+        };
+        let potion = ItemStack::new("minecraft:splash_potion", 1).with_potion("swiftness");
+        let stack = stack_to_network(|_| 7, synced_id, &Some(potion)).unwrap();
+        assert_eq!(
+            stack.component(component::POTION_CONTENTS),
+            Some(&Component::Potion {
+                potion: Some(14),
+                color: None,
+                rest: Vec::new(),
+            })
+        );
+    }
 
     #[test]
     fn trims_go_as_synced_registry_references() {
