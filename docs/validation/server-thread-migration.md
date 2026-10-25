@@ -151,7 +151,7 @@ completion runs below record their status after the follow-up fixes.
 No failing case is skipped, expectation relaxed, or existing timeout increased to
 hide these results. At that stage the PR stayed draft with these coverage blockers.
 
-## Completion against current main (2026-10-25)
+## Combined validation before the gameplay split (2026-10-25)
 
 Merged `main` at `bd591f985` and resolved the overlapping motion, projectile and
 test-driver changes. The shared projectile inertia helper retains main's custom
@@ -252,5 +252,46 @@ checks and documentation tests. Its parity stage selected **118 affected
 harnesses**; 117 had current content-matched passing records and the remaining
 harness passed during the gate. No failed or skipped harness remained.
 The gate reported the existing scope warning (35 files, 584 lines of code);
-this cohesive migration exceeds the suggested 500-line size. The PR is ready
-for review, with the printed readiness block in its description.
+the combined migration exceeded the suggested 500-line size. At that point
+the combined PR was marked ready for review. The split below supersedes that
+readiness status and the earlier description block.
+
+
+## Gameplay fixes split into independent PRs (2026-10-25)
+
+At the user's request, the three gameplay fixes were removed from this PR's
+net diff and opened independently against `main`:
+
+- [#1903](https://github.com/ludovic111/horizon/pull/1903): `/clear` off-hand
+  handling and vanilla inventory-slot order, including the added command-oracle
+  cases. The independent branch matches **843/843 command/callback records**.
+- [#1904](https://github.com/ludovic111/horizon/pull/1904): connected-client
+  fireball motion and authoritative corrections, including the acceleration
+  regression and a focused `remote_fireball` integration harness. The new
+  harness fails on unchanged main in both hosting modes and passes with only
+  that gameplay fix applied.
+- [#1905](https://github.com/ludovic111/horizon/pull/1905): per-player sculk
+  emission and history, including a focused `server_player_sculk` integration
+  harness. Without the fix, both server-thread players and the in-frame guest
+  fail while the in-frame host passes. With only this fix, **4/4 cases** pass,
+  along with **435/435 vanilla scenarios matching on every tick**.
+
+Each independent branch passes the quick source self-check using
+`lab.game_env()` scratch homes (287 Python tests; 1241 Rust tests for clear
+and sculk, 1242 for fireballs; formatting, Clippy and doc tests). Their broader
+parity selections are listed for CI, rather than claimed as standalone full
+parity passes.
+
+The migration was merged with main at `8177a6f45` before removing the fixes.
+Its test migration, fixture synchronization, isolated environments, control
+inspection and font-oracle corrections remain. The **119/119 full LAN pass**
+and full affected-parity readiness result above belong to the combined
+pre-extraction snapshot `cc9410b6`; they do not establish that the migration
+alone passes after the gameplay code has been removed. This PR stays draft
+until the three dependencies land and its full integration suite is rerun.
+
+The post-split migration quick source gate passes **1241 Rust tests and 290
+Python tests**, formatting, Clippy, public-tree and doc checks. It lists **70
+affected parity harnesses** for CI. Full post-split integration validation is
+pending the three gameplay dependencies; no replacement full-suite pass is
+claimed here.

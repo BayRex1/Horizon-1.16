@@ -64,12 +64,6 @@ struct Steps {
     in_water: bool,
 }
 #[derive(Default)]
-pub(super) struct PlayerEvents {
-    steps: Option<Steps>,
-    last_health: Option<f32>,
-}
-
-#[derive(Default)]
 pub(super) struct SculkState {
     /// The player's warning level toward a warden.
     pub tracker: WardenSpawnTracker,
@@ -92,15 +86,6 @@ pub(super) struct SculkState {
 }
 
 impl SculkState {
-    pub(super) fn swap_player(&mut self, other: &mut PlayerEvents) {
-        let steps = self.steps.remove(&Who::Player);
-        if let Some(guest) = other.steps.take() {
-            self.steps.insert(Who::Player, guest);
-        }
-        other.steps = steps;
-        std::mem::swap(&mut self.last_health, &mut other.last_health);
-    }
-
     /// Exchange the level-held parts (its sculk block entities and the
     /// chunks scanned for them) with another level's (game/levels.rs).
     pub(super) fn swap_level(&mut self, other: &mut Self) {
@@ -1506,12 +1491,6 @@ impl Game<'_> {
     /// Events from entities moving, getting hurt and dying, derived from what
     /// changed this tick.
     fn tick_entity_events(&mut self) {
-        self.tick_player_sculk_events();
-        self.tick_mob_sculk_events();
-    }
-
-    /// Entity.move emits on the authoritative server too, for each ServerPlayer.
-    pub(super) fn tick_player_sculk_events(&mut self) {
         // The player.
         let player = self.player.as_ref().map(|p| {
             (
@@ -1539,9 +1518,7 @@ impl Game<'_> {
             }
             self.sculk.last_health = Some(health);
         }
-    }
-
-    fn tick_mob_sculk_events(&mut self) {
+        // Mobs.
         let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>)> = self
             .mobs
             .iter()
