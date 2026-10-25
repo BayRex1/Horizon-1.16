@@ -773,10 +773,12 @@ def level_ticking(host, guest, out):
     has its own id across the levels."""
     gx, gy, gz = pos_of(guest)
     hx, hy, hz = pos_of(host)
-    # A floor of its own beside the host (earlier checks may have broken the open one there).
-    bx, by, bz = int(hx // 1), int(hy // 1), int(hz // 1)
-    host('command', command=f'fill {bx - 4} {by - 1} {bz - 4} {bx + 4} {by - 1} {bz - 2} minecraft:stone')
-    host('command', command=f'fill {bx - 4} {by} {bz - 4} {bx + 4} {by + 4} {bz - 2} minecraft:air')
+    # Clear the whole walking area in each level: normal pig AI can leave a
+    # narrow landing strip during the fall/observation window.
+    for game, x, y, z in ((host, hx, hy, hz), (guest, gx, gy, gz)):
+        bx, by, bz = int(x // 1), int(y // 1), int(z // 1)
+        game('command', command=f'fill {bx - 12} {by - 1} {bz - 12} {bx + 12} {by - 1} {bz + 12} minecraft:stone')
+        game('command', command=f'fill {bx - 12} {by} {bz - 12} {bx + 12} {by + 6} {bz + 12} minecraft:air')
     guest('command', command=f'summon minecraft:pig {gx + 2.5:.2f} {gy + 3:.2f} {gz:.2f}')
     guest('command', command=f'summon minecraft:armor_stand {gx - 2.5:.2f} {gy + 3:.2f} {gz:.2f}')
     host('command', command=f'summon minecraft:pig {hx + 2.5:.2f} {hy + 3:.2f} {hz - 3:.2f}')
@@ -788,6 +790,7 @@ def level_ticking(host, guest, out):
             mobs = [m for m in g.raw('mobs', 8)['near'] if m['kind'] == 'minecraft:pig']
             stands = [o for o in g('status')['objects'] if o['kind'] == 'minecraft:armor_stand']
             seen[name] = {'pigs': [(m['id'], round(m['pos'][1], 2)) for m in mobs],
+                          'pig_positions': [m['pos'] for m in mobs],
                           'stands': [(o['id'], round(o['position'][1], 2)) for o in stands], 'floor': floor}
     finally:
         guest('command', command='kill @e[type=!minecraft:player,distance=..8]')
