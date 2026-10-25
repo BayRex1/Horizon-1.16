@@ -129,9 +129,10 @@ the integration build arguments to name each binary (so traced selection include
 focused Python tests passed. Dependency extraction from the real Cargo dep-info
 confirmed both game files are selected.
 
-## Confirmed limitations
+## Limitations recorded before the follow-up fixes
 
-This migration is not ready to merge while required coverage remains red.
+These were the remaining blockers when this ledger was first written; the
+completion runs below record their status after the follow-up fixes.
 
 - Server-player footsteps do not reach sculk sensors. `tick_entity_events` in
   `game/sculk.rs` emits player motion events from `Game.player`; the integrated
@@ -148,4 +149,108 @@ This migration is not ready to merge while required coverage remains red.
   reruns; that evidence does not establish a gameplay defect or a full-suite pass.
 
 No failing case is skipped, expectation relaxed, or existing timeout increased to
-hide these results. The PR stays draft and reports the remaining coverage blockers.
+hide these results. At that stage the PR stayed draft with these coverage blockers.
+
+## Completion against current main (2026-10-25)
+
+Merged `main` at `bd591f985` and resolved the overlapping motion, projectile and
+test-driver changes. The shared projectile inertia helper retains main's custom
+acceleration power, with a regression test. Integration environments now call
+`lab.game_env`; the friends entry point delegates its actual launches to that
+isolated driver. The dedicated-server process keeps one environment argument,
+and the control-tool connection test uses a scratch home rather than reading
+the player's No AI setting.
+
+The first complete run after that merge executed **119 cases: 114 passed,
+five failed, zero skipped**. Failures were `swings`, `flight`, `boats`,
+`minecarts` and `keepinv`. All the additional regression cases from main passed.
+Command completion, deflection, fishing and both sensor/dispenser input roles
+also passed in that full sequence.
+
+The failures exposed fixture setup, input cadence and an off-hand clearing bug:
+
+- Aim at the hoe target's top face, observe that target, then send a normal
+  mouse click. Keep the exact one-swing/farmland assertion. A subsequent full
+  repeat passed flight and both vehicle checks but still failed the hoe case;
+  it was stopped after identifying the root cause rather than counted as green.
+  The earlier explosion case leaves an off-hand shield, and `/clear` omitted
+  that slot. Vanilla correctly blocks hoe use with that shield. Follow
+  `Inventory.clearOrCountMatchingItems`, `getContainerSize`, `getItem` and its
+  equipment-slot mapping: clear off-hand items and visit armor feet to head.
+  New oracle cases cover off-hand counting, partial/full removal and limited
+  armor-slot ordering. The explosion-then-swings sequence passes after this fix.
+- Keep the original double-jump key sequence and seven-tick flight rule; run
+  this tick-sensitive case at four ticks per second so IPC scheduling on a busy
+  machine cannot stretch the input past that window. Restore 20 TPS afterward.
+- Deliver the original ten vehicle punches and two-tick waits over one control
+  connection. Separate process launches had stretched the gaps to ten ticks,
+  letting the vehicle's damage decay before the next hit.
+- Protect inactive inventory-test players after the low-health totem case,
+  assert that the active player is alive before the intended death, and provide
+  a full floor under scattered death drops. A targeted retry with the old small
+  platform lost a helmet over its edge; both players' exact drop/retention
+  assertions passed with the larger floor.
+
+Targeted server-thread reruns passed all five corrected cases, plus totems,
+fishing and both sensor input roles. Friends passed plain LAN, direct invites,
+the local relay and ended-invite rejection. The six focused parity harnesses
+passed: `command_exec`, `dispenser`, `sculk`, `dedicated_server`,
+`server_entities` and `server_player_damage`.
+
+The normal-runner full repeat also exposed an XP observation race: the guest
+had already collected all 21 points before the two-tick in-flight snapshot
+(`seen=0`, with the correct XP gain and no remaining orbs). Freeze spawning,
+step two world ticks, observe the tracked orbs, then unfreeze for the original
+pickup assertions. The targeted check passed with three visible orbs and
+exactly 21 points; the full runner restarted with that correction.
+
+That repeat passed the former XP, swings, flight, boat and minecart failures,
+but its level-ticking subcase found a wandering pig on a neighboring block at
+Y=66 instead of the landing floor at Y=65. The armor stand landed correctly.
+This subcase measures falling and simultaneous level ticking. Each level now
+gets a full clear landing/walking area, retaining the pigs' normal AI. A
+hazard-then-levels rerun confirmed that both pigs and armor stands land at the
+expected heights with distinct entity IDs across levels.
+
+The broader parity invocation completed **116/117 runs passed**. The remaining
+`tab_list` comparison matched 998/1000 lists and all 400 skin images. Both
+list mismatches contained `Ⅻ`: the oracle's bitmap-only font setup used the
+missing glyph instead of vanilla's Unicode fallback. Load the full default font
+reference chain from the prepared assets with vanilla's provider definitions
+and default option filters. Prefetch the fake skin lookups together before the
+unchanged one-second observation window, retaining deliberately pending cases.
+A fresh rerun passed **1000/1000 lists, 3510 frames and 400/400 skin images**,
+with zero oracle errors. Fresh secure-chat and dimension-player parity reruns
+passed after the command fix as well. The extended command oracle matched all
+**843 command/callback records**.
+
+Rechecking the shared font helper passed eight of nine additional harnesses;
+`pack_screen` matched 2778/3000 cases with its old bitmap-only oracle. Its
+newline/control glyph metrics also require the Unicode fallback (the newline
+advance is 9 with the full font, 6 with the bitmap-only setup). Give this oracle
+the same full default font and prepared asset root. A fresh rerun matched
+**3000/3000 pack screens**, with zero oracle errors and unchanged comparisons.
+
+The source self-check passed **1237 Rust tests and 270 Python tests**, rustfmt,
+Clippy and doc tests. The private resource copy contains both pinned reports
+and a regular `facts.json`, as required by the resource-isolation regression.
+Prepared historical test worlds were copied into the ignored fixture cache
+where available; they are not player saves or committed resources.
+
+The final in-frame comparison passed **14/14 cases, zero skipped**: commands,
+deflection, both sensor roles, flight, swings, boats, minecarts, chest, prediction,
+signs, both dispenser roles and inventory retention. A separate in-frame XP
+comparison passed with three visible orbs and exactly 21 points. Friends and
+the dedicated-server harness passed through the normal parity runner.
+
+The final normal-runner server-thread LAN repeat passed **119/119 cases,
+zero skipped**, in 1940 seconds. This full sequence includes all earlier failure
+cases, both sensor/dispenser roles and the additional regressions from main.
+The final full `python3 tools/pr_ready.py` gate passed against merge base
+`bd591f985`: **1237 Rust tests, 270 Python tests**, rustfmt, Clippy, public-tree
+checks and documentation tests. Its parity stage selected **118 affected
+harnesses**; 117 had current content-matched passing records and the remaining
+harness passed during the gate. No failed or skipped harness remained.
+The gate reported the existing scope warning (35 files, 584 lines of code);
+this cohesive migration exceeds the suggested 500-line size. The PR is ready
+for review, with the printed readiness block in its description.
