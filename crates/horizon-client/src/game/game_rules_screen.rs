@@ -45,7 +45,7 @@ pub(super) struct RulesScreen {
     initial: GameRules,
     /// IntegerRuleEntry's boxes, by rule.
     numbers: Vec<(&'static str, EditBox)>,
-    scroll: f32,
+    scroll: ui::Scroll,
     /// ConfirmScreen "Game Rule Changes" in its place.
     confirm: bool,
 }
@@ -120,7 +120,7 @@ impl RulesScreen {
             values: rules.clone(),
             initial: rules.clone(),
             numbers,
-            scroll: 0.0,
+            scroll: ui::Scroll::default(),
             confirm: false,
         }
     }
@@ -161,7 +161,7 @@ impl RulesScreen {
     }
     /// Entry `i`'s top: 2 under the list's top, less the scroll.
     fn row_top(&self, i: usize) -> f32 {
-        HEADER + 2.0 - self.scroll.trunc() + ROW * i as f32
+        HEADER + 2.0 - self.scroll.amount.trunc() + ROW * i as f32
     }
     /// getEntryAtPosition: the row under the pointer, inside the list.
     fn hovered(&self, rows: usize, (x, y): (f32, f32), (w, h): (f32, f32)) -> Option<usize> {
@@ -213,8 +213,27 @@ impl RulesScreen {
     pub(super) fn wheel(&mut self, delta: f32, h: f32) {
         if !self.confirm {
             let max = Self::max_scroll(self.rows().len(), h);
-            self.scroll = (self.scroll - delta * ROW / 2.0).clamp(0.0, max);
+            self.scroll.amount = (self.scroll.amount - delta * ROW / 2.0).clamp(0.0, max);
         }
+    }
+    /// The list's span and content height, for its scroll bar.
+    fn scroll_area(&self, h: f32) -> (f32, f32, f32) {
+        (HEADER, h - FOOTER, ROW * self.rows().len() as f32 + 4.0)
+    }
+    /// The scroll bar's column (RuleList's `scrollBarX`).
+    fn bar_x(w: f32) -> f32 {
+        row_left(w) + ROW_WIDTH + 6.0 + 2.0
+    }
+    /// AbstractScrollArea.mouseDragged: the held scroll bar follows the pointer.
+    pub(super) fn drag(&mut self, y: f32, h: f32) {
+        if self.scroll.held() {
+            let (top, bottom, content) = self.scroll_area(h);
+            self.scroll.drag(y, top, bottom, content);
+        }
+    }
+    /// AbstractScrollArea.mouseReleased: lets go of the scroll bar.
+    pub(super) fn release(&mut self) {
+        self.scroll.release();
     }
     fn focused(&mut self) -> Option<(Option<&'static str>, &mut EditBox)> {
         if self.search.focused {
@@ -229,7 +248,7 @@ impl RulesScreen {
     /// number sets its rule when valid (IntegerRuleEntry's responder).
     fn edited(&mut self, rule: Option<&'static str>) {
         let Some(name) = rule else {
-            self.scroll = 0.0;
+            self.scroll.amount = 0.0;
             return;
         };
         let Some(r) = gamerules::rule(name) else {
@@ -277,6 +296,14 @@ impl RulesScreen {
                 Some(false) => self.confirm = false,
                 None => {}
             }
+            return None;
+        }
+        // AbstractScrollArea.updateScrolling: a press on the bar holds it.
+        let (top, bottom, content) = self.scroll_area(h);
+        if self
+            .scroll
+            .press(cursor, Self::bar_x(w), top, bottom, content)
+        {
             return None;
         }
         let [(dx, dy), (cx, cy)] = footer(w, h);
@@ -360,7 +387,10 @@ impl RulesScreen {
             return;
         }
         let rows = self.rows();
-        self.scroll = self.scroll.clamp(0.0, Self::max_scroll(rows.len(), h));
+        self.scroll.amount = self
+            .scroll
+            .amount
+            .clamp(0.0, Self::max_scroll(rows.len(), h));
         // RuleList: the in-world list background, its entries clipped to it,
         // then the separators and scrollbar.
         ui::list_background(batch, atlas, HEADER, h - FOOTER, true);
@@ -422,7 +452,7 @@ impl RulesScreen {
         batch.clip_since(first, 0.0, HEADER, w, h - FOOTER);
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
         let content = ROW * rows.len() as f32 + 4.0;
-        let bar_x = left + ROW_WIDTH + 6.0 + 2.0;
+        let bar_x = Self::bar_x(w);
         ui::scrollbar(
             batch,
             atlas,
@@ -430,7 +460,7 @@ impl RulesScreen {
             HEADER,
             h - FOOTER,
             content,
-            self.scroll.trunc(),
+            self.scroll.amount.trunc(),
         );
         // The header: the title centred over the search box.
         let title = Text::translate("editGamerule.title", &[]);
@@ -534,6 +564,36 @@ mod tests {
                 "chat", "drops", "misc", "mobs", "player", "spawning", "updates"
             ]
         );
+    }
+
+    #[test]
+    fn the_scroll_bar_can_be_held_dragged_and_let_go() {
+        let mut s = RulesScreen::new(&GameRules::default());
+        let (w, h) = (427.0, 240.0);
+        let (top, bottom, content) = s.scroll_area(h);
+        assert!(
+            content > bottom - top,
+            "the rules overflow a 240-high screen"
+        );
+        let bar = RulesScreen::bar_x(w);
+        // A press beside the bar doesn't hold it; one on it does.
+        assert!(
+            !s.scroll
+                .press((bar - 4.0, top + 5.0), bar, top, bottom, content)
+        );
+        assert!(
+            s.scroll
+                .press((bar + 3.0, top + 5.0), bar, top, bottom, content)
+        );
+        s.drag(top + 40.0, h);
+        assert!(s.scroll.amount > 0.0);
+        // Below the list jumps to the end.
+        s.drag(bottom + 10.0, h);
+        assert_eq!(s.scroll.amount, content - (bottom - top));
+        // Let go, the pointer moves the list no more.
+        s.release();
+        s.drag(top, h);
+        assert_eq!(s.scroll.amount, content - (bottom - top));
     }
 
     #[test]

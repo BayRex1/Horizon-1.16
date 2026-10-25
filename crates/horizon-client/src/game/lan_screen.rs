@@ -802,6 +802,25 @@ impl Game<'_> {
         }
     }
 
+    /// The Game Rules list's held scroll bar follows the pointer.
+    pub(super) fn world_options_drag(&mut self) {
+        let (y, h) = (self.cursor.1, self.gui_size().1);
+        if let Some(rules) = self
+            .world_options
+            .as_mut()
+            .filter(|o| o.view == View::GameRules)
+            .and_then(|o| o.rules.as_mut())
+        {
+            rules.drag(y, h);
+        }
+    }
+    /// A released left button lets go of the Game Rules list's scroll bar.
+    pub(super) fn world_options_release(&mut self) {
+        if let Some(rules) = self.world_options.as_mut().and_then(|o| o.rules.as_mut()) {
+            rules.release();
+        }
+    }
+
     pub(super) fn world_options_click(&mut self) {
         let Some(mut o) = self.world_options.take() else {
             return;

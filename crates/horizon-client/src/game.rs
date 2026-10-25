@@ -10980,6 +10980,13 @@ impl ApplicationHandler for Game<'_> {
                             let _ = b;
                             self.options_drag()?;
                         }
+                        // The lists' held scroll bars (AbstractScrollArea.mouseDragged).
+                        if self.screen == Screen::Stats {
+                            self.stats_drag();
+                        }
+                        if self.screen == Screen::WorldOptions {
+                            self.world_options_drag();
+                        }
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -11238,6 +11245,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
+                        Screen::WorldOptions if button == MouseButton::Left => {
+                            self.world_options_release()
+                        }
                         Screen::Friends if pressed && button == MouseButton::Left => {
                             self.friends_screen_click()
                         }
@@ -11261,6 +11271,7 @@ impl ApplicationHandler for Game<'_> {
                                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
                             self.stats_click(size);
                         }
+                        Screen::Stats if button == MouseButton::Left => self.stats_release(),
                         _ => {}
                     }
                 }

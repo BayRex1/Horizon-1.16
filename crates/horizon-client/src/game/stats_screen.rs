@@ -158,7 +158,7 @@ const COLUMNS: [(&str, &str); 6] = [
 #[derive(Default)]
 pub(super) struct StatsUi {
     tab: usize,
-    scroll: f32,
+    scroll: ui::Scroll,
     sort: Option<(usize, i32)>,
 }
 /// `MenuTabBar` geometry: three tabs over at most 400 pixels.
@@ -261,9 +261,9 @@ impl Game<'_> {
         let (row_h, rows) = self.stats_rows();
         let content = row_h * rows as f32 + 4.0;
         let max_scroll = (content - (bottom - top)).max(0.0);
-        self.stats_ui.scroll = self.stats_ui.scroll.clamp(0.0, max_scroll);
+        self.stats_ui.scroll.amount = self.stats_ui.scroll.amount.clamp(0.0, max_scroll);
         let left = ((w - 280.0) / 2.0).floor();
-        let scroll = self.stats_ui.scroll;
+        let scroll = self.stats_ui.scroll.amount;
         let row_y = |i: usize| top + 4.0 + i as f32 * row_h - scroll;
         let visible = |y: f32| y >= top && y + row_h <= bottom;
         match self.stats_ui.tab {
@@ -412,7 +412,7 @@ impl Game<'_> {
             top,
             bottom,
             content,
-            self.stats_ui.scroll,
+            self.stats_ui.scroll.amount,
         );
         self.draw_stats_footer(batch, w, h);
     }
@@ -441,7 +441,7 @@ impl Game<'_> {
                 && self.stats_ui.tab != i
             {
                 self.stats_ui.tab = i;
-                self.stats_ui.scroll = 0.0;
+                self.stats_ui.scroll.amount = 0.0;
                 self.audio
                     .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 return;
@@ -459,9 +459,19 @@ impl Game<'_> {
             self.screen = Screen::Paused;
             return;
         }
+        // AbstractScrollArea.updateScrolling: a press on the bar holds it.
+        let (top, bottom, content) = self.stats_scroll_area(h);
+        let bar_x = ((w - 280.0) / 2.0).floor() + 280.0 + 6.0;
+        if self
+            .stats_ui
+            .scroll
+            .press(self.cursor, bar_x, top, bottom, content)
+        {
+            return;
+        }
         if self.stats_ui.tab == 1 {
             let left = ((w - 280.0) / 2.0).floor();
-            let y = TAB_H + 4.0 - self.stats_ui.scroll;
+            let y = TAB_H + 4.0 - self.stats_ui.scroll.amount;
             for c in 0..COLUMNS.len() {
                 let x = left + 75.0 + 40.0 * c as f32 - 18.0;
                 if ui::hovered(self.cursor, x, y + 1.0, 18.0, 18.0) {
@@ -479,6 +489,24 @@ impl Game<'_> {
     }
     pub(super) fn stats_scroll(&mut self, amount: f32) {
         let (row_h, _) = self.stats_rows();
-        self.stats_ui.scroll -= amount * row_h / 2.0;
+        self.stats_ui.scroll.amount -= amount * row_h / 2.0;
+    }
+    /// The list's span and content height, for its scroll bar.
+    fn stats_scroll_area(&self, h: f32) -> (f32, f32, f32) {
+        let (row_h, rows) = self.stats_rows();
+        (TAB_H, h - FOOTER, row_h * rows as f32 + 4.0)
+    }
+    /// AbstractScrollArea.mouseDragged: the held scroll bar follows the pointer.
+    pub(super) fn stats_drag(&mut self) {
+        if self.stats_ui.scroll.held() {
+            let (top, bottom, content) = self.stats_scroll_area(self.gui_size().1);
+            self.stats_ui
+                .scroll
+                .drag(self.cursor.1, top, bottom, content);
+        }
+    }
+    /// AbstractScrollArea.mouseReleased: lets go of the scroll bar.
+    pub(super) fn stats_release(&mut self) {
+        self.stats_ui.scroll.release();
     }
 }
