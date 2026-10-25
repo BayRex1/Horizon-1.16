@@ -1,7 +1,7 @@
 <!-- Generated from crates/horizon-mod-sdk/wit/horizon.wit and the manifest's capabilities by crates/horizon-mods/tests/api_reference.rs; a test fails when this file is out of date. Update it with: HORIZON_WRITE_DOCS=1 cargo test -p horizon-mods --features pack --test api_reference -->
 # Mod API reference
 
-The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`, every interface, type, function and hook in it, and the capabilities a manifest may list. The guide is [mods.md](../mods.md); stability and versions: [stability.md](stability.md). Manifest `api` lines this game serves: `0.1`, `0.2`.
+The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`, every interface, type, function and hook in it, and the capabilities a manifest may list. The guide is [mods.md](../mods.md); stability and versions: [stability.md](stability.md). Manifest `api` lines this game serves: `0.1`, `0.2`, `0.3`.
 
 ## Capabilities
 
@@ -13,17 +13,18 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `storage` | [`storage`](#storage) | save its own settings to disk |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
+| `aei` | [`aei`](#aei) | add recipe categories and container shortcuts to AEI |
 
 ## World `horizon-mod`
 
-- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`, `aei`
 - Exports (what the mod provides): `events`
 
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`, `aei`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -204,6 +205,94 @@ What the game calls on a mod that shows widgets (capability `ui`): what the play
 | `select` | `func(id: u32, row: u32)` | A row of one of the mod's `list` widgets was picked: the widget's `id` and the row, on the screen or the settings page that showed it. |
 | `closed` | `func()` | The player left the mod's screen (Esc or Done); not for a screen the mod closed itself or one that went away with the mod. |
 | `settings-opened` | `func()` | The player opened the mod's settings page in Options > Mods: call `ui::set-settings` now to fill it with fresh widgets. |
+
+## `aei`
+
+Access: capability `aei`.
+
+Capability `aei` (manifest API 0.3): retained native recipe viewer integration. Registration is replaced atomically and removed when the mod stops.
+
+### record `stack`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `count` | `u32` |  |
+
+### enum `role`
+
+| Case | |
+| --- | --- |
+| `input` |  |
+| `output` |  |
+| `render-only` |  |
+
+### record `slot`
+
+| Field | Type | |
+| --- | --- | --- |
+| `role` | `role` |  |
+| `x` | `u32` | Pixels relative to the recipe's content area, before its four-pixel border. |
+| `y` | `u32` |  |
+| `alternatives` | `list<stack>` | Alternative item stacks, cycled by the viewer. |
+
+### record `category`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | Owned identifier, e.g. `my_mod:crusher`. |
+| `title` | `string` |  |
+| `icon` | `string` |  |
+| `width` | `u32` |  |
+| `height` | `u32` |  |
+
+### record `recipe`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `category` | `string` |  |
+| `slots` | `list<slot>` |  |
+
+### record `catalyst`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `categories` | `list<string>` |  |
+
+### record `click-area`
+
+| Field | Type | |
+| --- | --- | --- |
+| `screen` | `string` | Menu id (e.g. `minecraft:crafting`) or the open container's block id. |
+| `x` | `u32` | Pixels relative to the container panel's top-left corner. |
+| `y` | `u32` |  |
+| `width` | `u32` |  |
+| `height` | `u32` |  |
+| `categories` | `list<string>` |  |
+
+### record `plugin`
+
+| Field | Type | |
+| --- | --- | --- |
+| `categories` | `list<category>` |  |
+| `recipes` | `list<recipe>` |  |
+| `catalysts` | `list<catalyst>` |  |
+| `click-areas` | `list<click-area>` |  |
+
+### enum `lookup`
+
+| Case | |
+| --- | --- |
+| `recipes` |  |
+| `uses` |  |
+| `category` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `register` | `func(plugin: plugin) -> result<_, string>` | Categories and recipes must belong to the calling mod's namespace. References may target its own categories or native Minecraft categories. |
+| `show` | `func(kind: lookup, value: string) -> result<_, string>` | Request a native lookup. Empty lookups leave the current screen unchanged. `value` is an item id, or a category id for `category`. |
 
 ## `events`
 

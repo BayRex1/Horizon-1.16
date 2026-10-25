@@ -920,7 +920,10 @@ impl Game<'_> {
         if let Some(stack) = self.aei_hovered(batch) {
             let mut lines = self.stack_tooltip(&stack);
             if let Some(hint) = self.aei_cycle_hint(batch) {
-                lines.extend(hint);
+                lines.extend(
+                    hint.into_iter()
+                        .map(|(text, color)| (horizon_client::text::Text::literal(text), color)),
+                );
             }
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         } else if self

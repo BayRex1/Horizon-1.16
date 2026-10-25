@@ -50,7 +50,7 @@ impl Game<'_> {
                 tooltip: self
                     .stack_tooltip(&horizon_client::items::ItemStack::new(id, 1))
                     .into_iter()
-                    .map(|p| p.0)
+                    .map(|p| p.0.plain())
                     .collect(),
                 ..Default::default()
             };

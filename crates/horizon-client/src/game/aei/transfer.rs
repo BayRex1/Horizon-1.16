@@ -584,7 +584,7 @@ impl Game<'_> {
                         .map(|s| {
                             self.stack_tooltip(s)
                                 .first()
-                                .map(|(name, _)| name.clone())
+                                .map(|(name, _)| name.plain())
                                 .unwrap_or_else(|| self.pack.names.item(&s.item))
                         })
                         .collect::<Vec<_>>()
