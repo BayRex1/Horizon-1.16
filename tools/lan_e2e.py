@@ -331,7 +331,8 @@ class Game:
                                 cwd=self.work, env=self.d.env, capture_output=True, text=True,
                                 timeout=600)
         replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}')
+        ticks = [r['ticks'] for r in replies if 'ticks' in r]
+        print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}; ticks={ticks}')
         assert result.returncode == 0 and replies and not any('error' in r for r in replies), result.stdout
         return replies[-1]
 
@@ -2541,7 +2542,11 @@ def check_swings(host, guest, out):
     guest.wait(10)
     guest.raw('select', 'minecraft:wooden_hoe')
     before = guest('state')['swings']
-    guest.raw('interact', *soil)
+    guest.raw('look-at', soil[0] + 0.5, soil[1] + 1, soil[2] + 0.5)
+    guest.wait(1)
+    target = guest('state')['looking_at']['block']
+    assert target and target['pos'] == list(soil) and target['face'] == 'up', target
+    guest.raw('mouse', 'right', 'click')
     guest.wait(10)
     hoe = {'swings': guest('state')['swings'] - before, 'soil': host.raw('block', *soil)['block']}
     guest('command', command=f'setblock {soil[0]} {soil[1]} {soil[2]} minecraft:stone')
@@ -3154,6 +3159,9 @@ def check_flight(host, guest, out):
 
     players = [('guest', guest)] + ([('host', host)] if SERVER_THREAD else [])
     seen = {}
+    # The rule is seven simulation ticks, independent of wall time. A slow
+    # server clock leaves enough time to deliver the key events even on busy CI.
+    host('command', command='tick rate 4')
     try:
         for name, game in players:
             set_mode(game, 'creative')
@@ -3167,6 +3175,7 @@ def check_flight(host, guest, out):
                           'stayed': round(later['position'][1] - up['position'][1], 2),
                           'survival_flying': fell['flying']}
     finally:
+        host('command', command='tick rate 20')
         for _, game in players:
             game('command', command='gamemode survival')
     for name, s in seen.items():
@@ -3681,15 +3690,16 @@ def leave_vehicle(player, kind):
 
 def break_vehicle(player, vehicle_id, kind):
     """Hit it with fists until it breaks: VehicleEntity.tick takes 1 off its damage every tick."""
-    for _ in range(10):
-        here = [o for o in player('status')['objects'] if o['id'] == vehicle_id]
-        if not here:
-            return
-        vp = here[0]['position']
-        player.raw('look-at', f'{vp[0]:.2f}', f'{vp[1] + 0.3:.2f}', f'{vp[2]:.2f}')
-        player.raw('mouse', 'left', 'click')
-        player.wait(2)
-    raise AssertionError(f'ten hits left the {kind} in place')
+    here = [o for o in player('status')['objects'] if o['id'] == vehicle_id]
+    if not here:
+        return
+    vp = here[0]['position']
+    # Keep the original ten hits/two-tick spacing in one connection. Starting
+    # several ctl processes per hit lets the vehicle's damage decay between hits.
+    player.script([f'look-at {vp[0]:.2f} {vp[1] + 0.3:.2f} {vp[2]:.2f}',
+                   *[line for _ in range(10) for line in ('mouse left click', 'wait 2')]])
+    assert not any(o['id'] == vehicle_id for o in player('status')['objects']), \
+        f'ten hits left the {kind} in place'
 
 
 def check_boats(host, guest, out):
@@ -4690,6 +4700,12 @@ def check_keep_inventory(host, guest, out):
     neither; with it on, nothing drops and it respawns with both (#1284)."""
     hx, hy, hz = (int(v // 1) for v in pos_of(host))
     seen = {}
+    # Totem coverage leaves both players near one health. Protect the waiting
+    # player from residual fire/damage while the other player's death is tested.
+    for game in (host, guest):
+        game('command', command='gamemode creative')
+        game('command', command='effect clear @s')
+        game('command', command='effect give @s minecraft:instant_health 1 5 true')
     host('command', command=f'setworldspawn {hx} {hy} {hz}')
     host('command', command='gamerule respawn_radius 0')
     # Keep the inactive player alive and away from the death drops. Earlier
@@ -4707,8 +4723,10 @@ def check_keep_inventory(host, guest, out):
             for game, dz in ((host, -3), (guest, 3)):
                 # 14 blocks from the world spawn: nothing dropped is picked up on respawning.
                 x, z = hx + 14, hz + dz
-                host('command', command=f'fill {x - 2} {hy - 1} {z - 1} {x + 2} {hy - 1} {z + 1} minecraft:stone')
-                host('command', command=f'fill {x - 2} {hy} {z - 1} {x + 2} {hy + 2} {z + 1} minecraft:air')
+                # Death drops scatter several blocks before landing. Keep the
+                # entire observation area solid so they cannot fall off a ledge.
+                host('command', command=f'fill {x - 6} {hy - 1} {z - 6} {x + 6} {hy - 1} {z + 6} minecraft:stone')
+                host('command', command=f'fill {x - 6} {hy} {z - 6} {x + 6} {hy + 3} {z + 6} minecraft:air')
                 host('command', command='kill @e[type=minecraft:item]')
                 game('command', command='gamemode survival')
                 game('command', command='clear @s')
@@ -4716,8 +4734,10 @@ def check_keep_inventory(host, guest, out):
                 game('command', command='item replace entity @s armor.head with minecraft:iron_helmet')
                 game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5}')
                 game.wait(20)
+                assert game('state').get('screen') == 'playing', f'{game.name} died during setup'
                 game('command', command='kill @s')
                 game.wait(30)
+                assert game('state').get('screen') == 'dead', f'{game.name} did not die'
                 dropped = sorted((e['item']['item'], e['item']['count'])
                                  for e in game.raw('entities', 8, 'minecraft:item')['entities'])
                 game.shot(out, f'keepinv-{keep}')
@@ -4727,12 +4747,14 @@ def check_keep_inventory(host, guest, out):
                 seen[f'{game.name}-keep-{keep}'] = {
                     'dropped': dropped,
                     'kept': {item: server_count(game, item) for item in ('diamond', 'iron_helmet')}}
+                game('command', command='gamemode creative')
     finally:
         host('command', command='gamerule keep_inventory false')
         host('command', command='gamerule respawn_radius 10')
         host('command', command='kill @e[type=minecraft:item]')
         for game in (host, guest):
             game('command', command='clear @s')
+            game('command', command='gamemode survival')
         face_each_other(host, guest)
     for case, s in seen.items():
         want = ({'dropped': [], 'kept': {'diamond': 7, 'iron_helmet': 1}} if case.endswith('true') else
