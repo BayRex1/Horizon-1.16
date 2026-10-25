@@ -227,6 +227,8 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
+            Output::AeiChanged => "changed AEI registration".to_string(),
+            Output::AeiShow { .. } => "requested an AEI lookup".to_string(),
         });
     }
     match failed(&mods) {
