@@ -9,6 +9,10 @@ use horizon_client::{
     block_entity_anim::Ticker,
     chunk::{MIN_Y, SECTIONS},
     items::ItemStack,
+    mobs::{
+        Species,
+        render::{PROFESSIONS, VILLAGER_TYPES},
+    },
     widgets,
 };
 use horizon_core::geometry::Vec3;
@@ -470,6 +474,8 @@ impl Game<'_> {
                 "sprinting": self.keys.contains(&KeyCode::ControlLeft),
                 "health": p.health.health(),
                 "absorption": p.health.absorption(),
+                // The hurt animation's ticks left (the camera's hurt tilt).
+                "hurt_time": p.health.hurt_animation_time,
                 "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
@@ -594,10 +600,20 @@ impl Game<'_> {
             }
         };
         for m in self.mobs.iter().filter(|m| m.alive()) {
+            let mut v = json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time });
+            // VillagerData as this game knows it: on a client, what the
+            // server's synched data says.
+            if matches!(m.species(), Species::Villager | Species::ZombieVillager) {
+                v["villager"] = json!({
+                    "type": VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()],
+                    "profession": PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()],
+                    "level": m.extra.variant3,
+                });
+            }
             push(
                 [m.position.x, m.position.y, m.position.z],
                 m.kind.id.as_ref(),
-                json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time }),
+                v,
             );
         }
         for item in &self.dropped {

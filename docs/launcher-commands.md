@@ -53,7 +53,7 @@ Start the client.
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
-- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --in-frame
+- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
 
@@ -143,7 +143,7 @@ MCP: `settings`.
 
 ## `horizon-launcher game-args`
 
-Show or set the extra arguments the game starts with (for example --in-frame); quotes group a word with spaces in it.
+Show or set the extra arguments the game starts with (for example --server-thread); quotes group a word with spaces in it.
 
     horizon-launcher game-args [ARGS]
 
@@ -321,9 +321,9 @@ Search for packs Horizon loads.
     horizon-launcher mods search [TEXT]...
 
 - `TEXT`
-- `--kind` (mod, resource, shader, modpack)
+- `--kind` (mod, resource, modpack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_search`.
 
@@ -335,7 +335,7 @@ Say how well a Java mod runs in Horizon: its jar is downloaded (checksum checked
 
 - `PROJECT`
 - `--everything`: Allow a version made for another Minecraft version (1.21 and later)
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_check`.
 
@@ -347,7 +347,7 @@ Install a pack and what it needs, by its id or slug (checksums checked); a Java 
 
 - `PROJECT`
 - `--everything`: Allow a version made for another Minecraft version
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_install`.
 
@@ -371,6 +371,26 @@ Remove a pack the browser installed.
 - `PROJECT`
 
 MCP: `mods_remove`, needs `confirm: true`.
+
+## `horizon-launcher mods enable`
+
+Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does).
+
+    horizon-launcher mods enable <PROJECT>
+
+- `PROJECT`
+
+MCP: `mods_enable`.
+
+## `horizon-launcher mods disable`
+
+Turn off a mod the browser installed; it stays installed.
+
+    horizon-launcher mods disable <PROJECT>
+
+- `PROJECT`
+
+MCP: `mods_disable`.
 
 ## `horizon-launcher servers list`
 

@@ -219,12 +219,11 @@ pub(super) fn spawn_loader(
         .name("resource-loader".into())
         .spawn(move || {
             let mut pack_error = None;
-            let root = packs::startup_root(&vanilla_root, &settings.resource_packs).unwrap_or_else(
-                |error| {
+            let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
+                .unwrap_or_else(|error| {
                     pack_error = Some(error.to_string());
                     vanilla_root.clone()
-                },
-            );
+                });
             let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
             let result = load_resources(
                 root,
@@ -367,11 +366,6 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
-                Event::OpenShaderPackFolder => {
-                    let dir = horizon_client::shader_pack::folder();
-                    let _ = std::fs::create_dir_all(&dir);
-                    packs::open_folder(&dir);
-                }
                 Event::Credits => {
                     if let Some(gui) = &self.gui {
                         let name = self.options.as_ref().map_or_else(
@@ -386,9 +380,6 @@ impl Loading {
                         );
                         self.menu.win = Some((screen, Instant::now()));
                     }
-                }
-                Event::ReloadShaderPack => {
-                    self.save_menu_settings();
                 }
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
@@ -454,17 +445,6 @@ impl Loading {
                     r.resize(size.width, size.height);
                 }
                 self.apply_menu_settings();
-            }
-            WindowEvent::DroppedFile(path) => {
-                match self
-                    .menu
-                    .options
-                    .drop_shader_pack(&mut self.settings, &path)
-                {
-                    Some(Ok(())) => self.save_menu_settings(),
-                    Some(Err(e)) => log::warn!("Horizon: shader pack {}: {e}", path.display()),
-                    None => {}
-                }
             }
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::ModifiersChanged(modifiers) => self.menu.modifiers = modifiers.state(),

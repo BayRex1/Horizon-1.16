@@ -13,6 +13,7 @@ mod block_entity_anims;
 mod block_entity_ticks;
 mod block_items;
 mod blockctl;
+mod boat_passengers;
 mod boats;
 mod books;
 mod bossbars;
@@ -35,6 +36,7 @@ mod debug_keys;
 mod decorated_pot;
 mod dedicated;
 mod deflect;
+mod discord;
 mod dispense_fixture;
 mod dispenser;
 mod dragon;
@@ -43,6 +45,7 @@ mod enchant_effects;
 mod end;
 mod entity_culling;
 mod events;
+mod execution_role;
 mod explosion;
 mod extras;
 mod falling_damage;
@@ -137,6 +140,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_packs;
 mod server_travel;
 mod shader_packs;
 mod shield;
@@ -153,6 +157,7 @@ mod storage;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
+mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
@@ -289,8 +294,8 @@ struct Options {
     /// as vanilla's does: the default. `--in-frame` (or `--no-server-thread`,
     /// or `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead.
     server_thread: bool,
-    /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
-    integrated: bool,
+    /// What this Game executes; independent of its current server connection.
+    execution_role: execution_role::ExecutionRole,
 }
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
@@ -347,7 +352,7 @@ impl Options {
             // itself, without the event loop: it stays in the frame.
             server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
-            integrated: false,
+            execution_role: execution_role::ExecutionRole::Client,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
@@ -361,6 +366,7 @@ impl Options {
                     return Ok(None);
                 }
                 "--dedicated" => {
+                    o.execution_role = execution_role::ExecutionRole::DedicatedServer;
                     o.dedicated = Some(args.by_ref().collect());
                     break;
                 }
@@ -1127,6 +1133,8 @@ struct Game<'a> {
     pending_entry: Option<PendingWorldEntry>,
     world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
+    /// A server's resource packs (game/server_packs.rs).
+    server_packs: server_packs::ServerPackState,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -1199,8 +1207,6 @@ struct Game<'a> {
     modifiers: winit::keyboard::ModifiersState,
     /// The window's fullscreen request and reported state.
     fullscreen: horizon_client::window::FullscreenState,
-    /// The selected Horizon shader pack (`game/shader_packs.rs`).
-    shader_packs: shader_packs::ShaderPacks,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// An agent moved the mouse (`mouse-move`) since the pointer was last
@@ -1421,6 +1427,8 @@ struct Game<'a> {
     dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
+    text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
@@ -1565,6 +1573,8 @@ struct Game<'a> {
     score: scoreboard::ScoreState,
     fns: functions::FnState,
     bosses: bossbars::BossState,
+    /// `Hud.bossOverlay`: the bars this window is showing.
+    boss_overlay: horizon_client::boss_overlay::BossOverlay,
     exec: commands::execute::ExecState,
     rand_sequences: horizon_client::random_sequences::RandomSequences,
     border: horizon_client::worldborder::WorldBorder,
@@ -4045,6 +4055,20 @@ impl Game<'_> {
         self.capture_loaded_world();
         Ok(())
     }
+    /// Landing rules (farmland trampling, turtle eggs) wrote or removed the block
+    /// raw: finish `Level.setBlock`'s neighbour updates, so a crop on trampled
+    /// farmland breaks. The local player's and every server player's landings.
+    fn landing_block_updates(&mut self, event: &horizon_client::landing::FallEvent) {
+        use horizon_client::landing::FallEvent;
+        let (position, flags) = match *event {
+            FallEvent::Write {
+                position, flags, ..
+            } => (position, flags as i32),
+            FallEvent::Destroy { position, .. } => (position, level_flags::UPDATE_ALL),
+            _ => return,
+        };
+        self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags));
+    }
     fn tick(&mut self) -> Result<()> {
         if self.agent.hold_server {
             return Ok(());
@@ -4066,6 +4090,8 @@ impl Game<'_> {
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
+        // GameRenderer.tick: a wither's bar darkens the world, then fades.
+        self.boss_overlay.tick_darken(running);
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
@@ -4262,23 +4288,7 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Write {
-                    position,
-                    flags,
-                    ..
-                }) => {
-                    // Landing rules (farmland trampling, turtle eggs) wrote the block raw.
-                    self.with_level(|b, level, ticks| {
-                        b.notify_written(level, ticks, position, flags as i32)
-                    });
-                }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy {
-                    position, ..
-                }) => {
-                    self.with_level(|b, level, ticks| {
-                        b.notify_written(level, ticks, position, level_flags::UPDATE_ALL)
-                    });
-                }
+                MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
@@ -4416,7 +4426,7 @@ impl Game<'_> {
                 self.resolve_arrivals();
             });
         }
-        horizon_client::spans::time("tick_lan", || self.tick_lan());
+        horizon_client::spans::time("tick_lan", || self.tick_lan(false));
         self.tick_friends();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
@@ -4441,6 +4451,8 @@ impl Game<'_> {
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
+        // ServerBossEvent broadcasts, after this level's entities have ticked.
+        self.publish_boss_bars();
         // Minecraft.handleKeybinds: held use repeats only while no item is in
         // use (a raised shield or a drawn bow places and uses nothing).
         if self.right
@@ -4777,7 +4789,14 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
-        let mut batch = self.hud_layers(size);
+        // The pack prompt replaces the connecting screen (setScreen), but
+        // in game it opens over the world.
+        let mut batch = if self.server_packs.prompt.is_some() && self.player.is_none() {
+            HudBatch::new(size)
+        } else {
+            self.hud_layers(size)
+        };
+        self.draw_pack_prompt(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
         self.draw_debug_overlay(&mut batch, size);
@@ -4814,11 +4833,15 @@ impl Game<'_> {
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
         let _ = atlas_ptr;
+        // The ToastManager draws over every screen: a server's packs
+        // download while the connection screen shows.
         if self.remote_overlay(&mut batch) {
+            self.draw_pack_toasts(&mut batch);
             return batch;
         }
         if let Some(reason) = self.loading_reason() {
             self.draw_level_loading(&mut batch, reason);
+            self.draw_pack_toasts(&mut batch);
             return batch;
         }
         // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
@@ -5030,6 +5053,7 @@ impl Game<'_> {
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_toasts(&mut batch);
+        self.draw_pack_toasts(&mut batch);
         self.remote_hud(&mut batch);
         self.draw_sign_editor(&mut batch);
         self.draw_book(&mut batch);
@@ -6767,6 +6791,7 @@ impl Game<'_> {
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
@@ -7437,30 +7462,17 @@ impl Game<'_> {
         self.tick_player_model();
         Ok(())
     }
-    /// What the loaded Java shader pack changes in this dimension's vanilla
-    /// sky (`sunPathRotation`, `clouds`, `sun`, `moon`); `None` without one.
-    fn java_sky(&self) -> Option<(f32, horizon_shaderpack::properties::SkyDirectives)> {
-        self.shader_packs.java_sky(match self.dim {
-            Dim::Overworld => 0,
-            Dim::Nether => -1,
-            Dim::End => 1,
-        })
-    }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
-    /// A Java pack's `sunPathRotation` tilts it about Z in between, and its
-    /// `sun = false` / `moon = false` leave those out, as Iris does. Returns
-    /// the sun and moon quads, and the stars' frame and brightness (the
-    /// renderer keeps their geometry, built once).
+    /// Returns the sun and moon quads, and the stars' frame and brightness
+    /// (the renderer keeps their geometry, built once).
     fn celestial_geometry(
         &self,
         sky: &horizon_client::environment::Sky,
     ) -> (Vec<Vertex>, Option<(glam::Mat4, f32)>) {
         let mut out = Vec::new();
         let atlas = &self.gui.atlas;
-        let (tilt, keep) = self.java_sky().unwrap_or_default();
         let frame = |angle: f32| {
             glam::Mat4::from_rotation_y((-90.0f32).to_radians())
-                * glam::Mat4::from_rotation_z(tilt.to_radians())
                 * glam::Mat4::from_rotation_x(angle.to_radians())
         };
         let mut body = |name: &str, angle: f32, size: f32, color: u32| {
@@ -7482,14 +7494,12 @@ impl Game<'_> {
                 });
             }
         };
-        if keep.sun {
-            body(
-                "environment/celestial/sun",
-                sky.sun_angle,
-                30.0,
-                0xFFFF_FFFF,
-            );
-        }
+        body(
+            "environment/celestial/sun",
+            sky.sun_angle,
+            30.0,
+            0xFFFF_FFFF,
+        );
         let phases = [
             "full_moon",
             "waning_gibbous",
@@ -7501,20 +7511,18 @@ impl Game<'_> {
             "waxing_gibbous",
         ];
         let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
-        if keep.moon {
-            body(
-                &format!("environment/celestial/moon/{phase}"),
-                sky.moon_angle,
-                20.0,
-                0xFFFF_FFFF,
-            );
-        }
+        body(
+            &format!("environment/celestial/moon/{phase}"),
+            sky.moon_angle,
+            20.0,
+            0xFFFF_FFFF,
+        );
         // SkyRenderer.renderStars: the static star buffer on the same frame.
         let stars =
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
         (out, stars)
     }
-    /// Load (or create) a world folder under saves/ and start streaming it.
+    /// Enter a local world from the client, selecting its simulation mode.
     fn open_world(
         &mut self,
         folder: &str,
@@ -7533,20 +7541,16 @@ impl Game<'_> {
             return Ok(());
         }
         self.join_world_rest()?;
-        let save_root = std::env::current_dir()?.join("saves").join(folder);
-        if integrated::wanted(&self.options, &save_root) {
+        if self
+            .options
+            .execution_role
+            .starts_integrated_server(self.options.server_thread)
+        {
             return self.open_integrated(folder, name, seed, creative, create);
         }
-        self.perf.world_opening();
-        let request = world_loading::WorldRequest {
-            save_root,
-            folder: folder.to_owned(),
-            name: name.map(str::to_owned),
-            seed,
-            creative,
-            create: create.cloned(),
-        };
+        let request = world_loading::WorldRequest::new(folder, name, seed, creative, create)?;
         if self.window.is_some() {
+            self.perf.world_opening();
             if self.title.is_none() {
                 self.title = Some(Title::new(
                     std::env::current_dir()?.join("saves"),
@@ -7562,6 +7566,14 @@ impl Game<'_> {
             )?);
             return Ok(());
         }
+        self.load_world(request)
+    }
+
+    /// Load authoritative world state synchronously, without client entry or
+    /// integrated-server selection. Server startup must use this entry point.
+    fn load_world(&mut self, request: world_loading::WorldRequest) -> Result<()> {
+        self.join_world_rest()?;
+        self.perf.world_opening();
         let prepared = request.prepare(&self.res, &self.pack, &self.options, &self.settings)?;
         self.finish_open_world(prepared)
     }
@@ -7975,6 +7987,8 @@ impl Game<'_> {
         self.session_lock = None;
         horizon_client::crash::clear_detail("World");
         self.debug_charts.reset();
+        self.boss_overlay.reset();
+        self.bosses = Default::default();
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
         self.player = None;
@@ -9103,21 +9117,11 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (
-            s.biome_blend,
-            s.smooth_lighting,
-            s.cutout_leaves,
-            s.horizon.cull_leaves,
-        ) != (
-            st.biome_blend,
-            st.smooth_lighting,
-            st.cutout_leaves,
-            st.cull_leaves,
-        );
+        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
+            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
-        self.streaming.cull_leaves = self.settings.horizon.cull_leaves;
         if remesh {
             self.all_sections_changed();
         }
@@ -9563,13 +9567,13 @@ impl Game<'_> {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
                 let stack = self.inventory[c].clone();
                 self.draw_slot_item(batch, drag.as_ref(), c, stack.clone(), x, y);
-                if let Some(stack) = stack
-                    && self.cursor.0 >= x
+                if self.cursor.0 >= x
                     && self.cursor.0 < x + 16.0
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
-                    hovered = Some(stack);
+                    batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                    hovered = stack;
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
@@ -9834,7 +9838,6 @@ impl Game<'_> {
             }
             return Ok(false);
         }
-        self.poll_shader_pack();
         let Some(size) = self
             .renderer
             .as_ref()
@@ -10047,18 +10050,6 @@ impl Game<'_> {
             self.dragon_fireball_geometry(camera, alpha, &mut dragon);
             entities.extend(dragon);
         }
-        // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
-        // "false", "fast", "true"), as Iris overrides `getCloudsType`.
-        let clouds_mode = {
-            use horizon_shaderpack::properties::CloudSetting;
-            match self.java_sky().and_then(|(_, sky)| sky.clouds) {
-                Some(CloudSetting::Off) => "false",
-                Some(CloudSetting::Fast) => "fast",
-                Some(CloudSetting::Fancy) => "true",
-                None => self.settings.clouds.as_str(),
-            }
-            .to_owned()
-        };
         let (celestial, stars) = if title {
             (Vec::new(), None)
         } else if self.dim == Dim::Overworld
@@ -10099,10 +10090,14 @@ impl Game<'_> {
         } else {
             self.gather_dynamic_lights(camera, alpha);
         }
+        let pack_inputs = if title {
+            Default::default()
+        } else {
+            self.shader_pack_inputs(camera, alpha as f32)
+        };
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
-            shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
             camera,
             yaw,
@@ -10132,7 +10127,7 @@ impl Game<'_> {
                 if !self.settings.horizon.fog
                     && !underwater
                     && self.darkness_fog().is_none()
-                    && !self.dragon_bar_shown()
+                    && !self.boss_overlay.should_create_world_fog()
                     && self.potions.effects.get("blindness").is_none()
                     && fog.environmental_end >= (self.streaming.radius * 16) as f32
                 {
@@ -10150,7 +10145,7 @@ impl Game<'_> {
             hud: &hud,
             clouds: (!title
                 && self.dim == Dim::Overworld
-                && horizon_client::clouds::visible(&clouds_mode, sky.cloud_color[3]))
+                && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
             .then(|| self.gui.atlas.sprites.get("horizon/white"))
             .flatten()
             .map(|white| horizon_client::clouds::Input {
@@ -10160,7 +10155,7 @@ impl Game<'_> {
                 time: self.world.game_time,
                 partial_tick: alpha,
                 range: self.settings.cloud_range,
-                fast: clouds_mode == "fast",
+                fast: self.settings.clouds == "fast",
                 color: sky.cloud_color,
             }),
             entities: &entities,
@@ -10183,6 +10178,7 @@ impl Game<'_> {
             hand: &hand,
             hand_fov_degrees: self.hud_fov_degrees(camera_alpha as f32, camera.to_array()),
             screen: &screen,
+            pack: pack_inputs,
             border,
             game_time: self.world.game_time as f32,
             shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
@@ -10203,6 +10199,9 @@ impl Game<'_> {
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
             block_flicker: self.fog.block_light_flicker,
+            boss_darken: self
+                .boss_overlay
+                .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
@@ -10593,7 +10592,7 @@ impl Game<'_> {
         }
         // The loading screen's chunk map fills ring by ring, as vanilla's.
         self.streaming.loading =
-            self.options.dedicated.is_none() && self.loading_reason().is_some();
+            self.options.execution_role.is_client() && self.loading_reason().is_some();
         let (uploads, unloaded) =
             horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
         if let Some(lod) = &mut self.lod {
@@ -10878,9 +10877,6 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::CloseRequested => {
                     self.pending_save.as_mut().unwrap().quit = true;
                 }
-                WindowEvent::DroppedFile(path) => {
-                    self.drop_shader_pack(&path);
-                }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
                     if !focused {
@@ -11033,6 +11029,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if self.screen == Screen::Advancements {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. }
+                    if self.server_packs.prompt.is_some() =>
+                {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.pack_prompt_click()?;
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
@@ -11234,6 +11237,14 @@ impl ApplicationHandler for Game<'_> {
                         _ => {}
                     }
                 }
+                // ConfirmScreen.keyPressed: Escape answers no.
+                WindowEvent::KeyboardInput { event, .. } if self.server_packs.prompt.is_some() => {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    {
+                        self.answer_pack_prompt(false)?;
+                    }
+                }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::Chat && self.title.is_none() =>
                 {
@@ -11418,6 +11429,7 @@ impl ApplicationHandler for Game<'_> {
                     self.track_toggle_screens();
                     // For the "I'm playing" ping: an atomic, sent on when it changes.
                     horizon_client::heartbeat::set_lan(self.is_published());
+                    self.update_discord_presence();
                     let steps = self.clock.advance(elapsed);
                     // The world ticking in the frame: once its ticks took a
                     // tick's length, the rest are dropped (`FixedStep::tick_fits`).
@@ -11612,6 +11624,7 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        self.tick_server_packs();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
             return;
@@ -11706,6 +11719,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             world_loader: None,
             pending_pack_reload: false,
+            server_packs: Default::default(),
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
@@ -11763,7 +11777,6 @@ impl<'a> Game<'a> {
             focused: true,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
-            shader_packs: Default::default(),
             mouse: MouseLook::default(),
             agent_pointer: false,
             smooth_camera: false,
@@ -11907,6 +11920,8 @@ impl<'a> Game<'a> {
             breath_clouds: Vec::new(),
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
+            text_displays: Default::default(),
+            text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()
@@ -11994,6 +12009,7 @@ impl<'a> Game<'a> {
             score: Default::default(),
             fns: Default::default(),
             bosses: Default::default(),
+            boss_overlay: Default::default(),
             exec: Default::default(),
             rand_sequences: Default::default(),
             border: Default::default(),
@@ -12267,7 +12283,7 @@ fn synchronous_startup(options: &Options) -> bool {
         || options.world_frames.is_some()
         || options.benchmark.is_some()
         || options.control.is_some()
-        || options.dedicated.is_some()
+        || !options.execution_role.is_client()
         || std::env::var_os("HORIZON_DISPENSE_FIXTURE").is_some()
         || std::env::var_os("HORIZON_SCULK_FIXTURE").is_some()
         || std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
@@ -12712,6 +12728,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         hand: &[],
         hand_fov_degrees: 70.0,
         screen: &[],
+        pack: Default::default(),
         border: None,
         game_time: 0.0,
         shader_game_time: 0.0,
@@ -12721,8 +12738,8 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         darkness: (0.0, 0.0),
         night_vision: 0.0,
         block_flicker: 0.0,
+        boss_darken: 0.0,
         menu_blur: None,
-        shader: Default::default(),
     }
 }
 
@@ -12809,7 +12826,7 @@ fn start_game<'a>(
         game.sculk_fixture(&spec)?;
         return Ok(None);
     }
-    if game.options.dedicated.is_some() {
+    if game.options.execution_role == execution_role::ExecutionRole::DedicatedServer {
         game.run_dedicated()?;
         return Ok(None);
     }
@@ -12884,6 +12901,7 @@ fn write_report(game: &Game<'_>) -> Result<()> {
 
 fn run_event_loop(mut game: Game<'_>) -> Result<()> {
     EventLoop::new()?.run_app(&mut game)?;
+    horizon_client::discord_presence::stop();
     write_report(&game)?;
     if let Some(e) = game.error.take() {
         return Err(e);
@@ -13086,7 +13104,7 @@ impl Loading {
         );
         let renderer_ms = renderer_at.elapsed().as_millis();
         // Audio is created on the main thread, after the core is ready.
-        let audio = if options.dedicated.is_some() {
+        let audio = if !options.execution_role.is_client() {
             Audio::silent(&options.resources)
         } else {
             Audio::new(&options.resources)
@@ -13241,6 +13259,7 @@ fn run_loading(
     };
     let mut app = App::Loading(Box::new(loading));
     EventLoop::new()?.run_app(&mut app)?;
+    horizon_client::discord_presence::stop();
     match app {
         App::Ready(mut game) => {
             write_report(&game)?;
@@ -13261,13 +13280,15 @@ pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };
-    if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
+    if options.execution_role == execution_role::ExecutionRole::DedicatedServer
+        && !dedicated::preflight(&mut options)?
+    {
         return Ok(());
     }
     // Before any worker starts: on Linux they go behind the server thread
     // and the render thread.
     horizon_threads::put_helpers_behind();
-    if options.dedicated.is_none() {
+    if options.execution_role.is_client() {
         // The render thread, like the server thread, ahead of the workers on
         // macOS and Windows. While terrain loads, the worker pools (two with
         // single player's server thread) and other programs outnumber the
@@ -13277,7 +13298,7 @@ pub fn run() -> Result<()> {
     }
     // Someone is playing: the anonymous ping behind the launcher's "N playing now". Not for a
     // server, a benchmark or a run that quits by itself.
-    if options.dedicated.is_none()
+    if options.execution_role.is_client()
         && options.benchmark.is_none()
         && !options.offscreen
         && options.frames.is_none()
@@ -13289,6 +13310,14 @@ pub fn run() -> Result<()> {
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    // "Playing Horizon" on Discord: never for a server; an automated run only talks to a test's fake Discord.
+    if options.dedicated.is_none() {
+        let automated = options.benchmark.is_some()
+            || options.offscreen
+            || options.frames.is_some()
+            || options.world_frames.is_some();
+        horizon_client::discord_presence::start(early_settings.extras.discord_presence, automated);
+    }
     // Snapshots of derived tables live in the game folder, never beside the
     // shared resources.
     Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
@@ -13296,7 +13325,7 @@ pub fn run() -> Result<()> {
         return run_loading(options, early_settings, vanilla_root, None, started);
     }
     let mut pack_error = None;
-    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs, &[])
         .unwrap_or_else(|e| {
             log::warn!("Horizon: resource packs not applied: {e}");
             pack_error = Some(e.to_string());
@@ -13318,7 +13347,7 @@ pub fn run() -> Result<()> {
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
-    let audio = if options.dedicated.is_some() {
+    let audio = if !options.execution_role.is_client() {
         Audio::silent(&options.resources)
     } else {
         Audio::new(&options.resources)
