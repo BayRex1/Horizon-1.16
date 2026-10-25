@@ -86,6 +86,8 @@ pub struct Projectile {
     pub id: u32,
     pub kind: ProjectileKind,
     pub owner: Option<Who>,
+    /// Persistent identity, including while the owner is unloaded.
+    pub owner_uuid: Option<[i32; 4]>,
     /// On a server, the guest (by connection) who shot it: `Who::Player`
     /// then means them, not the host.
     pub guest: Option<u32>,
@@ -157,6 +159,7 @@ impl Projectile {
             id: 0,
             kind,
             owner,
+            owner_uuid: None,
             guest: None,
             position,
             previous: position,

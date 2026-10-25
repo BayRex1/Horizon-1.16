@@ -31,6 +31,8 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The blast's shooter and guest UUID, absent for the local host.
+    pub(super) explosion_owner: Option<(horizon_client::mobs::Who, Option<u128>)>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,

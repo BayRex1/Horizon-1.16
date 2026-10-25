@@ -115,12 +115,8 @@ impl Game<'_> {
             }
             Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
             Target::Projectile(i) => {
+                let owner = self.projectile_owner_uuid(i);
                 let p = self.creatures.projectiles.get(i)?;
-                let owner = if p.owner == Some(horizon_client::mobs::Who::Player) {
-                    player_uuid
-                } else {
-                    None
-                };
                 let in_block = p
                     .arrow
                     .as_ref()

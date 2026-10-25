@@ -479,6 +479,9 @@ impl Game<'_> {
         for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
             if p.owner == Some(horizon_client::mobs::Who::Player) && p.guest.is_none() {
                 p.guest = Some(conn);
+                p.owner_uuid = Some(horizon_client::lan::playerdata::uuid_ints(
+                    host.hub.guests[i].uuid,
+                ));
             }
         }
         // The guest's swings are theirs: the host's own count stays the host's.
@@ -677,6 +680,7 @@ impl Game<'_> {
         if let Some(mob) = guest_mount {
             self.lan_open_mount(host, conn, mob);
         }
+        self.lan_pair_new_projectiles(host, projectiles);
     }
 
     /// `ServerLevel.players()` in turn: the host's own player, then each

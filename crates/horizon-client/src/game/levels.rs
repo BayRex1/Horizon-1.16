@@ -301,7 +301,7 @@ impl Game<'_> {
             } else if k == 0 {
                 self.tick()
             } else {
-                let running = self.clock.world_runs();
+                let running = self.clock.runs_normally();
                 if running {
                     self.tick_weather_effects();
                 }

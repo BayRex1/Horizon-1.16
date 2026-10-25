@@ -1553,6 +1553,43 @@ impl Hub {
         out
     }
 
+    /// Introduce new entities without advancing the tracking tick.
+    pub fn add_entities(&mut self, entities: &[&EntityState]) {
+        let mut level = self
+            .entities
+            .remove(&self.config.dimension)
+            .unwrap_or_default();
+        let mut outs = std::mem::take(&mut self.entity_out);
+        let dimension = &self.config.dimension;
+        let here = |g: &Guest| g.placed && g.dimension == *dimension;
+        outs.resize_with(self.guests.iter().filter(|g| here(g)).count(), Vec::new);
+        let mut viewers: Vec<Viewer> = self
+            .guests
+            .iter_mut()
+            .filter(|g| here(g))
+            .zip(outs.iter_mut())
+            .map(|(g, out)| Viewer {
+                entity_id: g.entity_id,
+                moved: false,
+                position: g.position,
+                view_distance: g.view_distance,
+                chunks: &g.sent_chunks,
+                tracker: &mut g.tracker,
+                out,
+            })
+            .collect();
+        let (types, sync) = (&mut self.entity_types, &self.sync);
+        level.add(entities, &self.riding, &mut viewers, |kind| {
+            entity_type(types, sync, kind)
+        });
+        drop(viewers);
+        for (g, out) in self.guests.iter().filter(|g| here(g)).zip(outs.iter_mut()) {
+            g.sender.send_many(out.drain(..));
+        }
+        self.entity_out = outs;
+        self.entities.insert(self.config.dimension.clone(), level);
+    }
+
     /// All entities as one client sees them: the world's, the host, the other guests.
     fn track_entities(&mut self, ctx: &mut TickCtx) {
         let mut all: Vec<EntityState> =

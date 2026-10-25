@@ -281,6 +281,33 @@ impl Game<'_> {
         self.end.eye_ids().for_each(&mut give);
     }
 
+    pub(super) fn lan_pair_new_projectiles(
+        &mut self,
+        host: &mut super::lan::LanHost,
+        first: usize,
+    ) {
+        if first >= self.creatures.projectiles.len() {
+            return;
+        }
+        self.lan_assign_ids();
+        let ids: Vec<_> = self
+            .creatures
+            .projectiles
+            .iter()
+            .skip(first)
+            .map(|p| p.id as i32)
+            .collect();
+        let mut states = States::default();
+        let host_entity = (!host.hub.config.dedicated).then_some(host.host_entity);
+        self.lan_projectile_states(host_entity, &mut host.hub, &mut states);
+        let entities: Vec<_> = states
+            .as_slice()
+            .iter()
+            .filter(|e| ids.contains(&e.id))
+            .collect();
+        host.hub.add_entities(&entities);
+    }
+
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
     /// end crystals, as guests track them.
     fn lan_projectile_states(&self, host_entity: Option<i32>, hub: &mut Hub, out: &mut States) {

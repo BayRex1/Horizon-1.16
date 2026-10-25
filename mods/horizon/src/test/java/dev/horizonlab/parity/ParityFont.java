@@ -7,9 +7,12 @@ import com.mojang.blaze3d.font.UnbakedGlyph;
 import com.mojang.serialization.JsonOps;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GlyphSource;
 import net.minecraft.client.gui.font.glyphs.BakedGlyph;
@@ -18,38 +21,28 @@ import net.minecraft.client.gui.font.TextRenderable;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.Style;
 import net.minecraft.resources.Identifier;
-import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.RandomSource;
 
 /**
- * The vanilla default font's glyph metrics without a GPU: the `space` and
- * `include/default` providers of the client jar loaded by vanilla's own
- * provider definitions (BitmapProvider scans ascii.png etc. for advances).
+ * The vanilla default font's glyph metrics without a GPU, loaded by vanilla's
+ * provider definitions from the prepared original assets, including Unifont.
  * Glyphs carry metrics only; nothing is stitched.
  */
 public final class ParityFont {
     public static ResourceManager resources() throws Exception {
+        Path assets = Path.of(Objects.requireNonNull(System.getProperty("horizon.parity.assets"),
+            "Set -Dhorizon.parity.assets to the prepared assets directory"));
+        if (!Files.isDirectory(assets)) throw new IllegalArgumentException("Missing prepared assets: " + assets);
         var method = net.minecraft.client.resources.ClientPackSource.class.getDeclaredMethod("createVanillaPackSource", Path.class);
         method.setAccessible(true);
-        var pack = (net.minecraft.server.packs.VanillaPackResources) method.invoke(null, Path.of("/nonexistent-horizon-assets"));
+        var pack = (net.minecraft.server.packs.VanillaPackResources) method.invoke(null, assets);
         return pack.asResourceManager();
     }
 
     public static Font create(ResourceManager resources) throws Exception {
         List<GlyphProvider> providers = new ArrayList<>();
-        for (String include : new String[] {"space", "default"}) {
-            var id = Identifier.withDefaultNamespace("font/include/" + include + ".json");
-            try (var reader = new InputStreamReader(resources.open(id), StandardCharsets.UTF_8)) {
-                var json = JsonParser.parseReader(reader).getAsJsonObject();
-                for (var element : json.getAsJsonArray("providers")) {
-                    var conditional = GlyphProviderDefinition.Conditional.CODEC.parse(JsonOps.INSTANCE, element).getOrThrow();
-                    var loader = conditional.definition().unpack().left().orElseThrow();
-                    providers.add(loader.load(resources));
-                }
-            }
-        }
+        loadProviders(resources, Identifier.withDefaultNamespace("default"), providers);
         GlyphSource source = new GlyphSource() {
             @Override
             public BakedGlyph getGlyph(int codepoint) {
@@ -76,6 +69,23 @@ public final class ParityFont {
                 return null;
             }
         });
+    }
+
+    private static void loadProviders(ResourceManager resources, Identifier font, List<GlyphProvider> providers) throws Exception {
+        var id = Identifier.fromNamespaceAndPath(font.getNamespace(), "font/" + font.getPath() + ".json");
+        try (var reader = new InputStreamReader(resources.open(id), StandardCharsets.UTF_8)) {
+            var json = JsonParser.parseReader(reader).getAsJsonObject();
+            for (var element : json.getAsJsonArray("providers")) {
+                var conditional = GlyphProviderDefinition.Conditional.CODEC.parse(JsonOps.INSTANCE, element).getOrThrow();
+                if (!conditional.filter().apply(Set.of())) continue;
+                var definition = conditional.definition().unpack();
+                if (definition.left().isPresent()) {
+                    providers.add(definition.left().orElseThrow().load(resources));
+                } else {
+                    loadProviders(resources, definition.right().orElseThrow().id(), providers);
+                }
+            }
+        }
     }
 
     private static BakedGlyph baked(GlyphInfo info) {
