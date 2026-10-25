@@ -824,6 +824,21 @@ mod tests {
         // (0.1 + 0.1) * 0.95
         assert!((p.velocity.x - 0.19).abs() < 1e-9);
     }
+
+    #[test]
+    fn fireball_inertia_preserves_custom_acceleration() {
+        let mut p = Projectile::fireball(
+            ProjectileKind::SmallFireball,
+            Vec3::new(0.0, 100.0, 0.0),
+            None,
+            [1.0, 0.0, 0.0],
+        );
+        // A redirected projectile can carry a different acceleration power.
+        p.acceleration = 0.2;
+        p.tick(&Empty(vec![]));
+        assert!((p.velocity.x - 0.285).abs() < 1e-9);
+        assert!((p.position.x - 0.285).abs() < 1e-9);
+    }
 }
 
 #[cfg(test)]

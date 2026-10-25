@@ -25,4 +25,6 @@ if __name__ == '__main__':
                 '--relay', str(bins / 'horizon-relay'), '--baseline',
                 *(['--offscreen'] if sys.platform == 'darwin' else [])]
     with suite_lock():
+        # The wrapper only selects binaries; test_friends isolates each game
+        # through integration_env and lab.game_env.
         test_friends.main()
