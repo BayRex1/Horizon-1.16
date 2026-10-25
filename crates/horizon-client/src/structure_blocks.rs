@@ -161,18 +161,14 @@ pub fn block_entities(
                 )),
             };
             let biome = chunk.biome_at(x, y, z);
+            // RandomizableContainer.unpackLootTable puts the rolled stacks in
+            // the chest as they are, enchantments, potion and all: the End
+            // cities' enchanted armour and tools come from here.
             for (slot, stack) in slots
                 .iter_mut()
                 .zip(loot.fill(&table, seed, 27, Some(biome)))
             {
-                *slot = stack.map(|s| {
-                    let mut item = loot_item(&s);
-                    // An ominous bottle's level (the default, 0, is no component).
-                    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
-                        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
-                    }
-                    item
-                });
+                *slot = stack.map(|s| loot_item_with_components(&s));
             }
         }
         out.push(((x, y, z), entity));
@@ -211,7 +207,7 @@ pub fn unpack_entity_loot(
     let slots: Vec<Option<ItemStack>> = loot
         .fill(&table, seed, 27, Some(biome))
         .into_iter()
-        .map(|s| s.map(|s| loot_item(&s)))
+        .map(|s| s.map(|s| loot_item_with_components(&s)))
         .collect();
     nbt.remove(&JavaString::from("LootTable"));
     nbt.remove(&JavaString::from("LootTableSeed"));
@@ -277,5 +273,30 @@ mod tests {
         // A plain item has nothing pending.
         stack.exploration = None;
         assert!(!has_pending_map(&loot_item(&stack)));
+    }
+
+    /// The End cities' treasure rolls enchantments; the chest keeps them, and
+    /// an enchanted book keeps its levels as stored ones.
+    #[test]
+    fn a_rolled_stack_keeps_its_enchantments_as_a_chest_item() {
+        let stack = |item: &str| LootStack {
+            item: item.into(),
+            count: 1,
+            damage: 0,
+            enchantments: vec![("minecraft:protection".into(), 3)],
+            potion: None,
+            map: false,
+            exploration: None,
+            ominous_amplifier: None,
+        };
+        let armour = loot_item_with_components(&stack("minecraft:diamond_chestplate"));
+        assert_eq!(
+            armour.enchantments(),
+            [("minecraft:protection".to_owned().into(), 3)]
+        );
+        let book = loot_item_with_components(&stack("minecraft:enchanted_book"));
+        assert_eq!(&*book.item, "minecraft:enchanted_book");
+        assert_eq!(book.data().unwrap().stored_enchantments.len(), 1);
+        assert!(book.enchantments().is_empty());
     }
 }
