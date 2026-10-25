@@ -128,6 +128,27 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
+/// `BlockEntity.loadWithComponents` of a placed template's block entity data
+/// (StructureTemplate.placeInWorld): spawners (MonsterRoomFeature and the
+/// structures' setEntityId), trial spawners, vaults, and banners' patterns
+/// (the End city towers' black triangles on magenta).
+fn load_placed_nbt(entity: &mut BlockEntity, nbt: &Compound) {
+    match entity {
+        BlockEntity::Spawner(s) => {
+            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::TrialSpawner(s) => {
+            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
+        // BannerBlockEntity.loadAdditional.
+        BlockEntity::Banner(b) => {
+            b.layers = crate::banner::layers_from_nbt(nbt.get(&JavaString::from("patterns")));
+        }
+        _ => {}
+    }
+}
+
 /// Client block entities for the generated block entities of a chunk.
 pub fn block_entities(
     chunk: &ProtoChunk,
@@ -140,16 +161,7 @@ pub fn block_entities(
         let Some(mut entity) = BlockEntity::for_block(block) else {
             continue;
         };
-        // MonsterRoomFeature and the structures' setEntityId.
-        if let BlockEntity::Spawner(s) = &mut entity {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::TrialSpawner(s) = &mut entity {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::Vault(v) = &mut entity {
-            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
-        }
+        load_placed_nbt(&mut entity, nbt);
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {
@@ -223,6 +235,29 @@ pub fn unpack_entity_loot(
 mod tests {
     use super::*;
     use horizon_world::loot::{ExplorationMap, LootStack};
+
+    #[test]
+    fn placed_banners_keep_their_template_patterns() {
+        // tower_top.nbt's wall banners.
+        let (tag, _) = horizon_world::nbt::parse_snbt(
+            "{id:\"minecraft:banner\",patterns:[{color:\"black\",pattern:\"minecraft:triangle_top\"},\
+             {color:\"black\",pattern:\"minecraft:triangle_bottom\"}]}",
+        )
+        .unwrap();
+        let Tag::Compound(nbt) = tag else {
+            panic!("a compound");
+        };
+        let mut entity = BlockEntity::for_block("minecraft:magenta_wall_banner").unwrap();
+        load_placed_nbt(&mut entity, &nbt);
+        let BlockEntity::Banner(banner) = entity else {
+            panic!("a banner");
+        };
+        assert_eq!(
+            banner.layers,
+            crate::banner::layers_from_nbt(nbt.get(&JavaString::from("patterns")))
+        );
+        assert_eq!(banner.layers.len(), 2);
+    }
 
     #[test]
     fn exploration_maps_wait_in_custom_data_until_searched() {
