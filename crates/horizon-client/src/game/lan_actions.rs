@@ -2342,14 +2342,15 @@ impl Game<'_> {
         let Some((pos, _)) = play.digging else {
             return;
         };
-        // ServerPlayerGameMode.tick: a block gone while it is dug (the guest's own tick broke
-        // it, or something else did) clears the crack.
-        if play.last_progress >= 0
-            && self
-                .res
-                .facts()
-                .is_air(self.world.block(pos[0], pos[1], pos[2]))
+        // ServerPlayerGameMode.tick: a gone block ends the dig, even if an instant
+        // survival break never sent a crack or received a STOP (#1908).
+        if self
+            .res
+            .facts()
+            .is_air(self.world.block(pos[0], pos[1], pos[2]))
         {
+            play.digging = None;
+            play.mining = None;
             play.last_progress = -1;
             self.guest_crack_gone(host, conn, pos);
             return;
