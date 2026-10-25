@@ -2653,16 +2653,22 @@ def check_xp(host, guest, out):
         x, y, z = pos_of(guest)
         # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
         # follow from): they fly to the guest.
+        # Freeze setup so command/IPC latency cannot let all three be collected
+        # before the two-tick in-flight observation.
+        host('command', command='tick freeze')
         for _ in range(3):
             guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+        host('command', command='tick step 2')
         guest.wait(2)
         seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
         guest.shot(out, 'xp-orbs')
+        host('command', command='tick unfreeze')
         guest.wait(60)
         xp = guest('state')['player']['xp']
         host_xp = host('state')['player']['xp']
         left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
     finally:
+        host('command', command='tick unfreeze')
         host('command', command='gamemode survival')
         # Back where it stood: a spectator sinks (Player.travel keeps 0.6 of its fall speed each tick,
         # about 0.2 blocks from standing), and a later check that makes it survival again would land
