@@ -1019,7 +1019,7 @@ impl Game<'_> {
         if !was_down && d.down() {
             self.credit_dragon_kill();
         }
-        let Some(d) = self.dragon.as_ref() else {
+        let Some(d) = self.dragon.as_mut() else {
             return hurt;
         };
         if hurt == (Hurt::Landed { full: true }) {
