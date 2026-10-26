@@ -66,6 +66,8 @@ pub(super) struct Creatures {
     )>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
     pub cat_tick: i32,
+    /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
+    pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -1159,6 +1161,7 @@ impl Game<'_> {
                         self.infested_hurt(at, look);
                     }
                 }
+                MobEvent::ParrotToShoulder { mob } => self.parrot_to_shoulder(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
