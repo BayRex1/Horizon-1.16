@@ -61,6 +61,8 @@ pub(super) struct Creatures {
         f64,
         u32,
     )>,
+    /// The cat spawner's countdown (`CatSpawner.nextTick`).
+    pub cat_tick: i32,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -488,6 +490,7 @@ impl Game<'_> {
         if self.ui.rules.bool("spawn_mobs") {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
+            self.tick_cat_spawner();
         }
         self.tick_raids();
         self.tick_creature_entities()
