@@ -334,15 +334,16 @@ impl KeyBinds {
         let Some(name) = key_name(key) else {
             return vec![Ok(key)];
         };
-        let bound: Vec<_> = self
-            .mappings_for(name)
-            .filter_map(|m| {
-                let default = Self::default_of(m);
-                key_code(default)
-                    .map(Ok)
-                    .or_else(|| mouse_button(default).map(Err))
-            })
-            .collect();
+        let bound = Self::unique(
+            self.mappings_for(name)
+                .filter_map(|m| {
+                    let default = Self::default_of(m);
+                    key_code(default)
+                        .map(Ok)
+                        .or_else(|| mouse_button(default).map(Err))
+                })
+                .collect(),
+        );
         // An unbound key whose default meaning was moved elsewhere is inert.
         if bound.is_empty() && !self.default_moved(name) {
             return vec![Ok(key)];
@@ -352,18 +353,30 @@ impl KeyBinds {
     /// Translate a mouse button the same way (keys bound to mouse buttons).
     pub fn translate_mouse(&self, button: MouseButton) -> Vec<Result<KeyCode, MouseButton>> {
         let name = mouse_name(button);
-        let bound: Vec<_> = self
-            .mappings_for(&name)
-            .filter_map(|m| {
-                let default = Self::default_of(m);
-                mouse_button(default)
-                    .map(Err)
-                    .or_else(|| key_code(default).map(Ok))
-            })
-            .collect();
+        let bound = Self::unique(
+            self.mappings_for(&name)
+                .filter_map(|m| {
+                    let default = Self::default_of(m);
+                    mouse_button(default)
+                        .map(Err)
+                        .or_else(|| key_code(default).map(Ok))
+                })
+                .collect(),
+        );
         if bound.is_empty() && !self.default_moved(&name) {
             return vec![Err(button)];
         }
+        bound
+    }
+    /// Mappings that share a default key (L opens Advancements and is the
+    /// debug profiling key) act once.
+    fn unique(mut bound: Vec<Result<KeyCode, MouseButton>>) -> Vec<Result<KeyCode, MouseButton>> {
+        let mut seen = Vec::new();
+        bound.retain(|b| {
+            let fresh = !seen.contains(b);
+            seen.push(*b);
+            fresh
+        });
         bound
     }
     /// Some mapping with `name` as its default key was rebound elsewhere.
@@ -430,6 +443,8 @@ mod tests {
     fn rebinding_translates_to_defaults() {
         let mut k = KeyBinds::default();
         assert_eq!(k.translate(KeyCode::KeyW), [Ok(KeyCode::KeyW)]);
+        // Advancements and debug profiling both default to L: it acts once.
+        assert_eq!(k.translate(KeyCode::KeyL), [Ok(KeyCode::KeyL)]);
         // Forward on the up arrow, inventory on W.
         k.set("key.forward", "key.keyboard.up");
         k.set("key.inventory", "key.keyboard.w");
