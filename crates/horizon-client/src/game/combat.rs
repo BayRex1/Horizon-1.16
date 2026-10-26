@@ -39,6 +39,9 @@ pub(super) struct CombatTracker {
     /// skull, wither or TNT minecart, the sources that empty a hive they
     /// destroy (`BeehiveBlock.getDrops`).
     pub(super) hive_emptying_blast: bool,
+    /// The mob that owns the projectile exploding now (`getIndirectSourceEntity`):
+    /// the mobs the blast hurts record it as their attacker.
+    pub(super) explosion_owner: Option<u32>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,

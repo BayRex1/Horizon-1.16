@@ -394,7 +394,10 @@ impl Game<'_> {
             // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: exploding.map(horizon_client::mobs::Who::Mob),
+                attacker: exploding
+                    .or(self.combat.explosion_owner)
+                    .filter(|&o| o != m.id)
+                    .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {
