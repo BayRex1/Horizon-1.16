@@ -3022,6 +3022,9 @@ impl Game<'_> {
                             "minecraft:block.pointed_dripstone.drip_water_into_cauldron",
                             2.0,
                         )),
+                        // LevelEvent.SOUND_ZOMBIE_WOODEN_DOOR (attack, break).
+                        1019 => Some(("minecraft:entity.zombie.attack_wooden_door", 2.0)),
+                        1021 => Some(("minecraft:entity.zombie.break_wooden_door", 2.0)),
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
@@ -3041,9 +3044,14 @@ impl Game<'_> {
                             1029 | 1030 | 1042 | 1043 | 1044 | 1046 | 1047 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
+                            1019 | 1021 => {
+                                (self.world.random.next_float() - self.world.random.next_float())
+                                    * 0.2
+                                    + 1.0
+                            }
                             _ => 1.0,
                         };
-                        if matches!(id, 1029 | 1030) {
+                        if matches!(id, 1019 | 1021 | 1029 | 1030) {
                             // Clients play the anvil sound from its level event;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);

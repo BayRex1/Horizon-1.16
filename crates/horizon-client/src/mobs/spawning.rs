@@ -37,6 +37,8 @@ pub struct LocalDifficulty {
     /// The world difficulty id, 0 peaceful to 3 hard.
     pub base: u8,
     pub effective: f32,
+    /// The world difficulty is normal.
+    pub normal: bool,
     /// The world difficulty is hard.
     pub hard: bool,
     /// `Difficulty.getId`: 0 peaceful to 3 hard.
@@ -49,10 +51,12 @@ impl LocalDifficulty {
     /// the overworld clock, the chunk's inhabited time and the moon.
     pub fn new(base: u8, total: i64, inhabited: i64, moon: f32) -> Self {
         let hard = base == 3;
+        let normal = base == 2;
         if base == 0 {
             return Self {
                 base,
                 effective: 0.0,
+                normal,
                 hard,
                 id: base,
             };
@@ -67,6 +71,7 @@ impl LocalDifficulty {
         Self {
             base,
             effective: f32::from(base) * (0.75 + global + local),
+            normal,
             hard,
             id: base,
         }
@@ -166,6 +171,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             if m.random.next_float() < 0.05 {
                 m.extra.age = i32::MIN / 2;
             }
+            // setCanBreakDoors(nextFloat() < special * 0.1), before the gear.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if m.species() != S::Drowned {
                 populate_armor(m, difficulty);
             }
@@ -199,6 +207,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword, or
         // one time in 20 a golden spear.
         S::ZombifiedPiglin => {
+            // Zombie.finalizeSpawn's setCanBreakDoors.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             let spear = m.random.next_int_bound(20).unwrap_or(1) == 0;
             m.extra.main_hand = Some(
                 if spear {
