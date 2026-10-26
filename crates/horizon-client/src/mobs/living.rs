@@ -370,7 +370,14 @@ impl Mob {
     /// Entity.move with block collisions and step-up; updates collision flags
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
-        let wanted = self.velocity;
+        let mut wanted = self.velocity;
+        // Entity.move: a block the mob is stuck in (sweet berry bush) scales
+        // this move once and stops it.
+        if self.stuck_multiplier.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(self.stuck_multiplier);
+            self.stuck_multiplier = Vec3::ZERO;
+            self.velocity = Vec3::ZERO;
+        }
         let step = self.kind.step_height as f32;
         let mut scene = SceneCollisions {
             world: w.world,
@@ -440,9 +447,34 @@ impl Mob {
         }
         if self.on_ground {
             if self.fall_distance > 0.0 {
+                self.trample_farmland(w, events);
                 self.cause_fall_damage(events);
             }
             self.fall_distance = 0.0;
+        }
+    }
+    /// `FarmlandBlock.fallOn`: a landing on farmland turns it to dirt with
+    /// chance `fallDistance - 0.5`, if mobs may grief and the mob's
+    /// `width * width * height` is over 0.512. `Block.pushEntitiesUp` lifts
+    /// the mob onto the dirt, which is a full block.
+    fn trample_farmland(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        let p = self.block_on_legacy(w);
+        if w.block_name(p[0], p[1], p[2]) != "minecraft:farmland" {
+            return;
+        }
+        let roll = f64::from(self.random.next_float());
+        let Some(dirt) = w.registry.default_state("minecraft:dirt") else {
+            return;
+        };
+        if roll < self.fall_distance - 0.5
+            && w.mob_griefing
+            && self.width() * self.width() * self.height() > 0.512
+        {
+            events.push(MobEvent::SetBlock {
+                pos: p,
+                state: dirt,
+            });
+            self.position.y = self.position.y.max(f64::from(p[1]) + 1.0);
         }
     }
     /// Entity.updateFluidInteraction: the fluid state, then touching water
@@ -625,11 +657,20 @@ impl Mob {
             let at = [self.position.x, self.position.y, self.position.z];
             events.push(MobEvent::Sound("entity.breeze.land", at, 1.0, 1.0));
         }
+        // Creeper.causeFallDamage: the fall swells the fuse, up to five ticks
+        // short of exploding.
+        if self.species() == super::Species::Creeper {
+            self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
+        }
         if self.kind.flags.fall_immune {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let damage = (power * self.kind.fall_damage_multiplier).floor();
+        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        // Frog.calculateFallDamage: five points less than the base damage.
+        if self.species() == super::Species::Frog {
+            damage -= 5.0;
+        }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if damage > 4.0 {

@@ -602,7 +602,8 @@ impl Game<'_> {
         let host_uuid = host.unwrap_or(0);
         self.next_entity += 1;
         let host_entity = self.next_entity as i32;
-        let hub = Hub::new(lan, sync, encoder, config);
+        let mut hub = Hub::new(lan, sync, encoder, config);
+        hub.flat_overworld = self.overworld_flat;
         let port = hub.lan.port;
         self.world.block_log = Some(Vec::new());
         self.world.light_log = Some(Default::default());
@@ -952,6 +953,16 @@ impl Game<'_> {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
+            // An entity that left the level since the last tick (a snowball
+            // that hit) is dropped by the tracker below: its event goes out
+            // first, as `Level.broadcastEntityEvent` precedes the discard.
+            let (gone, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lan_entity_events)
+                .into_iter()
+                .partition(|(id, ..)| !entities.iter().any(|e| e.id == *id));
+            self.lan_entity_events = later;
+            for (id, event, at) in gone {
+                host.hub.entity_event(id, event, at);
+            }
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -1094,8 +1105,11 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
-        // A mace's wind burst from a guest's attack.
+        // A blast from a guest's attack, and a mace's wind burst.
+        self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
+        self.flush_lan_particles();
     }
 
     fn lan_guest_joined(
@@ -1187,9 +1201,10 @@ impl Game<'_> {
             match e {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
-                    // particles, bone meal's growth, or anvil result sounds
+                    // particles, bone meal's growth, anvil result sounds, or a
+                    // finished brushing
                     // (these levelEvent calls name no excluded player).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 3008) {
                         None
                     } else {
                         self.lan_acting
@@ -1419,6 +1434,18 @@ impl Game<'_> {
             let using = host.play.get(&g.conn).and_then(|p| p.using());
             m.extra.using_item = using.map_or(0, |(_, ticks)| ticks as i32 + 1);
             m.extra.using_off_hand = using.is_some_and(|(slot, _)| slot == OFFHAND_SLOT);
+            // AvatarRenderer.getArmPose: the used item's BLOCK animation (an
+            // item with `blocks_attacks`) raises the arm.
+            m.extra.blocking = using
+                .and_then(|(slot, _)| {
+                    if slot == OFFHAND_SLOT {
+                        m.extra.off_hand.as_ref()
+                    } else {
+                        m.extra.main_hand.as_ref()
+                    }
+                })
+                .and_then(|i| self.res.items().get(i))
+                .is_some_and(|i| i.blocks_attacks.is_some());
         }
     }
 

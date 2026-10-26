@@ -751,6 +751,17 @@ fn next_double_between(random: &mut impl RandomSource, min: f64, max: f64) -> f6
 pub fn on_block_faces(
     random: &mut impl RandomSource,
     pos: [i32; 3],
+    emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    on_block_faces_between(random, pos, 3, 5, emit);
+}
+/// `ParticleUtils.spawnParticlesOnBlockFaces` with `UniformInt.of(min, max)`
+/// particles per face (3009 sniffer egg cracks use 3 to 6).
+pub fn on_block_faces_between(
+    random: &mut impl RandomSource,
+    pos: [i32; 3],
+    min: i32,
+    max: i32,
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
     const FACES: [[i32; 3]; 6] = [
@@ -762,7 +773,7 @@ pub fn on_block_faces(
         [1, 0, 0],
     ];
     for face in FACES {
-        let count = random.next_int_bound(5 - 3 + 1).unwrap_or(0) + 3;
+        let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
         for _ in 0..count {
             // getRandomSpeedRanges, then spawnParticleOnFace with step factor 0.55.
             let speed: [f64; 3] = std::array::from_fn(|_| next_double_between(random, -0.5, 0.5));
@@ -782,15 +793,17 @@ pub fn on_block_faces(
     }
 }
 /// `ParticleUtils.spawnParticlesAlongAxis(axis, level, pos, 0.125, particle,
-/// UniformInt.of(10, 19))` (level event 3002 on a lightning rod): sparks along
-/// the rod, moving along it. `axis` is 0, 1, 2 for X, Y, Z.
+/// UniformInt.of(min, max))` (`count` is the range; level event 3002 on a
+/// lightning rod uses 10 to 19): sparks along the rod, moving along it.
+/// `axis` is 0, 1, 2 for X, Y, Z.
 pub fn along_axis(
     random: &mut impl RandomSource,
     axis: usize,
     pos: [i32; 3],
+    (min, max): (i32, i32),
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
-    let count = random.next_int_bound(19 - 10 + 1).unwrap_or(0) + 10;
+    let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
     for _ in 0..count {
         let p: [f64; 3] = std::array::from_fn(|i| {
             f64::from(pos[i])

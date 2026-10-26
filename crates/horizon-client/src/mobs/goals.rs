@@ -588,24 +588,38 @@ impl Mob {
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
-        self.player_in_range(w, range, check_sight)
+        self.player_in_range(w, range, check_sight, true)
+    }
+    /// forCombat().ignoreInvisibilityTesting() for the player: the check for
+    /// a target the mob already has, which ignores the visibility scaling.
+    pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        let Some(p) = &w.player else { return false };
+        if p.creative || p.allies.contains(&self.id) {
+            return false;
+        }
+        self.player_in_range(w, range, true, false)
     }
     /// TargetingConditions.forNonCombat().range(range).test for the player
     /// (seen by anyone, within range scaled by visibility, in sight).
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
-        self.player_in_range(w, range, true)
+        self.player_in_range(w, range, true, true)
     }
-    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+    /// `scale` is `TargetingConditions.testInvisible`: scale the range by
+    /// the player's visibility.
+    fn player_in_range(
+        &mut self,
+        w: &MobWorld,
+        range: f64,
+        check_sight: bool,
+        scale: bool,
+    ) -> bool {
         let Some(p) = &w.player else { return false };
         if !p.alive || p.spectator {
             return false;
         }
         // LivingEntity.getVisibilityPercent
-        let mut visibility = 1.0;
-        if p.sneaking {
-            visibility *= 0.8;
-        }
-        if let Some(head) = &p.head {
+        let mut visibility = if scale { p.visibility_percent() } else { 1.0 };
+        if let Some(head) = p.head.as_ref().filter(|_| scale) {
             let skull = match self.species() {
                 Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
                     "minecraft:zombie_head"
@@ -1210,6 +1224,9 @@ pub struct NearestTarget {
     pub interval: i32,
     /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// Mobs closer than this squared distance are not picked
+    /// (`GuardianAttackSelector`: `distanceToSqr > 9`).
+    pub beyond_sqr: Option<f64>,
     /// A condition checked before anything else, by subclasses overriding
     /// `canUse` (SpiderTargetGoal: only in the dark).
     pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
@@ -1242,6 +1259,7 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            beyond_sqr: None,
             gate: None,
             label: None,
             found: None,
@@ -1274,6 +1292,10 @@ impl NearestTarget {
         self.when = Some(f);
         self
     }
+    pub fn beyond(mut self, distance_sqr: f64) -> Self {
+        self.beyond_sqr = Some(distance_sqr);
+        self
+    }
     pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
         self.gate = Some(f);
         self
@@ -1284,9 +1306,25 @@ impl NearestTarget {
         self
     }
 }
+/// `AbstractIllager.canAttack`: a baby `AbstractVillager` is never attacked.
+fn illager_spares(attacker: Species, target: &Seen) -> bool {
+    matches!(
+        attacker,
+        Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+    ) && target.baby
+        && matches!(target.species, Species::Villager | Species::WanderingTrader)
+}
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
     let Some(who) = m.ai.target else { return false };
+    if let Who::Mob(id) = who
+        && cx
+            .w
+            .seen(id)
+            .is_some_and(|s| illager_spares(m.species(), s))
+    {
+        return false;
+    }
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
@@ -1345,10 +1383,12 @@ impl Goal for NearestTarget {
             prey => {
                 let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
                 let id = m.id;
+                let attacker = m.species();
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
                         s.id != id
                             && !s.playing_dead
+                            && !illager_spares(attacker, s)
                             && match prey {
                                 Prey::Species(list) => list.contains(&s.species),
                                 Prey::Filter(f) => f(s),
@@ -1359,6 +1399,9 @@ impl Goal for NearestTarget {
                     .collect();
                 for (cid, cpos) in candidates {
                     if m.distance_sqr(cpos) > range * range {
+                        continue;
+                    }
+                    if self.beyond_sqr.is_some_and(|d| m.distance_sqr(cpos) <= d) {
                         continue;
                     }
                     if !m.sees(cx.w, Who::Mob(cid)) {

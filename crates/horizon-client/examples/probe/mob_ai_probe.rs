@@ -1050,6 +1050,7 @@ pub fn main() -> horizon_client::Result<()> {
                 off_hand: None,
                 head: None,
                 armor_cover: 0.0,
+                invisible: false,
                 spectator: false,
                 gold_armor: false,
                 hurt_by: None,
@@ -1060,6 +1061,7 @@ pub fn main() -> horizon_client::Result<()> {
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                passenger: false,
             }
         });
         let mut scratch = LegacyRandom::new(0);

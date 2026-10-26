@@ -93,7 +93,7 @@ impl Game<'_> {
                 camera_y: camera.y,
                 // level.getMinY(): the Nether and the End start at y 0.
                 min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
-                flat: false,
+                flat: self.level_flat(),
                 forward: forward.map(|c| c as f32),
                 rain,
                 thunder,
@@ -107,9 +107,23 @@ impl Game<'_> {
             },
         )
     }
-    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
+    /// `ClientLevelData.isFlat`: on the server thread, as its spawn info said.
+    fn level_flat(&self) -> bool {
+        match self.remote.as_ref() {
+            Some(r) => r.flat,
+            None => self.dim == Dim::Overworld && self.overworld_flat,
+        }
+    }
+    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
+    /// water. `ClientLevelData.getHorizonHeight`: the bottom of a flat world,
+    /// otherwise y 63.
     pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
-        camera.y < 63.0
+        let horizon = if self.level_flat() {
+            f64::from(MIN_Y)
+        } else {
+            63.0
+        };
+        camera.y < horizon
             && fog_type(
                 &self.world,
                 self.res.facts(),
@@ -271,6 +285,16 @@ impl Game<'_> {
                 && motion_blocking(world, facts, p[0], p[2], p[1] + 64) <= p[1]
                 && rains_at(world, biomes, p[0], p[1], p[2])
         };
+        let tables = &self.pack.context.tables;
+        let model_offset = |state, x, z| tables.offset(state, x, z);
+        let gateway_particles = |state, p| {
+            self.res
+                .block_entity_render()
+                .gateway_faces(world, state, p)
+                .len()
+        };
+        // Level.isThundering: a thunder level above 0.9 where the sky is open.
+        let thundering = self.dim == Dim::Overworld && world.weather.levels(1.0).1 > 0.9;
         let ctx = AnimateContext {
             world,
             facts,
@@ -279,6 +303,10 @@ impl Game<'_> {
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
+            model_offset: &model_offset,
+            gateway_particles: &gateway_particles,
+            thundering,
+            ultrawarm: self.dim == Dim::Nether,
         };
         if let Some(e) = eye {
             let block = [
@@ -288,11 +316,13 @@ impl Game<'_> {
             ];
             animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
             if rain > 0.0 {
-                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10).
+                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10)
+                // and the rain sound.
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
                 let radius = 10;
                 let diameter = 2 * radius + 1;
                 let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32;
+                let mut rain_position = None;
                 for _ in 0..count {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
@@ -305,6 +335,7 @@ impl Game<'_> {
                         continue;
                     }
                     let below = top - 1;
+                    rain_position = Some([x, below, z]);
                     let (bx, bz) = (random.next_double(), random.next_double());
                     let state = world.block(x, below, z);
                     let f = facts.get(state);
@@ -335,6 +366,24 @@ impl Game<'_> {
                     ];
                     self.particles
                         .add(&ParticleOptions::simple(ty), p, [0.0; 3]);
+                }
+                // The last rain column of the tick makes the sound, more often the
+                // longer it has been quiet; indoors it is the quieter one.
+                if let Some(at) = rain_position {
+                    let waited = self.rain_sound_time;
+                    self.rain_sound_time += 1;
+                    if random.next_int_bound(3).unwrap_or(0) < waited {
+                        self.rain_sound_time = 0;
+                        let roof =
+                            motion_blocking(world, facts, block[0], block[2], MIN_Y + HEIGHT);
+                        let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
+                            ("minecraft:weather.rain.above", 0.1, 0.5)
+                        } else {
+                            ("minecraft:weather.rain", 0.2, 1.0)
+                        };
+                        let p = at.map(|c| f64::from(c) + 0.5);
+                        self.audio.play(name, Some(p), volume, pitch);
+                    }
                 }
             }
         }

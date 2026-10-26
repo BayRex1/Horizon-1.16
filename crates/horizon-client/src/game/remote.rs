@@ -191,6 +191,8 @@ pub(super) struct Remote {
     input: horizon_client::interaction_input::InteractionInput,
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
+    /// `CommonPlayerSpawnInfo.isFlat`: the level is a superflat one.
+    pub(super) flat: bool,
     death_message: Option<String>,
     player_type: Option<Arc<MobType>>,
     /// Inventory as last synchronised, for creative-mode slot updates.
@@ -475,6 +477,7 @@ impl Game<'_> {
             input: Default::default(),
             stop_mining: false,
             placing: None,
+            flat: false,
             death_message: None,
             player_type,
             synced: vec![None; 36],
@@ -989,6 +992,7 @@ impl Game<'_> {
         r.chunk_format = Arc::new(r.chunk_format.with_dimension(&dimension));
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
+        r.flat = spawn.flat;
         r.loaded_sent = false;
         // A replacement LocalPlayer has a fresh sendPosition baseline.
         r.position_sender = Default::default();
@@ -1283,6 +1287,8 @@ impl Game<'_> {
                 value: 1,
                 age: 0,
                 on_ground: false,
+                count: 1,
+                ticks: 0,
             });
         }
         if let Some(t) = mob_type {
@@ -1404,6 +1410,13 @@ impl Game<'_> {
                     Vec3::new(position[0], position[1], position[2]),
                 ) || self.end.move_remote_eye(id as u32, position))
             {
+                return;
+            }
+            // So does a firework rocket: its own tick flies it on.
+            if path.is_some()
+                && let Some(f) = self.rockets.iter_mut().find(|f| f.id == id as u32)
+            {
+                f.position = Vec3::new(position[0], position[1], position[2]);
                 return;
             }
             // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
@@ -2064,7 +2077,10 @@ impl Game<'_> {
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
-                self.remove_entity(p.item);
+                // An orb stays: the server may still hold merged ones in it.
+                if !orb {
+                    self.remove_entity(p.item);
+                }
             }
             // ClientPacketListener.handleSetEntityMotion: knockback on this player.
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
@@ -2093,8 +2109,9 @@ impl Game<'_> {
             }
             C::HurtAnimation(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    // Player.animateHurt: the tilt turns around the yaw.
                     if let Some(pl) = self.player.as_mut() {
-                        pl.health.animate_hurt();
+                        pl.health.animate_hurt_dir(p.yaw);
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
@@ -2132,6 +2149,37 @@ impl Game<'_> {
                 }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                // Mob.handleEntityEvent 20: the spawn poof.
+                if p.event == 20 && self.mobs.iter().any(|m| m.id == p.id as u32) {
+                    self.poof_particles(p.id as u32);
+                }
+                // Villager 12, 13 and 14, TamableAnimal and AbstractHorse 6 and
+                // 7, Animal and Allay 18: the particles about the mob.
+                if matches!(p.event, 6 | 7 | 12 | 13 | 14 | 18) {
+                    self.entity_event_particles(p.id as u32, p.event);
+                }
+                // Snowball and ThrownEgg.handleEntityEvent 3: the crumbs where
+                // the projectile is (the server removes it right after).
+                if p.event == 3 {
+                    let crumbs = self
+                        .creatures
+                        .projectiles
+                        .iter()
+                        .find(|pr| pr.id == p.id as u32)
+                        .and_then(|pr| {
+                            let item = match pr.kind {
+                                horizon_client::projectiles::ProjectileKind::Snowball => {
+                                    "minecraft:snowball"
+                                }
+                                horizon_client::projectiles::ProjectileKind::Egg => "minecraft:egg",
+                                _ => return None,
+                            };
+                            Some(([pr.position.x, pr.position.y, pr.position.z], item))
+                        });
+                    if let Some((at, item)) = crumbs {
+                        self.item_burst(at, item);
+                    }
                 }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
@@ -3016,6 +3064,8 @@ impl Game<'_> {
             p.velocity = v;
         } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
             b.velocity = v;
+        } else if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id as u32) {
+            r.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3290,6 +3340,11 @@ impl Game<'_> {
                 resources: self.motion,
             }
             .controlled_simulation_tick(keys)?;
+        } else {
+            // LivingEntity.baseTick counts hurtTime down for a dead or riding
+            // player too (controlled_simulation_tick does it otherwise): left
+            // at 10, the hurt tilt restarted every frame and shook the camera.
+            player.health.advance_clock();
         }
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
@@ -3304,12 +3359,12 @@ impl Game<'_> {
         let feet = [player.position.x, player.position.y, player.position.z];
         for event in events {
             match event {
-                horizon_client::motion::MotionEvent::Emission {
-                    state, in_water, ..
-                } if !crouching => {
+                horizon_client::motion::MotionEvent::Emission { state, muffled, .. }
+                    if !crouching =>
+                {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Player.playStepSound: muffled under the swim sound in water.
-                    let (volume, pitch) = if in_water {
+                    let (volume, pitch) = if muffled {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
                         (sounds.volume * 0.15, sounds.pitch)
@@ -3542,6 +3597,20 @@ impl Game<'_> {
             // LivingEntity.updatingUsingItem: the ticks the item has been
             // used before this one. Another player's use particles; a mob's
             // drawn bow only needs the count (its pull follows it).
+            if player {
+                // AvatarRenderer.getArmPose: the used item's BLOCK animation
+                // (an item with `blocks_attacks`) raises the arm.
+                let used = if m.extra.using_off_hand {
+                    &m.extra.off_hand
+                } else {
+                    &m.extra.main_hand
+                };
+                m.extra.blocking = m.extra.using_item > 0
+                    && used
+                        .as_ref()
+                        .and_then(|i| self.res.items().get(i))
+                        .is_some_and(|i| i.blocks_attacks.is_some());
+            }
             if m.extra.using_item > 0 {
                 if player {
                     let item = if m.extra.using_off_hand {
@@ -4051,18 +4120,23 @@ impl Game<'_> {
                 world_border: false,
                 sequence: seq,
             }));
-            let target = [
-                hit.pos[0] + hit.face[0],
-                hit.pos[1] + hit.face[1],
-                hit.pos[2] + hit.face[2],
-            ];
-            let ticks = self.ticks;
+            // Only a predicted placement (predict_place) marks a cell whose
+            // resend plays a place sound: an empty hand or a non-block item
+            // places nothing (BlockItem.place is where the sound comes from).
             if let Some(r) = self.remote.as_mut() {
                 r.use_target = Some(hit.pos);
-                r.placing = Some((target, ticks));
             }
             if reacts {
                 self.predict_use(&changes, seq);
+            } else if held.as_ref().is_some_and(|s| &*s.item == "minecraft:brush") {
+                // BrushItem.useOn: brushing starts here (CONSUME, no swing); the
+                // server brushes and the dust is this client's own.
+                self.with_hand(hand, |g| {
+                    if g.using.is_none() {
+                        g.using = Some((g.held_slot(), 0));
+                    }
+                });
+                return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
             {
@@ -4383,6 +4457,30 @@ impl Game<'_> {
         // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
         // different stack in the hand. The off hand keeps its item.
         let in_hand = slot == self.selected || slot == super::shield::OFFHAND_SLOT;
+        // BrushItem.onUseTick: with no block aimed the use ends (the server
+        // ends it too); a stroke shows its dust. Its sounds are the server's.
+        if stack
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:brush")
+        {
+            let elapsed = ticks + 1;
+            let hit = self.pick().filter(|_| in_hand);
+            if let Some(hit) = &hit
+                && elapsed % 10 == 5
+            {
+                self.brush_dust(hit, slot == super::shield::OFFHAND_SLOT);
+            }
+            if hit.is_none() && in_hand {
+                self.send(S::PlayerAction(play::PlayerAction {
+                    action: 6,
+                    pos: [0; 3],
+                    direction: 0,
+                    sequence: 0,
+                }));
+            }
+            self.using = hit.and(Some((slot, elapsed))).filter(|_| elapsed < 200);
+            return;
+        }
         // A drawn bow, a charging crossbow, a raised shield...: held until
         // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {

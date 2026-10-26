@@ -75,6 +75,8 @@ pub(super) struct GuestPlay {
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
     last_inventory: u64,
+    /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
+    levitation: Option<([f64; 3], u64)>,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
     /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
@@ -158,6 +160,7 @@ pub(super) struct GuestSwap {
     host_ender: Option<(i32, i32, i32)>,
     adv_loaded: bool,
     last_inventory: u64,
+    levitation: Option<([f64; 3], u64)>,
     death_cause: Option<String>,
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
@@ -382,6 +385,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.hook, &mut play.hook);
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
+        let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
         let acting = (
             self.lan_acting.replace(conn),
@@ -446,6 +450,7 @@ impl Game<'_> {
             host_ender,
             adv_loaded,
             last_inventory,
+            levitation,
             death_cause,
             acting,
             packets,
@@ -504,6 +509,7 @@ impl Game<'_> {
             host_ender,
             adv_loaded,
             last_inventory,
+            levitation,
             death_cause,
             combat,
             acting,
@@ -614,6 +620,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.hook, &mut play.hook);
         self.adv.loaded = adv_loaded;
         play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
+        play.levitation = std::mem::replace(&mut self.adv.levitation, levitation);
         let stat_events = std::mem::take(&mut play.stats.events);
         let name = g.name.clone();
         self.potions.swap_player(&mut g.effects, &mut play.potions);
@@ -657,6 +664,13 @@ impl Game<'_> {
                 g.sprinting = false;
             }
             m.sprinting = false;
+            // ServerPlayer.indicateDamage: the hit's direction to the player.
+            if let Some(yaw) = m.health.indicated_dir.take() {
+                g.send(&C::HurtAnimation(play::HurtAnimation {
+                    id: g.entity_id,
+                    yaw,
+                }));
+            }
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
@@ -1518,9 +1532,13 @@ impl Game<'_> {
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
                 && self.pvp_land(host, victim, &strike)
-                && strike.stops_sprint()
             {
-                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
+                self.as_guest(host, conn, |g| {
+                    g.pvp_exhaustion();
+                    if strike.stops_sprint() {
+                        g.stop_sprint_after_extra_knockback();
+                    }
+                });
             }
             return;
         }
@@ -1853,6 +1871,10 @@ impl Game<'_> {
         }
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
+        } else if in_frame_bed.is_none() && host.hub.guests[i].spawn.is_none() {
+            // TeleportTransition.createDefault: no point of its own, so the
+            // world spawn's free column once its chunks have loaded.
+            self.world_spawn_trip(conn);
         }
         if let Some(c) = in_frame_bed
             && self.dim == super::Dim::Overworld
@@ -1871,6 +1893,10 @@ impl Game<'_> {
                 host.hub.guests[i].yaw = yaw;
                 [at.x, at.y, at.z]
             });
+            if found.is_none() {
+                // TeleportTransition.missingRespawnBlock.
+                self.world_spawn_trip(conn);
+            }
             host.hub.teleport(i, Some(at));
         }
         if away && let Err(e) = self.enter_level(Some(host), back) {
@@ -2187,6 +2213,7 @@ impl Game<'_> {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let freeze_immune = game.wears_freeze_immune();
+            let burn_immune = game.wears_burn_from_stepping_immunity();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2251,6 +2278,7 @@ impl Game<'_> {
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
             w.player.freeze_immune = freeze_immune;
+            w.player.burn_from_stepping_immune = burn_immune;
             let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
@@ -2276,6 +2304,9 @@ impl Game<'_> {
             for d in travelled {
                 game.movement_stats(Vec3::new(d[0], d[1], d[2]));
             }
+            // LivingEntity.baseTick: a new block position runs the worn
+            // enchantments' location_changed effects (frost walker).
+            game.location_changed_effects([start.x, start.y, start.z], from_ground);
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
@@ -2300,7 +2331,15 @@ impl Game<'_> {
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
+            // Player.causeFallDamage: a fall of 2 blocks or more counts.
+            for event in &events {
+                if let MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) = event
+                {
+                    game.stats.custom("fall_one_cm", *cm);
+                }
+            }
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
@@ -2394,9 +2433,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2659,7 +2702,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.

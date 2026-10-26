@@ -34,9 +34,13 @@ pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> b
 /// `DifficultyInstance`: the local difficulty at a position.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDifficulty {
+    /// The world difficulty id, 0 peaceful to 3 hard.
+    pub base: u8,
     pub effective: f32,
     /// The world difficulty is hard.
     pub hard: bool,
+    /// `Difficulty.getId`: 0 peaceful to 3 hard.
+    pub id: u8,
 }
 /// `DimensionType.MOON_BRIGHTNESS_PER_PHASE`.
 pub const MOON_BRIGHTNESS: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
@@ -47,8 +51,10 @@ impl LocalDifficulty {
         let hard = base == 3;
         if base == 0 {
             return Self {
+                base,
                 effective: 0.0,
                 hard,
+                id: base,
             };
         }
         let global = ((total as f32 - 72000.0) / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
@@ -59,8 +65,10 @@ impl LocalDifficulty {
             local *= 0.5;
         }
         Self {
+            base,
             effective: f32::from(base) * (0.75 + global + local),
             hard,
+            id: base,
         }
     }
     /// `getSpecialMultiplier`.
@@ -263,6 +271,18 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::TropicalFish => super::aquatic::finalize(m),
         S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}
+    }
+    // Zombie.finalizeSpawn ends with handleAttributes: the reinforcement
+    // chance (and a leader's bonus) that `Zombie.hurtServer` reads.
+    if matches!(
+        m.species(),
+        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::ZombifiedPiglin
+    ) {
+        super::finalize::zombie_attributes(
+            m,
+            difficulty.special(),
+            super::finalize::Reason::Natural,
+        );
     }
 }
 /// VillagerType.byBiome

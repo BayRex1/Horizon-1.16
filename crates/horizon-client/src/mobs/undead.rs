@@ -1,7 +1,7 @@
 //! Zombies (zombie, husk, drowned, zombie villager) and skeletons (skeleton,
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
-    Mob, MobEvent, Species, Who,
+    Damage, Mob, MobEvent, Species, Who,
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
@@ -9,6 +9,16 @@ use super::{
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
+
+/// `Zombie.hurtServer`, once the hit landed: a zombie with a target (its own,
+/// else a living attacker) asks the game to try calling a reinforcement; the
+/// difficulty, chance and spawn tests are the game's (`call_reinforcements`).
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
+    if let Some(target) = m.ai.target.or(source.attacker) {
+        m.outbox
+            .push(MobEvent::Reinforcements { mob: m.id, target });
+    }
+}
 
 pub fn register(m: &mut Mob) {
     use Species as S;
@@ -487,7 +497,12 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {

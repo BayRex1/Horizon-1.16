@@ -209,6 +209,9 @@ pub enum EntityQuery {
     Mobs,
     /// Minecarts only (detector rails).
     Minecart,
+    /// Arrows only (`AbstractArrow`, thrown tridents included): the entities
+    /// a wooden button senses.
+    Arrows,
 }
 
 /// Side effects reported to the caller, in vanilla call order.
@@ -255,7 +258,8 @@ pub enum LevelEvent {
     /// event follow as their own events; the caller removes the block.
     PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
-    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// (dispenser/dropper/crafter scheduled tick), `"brushable"` (a suspicious
+    /// block's scheduled tick: `checkReset`), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
     /// (a nether portal won its zombified piglin roll; the caller checks
     /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
@@ -650,6 +654,20 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
     }
+    /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
+    /// unless the tool prevents ice melting (silk touch). `destroyed` is the
+    /// state that was broken.
+    pub fn ice_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        self.sim(level, ticks)
+            .ice_destroyed_by_player(pos, destroyed, prevents_melting);
+    }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
     pub fn fire_state_for<L: LevelAccess + ?Sized>(
@@ -814,6 +832,22 @@ impl Behaviours {
         pos: BlockPos,
     ) -> i32 {
         self.sim(level, ticks).best_neighbor_signal(pos)
+    }
+    /// `BlockState.onProjectileHit` of a target block (`TargetBlock`) hit by
+    /// a projectile at `location` on the face with normal `face`; `arrow`
+    /// for an `AbstractArrow`. Returns the output strength, or None when the
+    /// block at `pos` is not a target block.
+    pub fn target_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        location: [f64; 3],
+        face: [i32; 3],
+        arrow: bool,
+    ) -> Option<i32> {
+        self.sim(level, ticks)
+            .target_projectile_hit(pos, location, face, arrow)
     }
 }
 
