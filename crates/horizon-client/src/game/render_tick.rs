@@ -18,10 +18,22 @@ use horizon_core::random::{LegacyRandom, RandomSource};
 
 /// The first motion-blocking block at or below `from` (Heightmap MOTION_BLOCKING), plus one.
 fn motion_blocking(world: &World, facts: &BlockFacts, x: i32, z: i32, from: i32) -> i32 {
+    motion_blocking_leaves(world, facts, x, z, from, true)
+}
+/// `motion_blocking` where leaves count only for MOTION_BLOCKING, not for
+/// MOTION_BLOCKING_NO_LEAVES.
+fn motion_blocking_leaves(
+    world: &World,
+    facts: &BlockFacts,
+    x: i32,
+    z: i32,
+    from: i32,
+    leaves: bool,
+) -> i32 {
     let mut y = from.min(MIN_Y + HEIGHT - 1);
     while y > MIN_Y {
         let f = facts.get(world.block(x, y, z));
-        if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
+        if f.full_collision || f.fluid != Fluid::None || leaves && f.name.contains("leaves") {
             return y + 1;
         }
         y -= 1;
@@ -305,6 +317,11 @@ impl Game<'_> {
         };
         // Level.isThundering: a thunder level above 0.9 where the sky is open.
         let thundering = self.dim == Dim::Overworld && world.weather.levels(1.0).1 > 0.9;
+        let height_no_leaves =
+            |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
+        // The day timeline: firefly bush sounds from 12600 to 23400.
+        let firefly_bush_sounds = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let ctx = AnimateContext {
             world,
             facts,
@@ -312,6 +329,9 @@ impl Game<'_> {
             biomes,
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
+            height_no_leaves: &height_no_leaves,
+            firefly_bush_sounds,
+            sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
             model_offset: &model_offset,
             gateway_particles: &gateway_particles,
