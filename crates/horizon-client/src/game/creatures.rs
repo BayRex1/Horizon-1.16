@@ -47,7 +47,7 @@ pub(super) struct Creatures {
     pub wind_bursts: Vec<super::wind::Burst>,
     /// Explosion packets from a guest's turn, waiting for it to end
     /// (centre, radius, blocks hit; game/lan_particles.rs).
-    pub lan_explosions: Vec<([f64; 3], f32, usize)>,
+    pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
     /// Mace smash knockback on the other players from a guest's turn, waiting
     /// for it to end (game/mace.rs).
     pub smash_pushes: Vec<super::mace::SmashPush>,
