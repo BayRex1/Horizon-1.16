@@ -217,7 +217,9 @@ impl Game<'_> {
         }
     }
     /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the
-    /// head without offers, else open the trading screen.
+    /// head without offers, else open the trading screen. A sneaking player
+    /// gets neither from a villager (`isSecondaryUseActive`); a wandering
+    /// trader has no such check.
     pub(super) fn interact_trader(
         &mut self,
         index: usize,
@@ -230,7 +232,9 @@ impl Game<'_> {
             || item == "minecraft:villager_spawn_egg"
             || self.station.is_some()
             || m.extra.flag2
-            || (species == Species::Villager && villager::sleeping(m))
+            || (species == Species::Villager
+                && (villager::sleeping(m)
+                    || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)))
         {
             return Ok(false);
         }
