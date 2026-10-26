@@ -917,6 +917,10 @@ pub enum MobEvent {
         slot: usize,
         stack: Option<crate::items::ItemStack>,
     },
+    /// `InfestedMobEffect.onMobHurt`: the mob was hurt while infested.
+    Infested {
+        mob: u32,
+    },
     /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
     /// slot if it is empty, as a guaranteed drop.
     Gift {
@@ -1939,6 +1943,9 @@ impl Mob {
             && self.ai.last_hurt_by.is_some()
         {
             aquatic::spawn_ink(self);
+        }
+        if self.has_effect("minecraft:infested") {
+            self.outbox.push(MobEvent::Infested { mob: self.id });
         }
         true
     }
