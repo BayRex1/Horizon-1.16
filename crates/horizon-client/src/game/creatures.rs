@@ -928,7 +928,6 @@ impl Game<'_> {
         for d in stacks {
             self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
         }
-        }
     }
     /// Melee or ranged damage to another mob; whether the hit landed.
     fn mob_hits_mob(&mut self, target: u32, amount: f32, source: Damage) -> bool {
