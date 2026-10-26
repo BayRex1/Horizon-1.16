@@ -3251,6 +3251,11 @@ impl Game<'_> {
             self.open_command_block(key);
             return;
         }
+        // SignBlock.useWithoutItem: the text editor, not a container.
+        if horizon_client::signs::sign_kind(&name).is_some() {
+            self.use_sign_empty_hand(pos);
+            return;
+        }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
             self.craft_table = Some(pos);
@@ -3800,6 +3805,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_golem_statue(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_sign_applicator(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(true);
             }
