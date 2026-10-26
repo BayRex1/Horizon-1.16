@@ -4665,6 +4665,20 @@ impl Game<'_> {
                 elytra.damage += loss;
             }
         }
+        if let Some((at, velocity)) = self.tick_soul_speed() {
+            self.particles.send_particles(
+                &horizon_client::particles::ParticleOptions::simple(
+                    horizon_client::particles::ParticleType::Soul,
+                ),
+                at,
+                velocity,
+                1.0,
+                0,
+            );
+            if let Some(host) = self.lan.as_ref() {
+                lan_particles::send_soul_particle(host, at, velocity);
+            }
+        }
         self.tick_avatar(before, riding);
         self.end_spin_attack(spin_hit);
         self.record_combat(&events);
