@@ -1463,6 +1463,8 @@ struct Game<'a> {
     sleep_timer: u32,
     dim: Dim,
     world_root: PathBuf,
+    /// The world's overworld is superflat (`ClientLevelData.isFlat`).
+    overworld_flat: bool,
     /// A player carried through a portal, re-placed once the destination loads.
     travelling: Option<(PlayerMotion, Vec3)>,
     /// A server's players on their way to another level, each waiting for
@@ -8307,6 +8309,8 @@ impl Game<'_> {
         book.to_be_displayed.retain(|r| index.contains(r));
         self.dim = dim;
         self.world_root = save_root.clone();
+        self.overworld_flat =
+            horizon_client::save::WorldGen::read(&save_root).is_some_and(|w| w.flat);
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
         self.clear_entities();
@@ -12816,6 +12820,7 @@ impl<'a> Game<'a> {
             sleep_timer: 0,
             dim: Dim::Overworld,
             world_root: PathBuf::new(),
+            overworld_flat: false,
             travelling: None,
             server_trips: Vec::new(),
             level_teleports: Vec::new(),
