@@ -1027,6 +1027,7 @@ mod item_column_tests {
             id,
             stack: ItemStack::new("minecraft:stone", 1),
             thrower: None,
+            target: None,
             position: at,
             previous: at,
             velocity: Vec3::ZERO,
