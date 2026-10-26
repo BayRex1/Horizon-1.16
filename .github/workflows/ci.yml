@@ -66,12 +66,23 @@ jobs:
           cargo +stable clippy --workspace --all-targets --features horizon-client/mods -- -D warnings
           # The server build (released as horizon-engine): the game without sound or controllers.
           cargo +stable clippy -p horizon-client --all-targets --no-default-features -- -D warnings
+      - name: Install cargo-nextest (prebuilt)
+        if: steps.rust.outputs.required != 'false'
+        run: |
+          nextest_bin="$RUNNER_TEMP/nextest-bin"
+          archive="$RUNNER_TEMP/cargo-nextest.tar.gz"
+          mkdir -p "$nextest_bin"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-x86_64-unknown-linux-gnu.tar.gz
+          echo "b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$nextest_bin" cargo-nextest
+          echo "$nextest_bin" >> "$GITHUB_PATH"
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which clippy above already
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
         run: |
-          cargo +stable test --workspace --lib --bins --tests --features horizon-client/mods,horizon-mods/pack
+          cargo +stable nextest run --workspace --lib --bins --tests --features horizon-client/mods,horizon-mods/pack --no-fail-fast
           cargo +stable test --workspace --doc --features horizon-client/mods,horizon-mods/pack
   # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
   # changes it or a crate it builds is checked here, and so is every push to main: two pull requests can each pass

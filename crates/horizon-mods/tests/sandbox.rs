@@ -62,7 +62,8 @@ fn mods_dir() -> &'static Path {
             "building the test mods needs `rustup target add wasm32-unknown-unknown`"
         );
         let built = target.join("wasm32-unknown-unknown/release");
-        let dir = target.join("mods");
+        // Nextest runs each test in its own process; their writable fixtures must stay apart.
+        let dir = target.join(format!("mods-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let example = |name: &str| {
             let path = format!("crates/horizon-mod-sdk/examples/{name}/horizon-mod.toml");
