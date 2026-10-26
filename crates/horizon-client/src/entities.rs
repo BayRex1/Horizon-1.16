@@ -2,13 +2,28 @@
 //! `ItemEntity.tick`: gravity 0.04, 0.98 drag (block friction on the ground),
 //! a ground bounce of -0.5, water buoyancy, pickup delay and 6000-tick despawn.
 use crate::{
+    assets::Assets,
     blocks::{BlockFacts, Fluid},
     collisions::SceneCollisions,
     items::ItemStack,
     world::World,
 };
-use horizon_core::geometry::{Aabb, Vec3};
-use horizon_world::block_collision::BlockCollisionRegistry;
+use horizon_core::{
+    geometry::{Aabb, Direction, Vec3},
+    position::BlockPos,
+};
+use horizon_world::{
+    block_collision::BlockCollisionRegistry,
+    entity_fluid::{
+        CurrentTarget, EntityFluidInteraction, FluidInteractionWorld, FluidMembership,
+        FluidSections, FluidTagId,
+    },
+    fluid::{FluidHeightWorld, FluidKind, FluidState},
+    fluid_flow::{FluidFlowWorld, flow_at},
+};
+
+const WATER: FluidTagId = FluidTagId(0);
+const LAVA: FluidTagId = FluidTagId(1);
 
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
@@ -41,6 +56,7 @@ impl ItemEnvironmentTick {
 }
 impl ItemEntity {
     pub const WIDTH: f64 = 0.25;
+    pub const EYE_HEIGHT: f32 = 0.2125;
     pub fn bounds(&self) -> Aabb {
         let h = Self::WIDTH / 2.0;
         Aabb::new(
@@ -162,6 +178,7 @@ impl ItemEntity {
     pub fn tick(
         &mut self,
         world: &World,
+        assets: &Assets,
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         no_physics: bool,
@@ -171,20 +188,40 @@ impl ItemEntity {
         if self.pickup_delay > 0 && self.pickup_delay != u32::MAX {
             self.pickup_delay -= 1;
         }
-        let eye = world.block(
-            self.position.x.floor() as i32,
-            (self.position.y + 0.1).floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let in_water = facts.get(eye).fluid == Fluid::Water;
+
+        let mut fluids = EntityFluidInteraction::new([WATER, LAVA]);
+        let mut fluid_world = ItemFluidWorld {
+            item: self,
+            world,
+            assets,
+            facts,
+        };
+        let _ = fluids.update(&mut fluid_world, false, 4096);
+        let in_water = fluids.is_in_fluid(&fluid_world, WATER);
+        let in_lava = fluids.is_in_fluid(&fluid_world, LAVA);
+        let water_height = fluids.fluid_height(&fluid_world, WATER);
+        let lava_height = fluids.fluid_height(&fluid_world, LAVA);
+
         if in_water {
+            let _ = fluids.apply_current(&mut fluid_world, WATER, 0.014);
+        }
+        if in_lava {
+            let _ = fluids.apply_current(
+                &mut fluid_world,
+                LAVA,
+                if world.fast_lava { 0.007 } else { 0.007 / 3.0 },
+            );
+        }
+
+        if in_water && water_height > 0.1 {
             // ItemEntity.setUnderwaterMovement
             self.velocity = Vec3::new(
                 self.velocity.x * 0.99,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
                 self.velocity.z * 0.99,
             );
-        } else if facts.get(eye).fluid == Fluid::Lava {
+        } else if in_lava && lava_height > 0.1 {
+            // ItemEntity.setUnderLavaMovement
             self.velocity = Vec3::new(
                 self.velocity.x * 0.95,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
@@ -253,6 +290,140 @@ impl ItemEntity {
         self.pickup_delay != u32::MAX && age < 6000 && self.stack.count < max_stack
     }
 }
+
+struct ItemFluidWorld<'a> {
+    item: &'a mut ItemEntity,
+    world: &'a World,
+    assets: &'a Assets,
+    facts: &'a BlockFacts,
+}
+impl ItemFluidWorld<'_> {
+    fn state(&self, p: BlockPos) -> horizon_world::registry::BlockStateId {
+        self.world.block(p.x, p.y, p.z)
+    }
+    fn fluid_at(&self, p: BlockPos) -> std::io::Result<FluidState> {
+        FluidState::from_block(
+            self.assets
+                .registry
+                .state(self.state(p))
+                .ok_or_else(|| std::io::Error::other("missing ItemEntity fluid state"))?,
+        )
+    }
+}
+impl FluidMembership for ItemFluidWorld<'_> {
+    fn fluid_in_tag(&self, kind: FluidKind, tag: FluidTagId) -> bool {
+        match tag {
+            WATER => matches!(kind, FluidKind::Water | FluidKind::FlowingWater),
+            LAVA => matches!(kind, FluidKind::Lava | FluidKind::FlowingLava),
+            _ => false,
+        }
+    }
+}
+impl CurrentTarget for ItemFluidWorld<'_> {
+    type Error = std::io::Error;
+    fn is_player_class(&self) -> bool {
+        false
+    }
+    fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+        Ok(self.item.velocity)
+    }
+    fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+        self.item.velocity = Vec3::new(
+            self.item.velocity.x + delta.x,
+            self.item.velocity.y + delta.y,
+            self.item.velocity.z + delta.z,
+        );
+        Ok(())
+    }
+}
+impl FluidInteractionWorld for ItemFluidWorld<'_> {
+    type Error = std::io::Error;
+    type Chunk = (i32, i32);
+    fn interaction_box(&mut self) -> Result<Option<Aabb>, Self::Error> {
+        Ok(Some(
+            self.item.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+        ))
+    }
+    fn loaded_chunk(&mut self, x: i32, z: i32) -> Result<Option<Self::Chunk>, Self::Error> {
+        Ok(self.world.chunks.contains_key(&(x, z)).then_some((x, z)))
+    }
+    fn chunk_sections(&mut self, _: Self::Chunk) -> Result<FluidSections<'_>, Self::Error> {
+        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        Ok(FluidSections {
+            minimum_section_y: crate::chunk::MIN_Y / 16,
+            has_fluid: &SECTIONS,
+        })
+    }
+    fn bounding_box_min_y(&self) -> f64 {
+        self.item.position.y
+    }
+    fn block_x(&self) -> i32 {
+        self.item.position.x.floor() as i32
+    }
+    fn eye_y(&mut self) -> Result<f64, Self::Error> {
+        Ok(self.item.position.y + f64::from(ItemEntity::EYE_HEIGHT))
+    }
+    fn block_z(&self) -> i32 {
+        self.item.position.z.floor() as i32
+    }
+    fn fluid_state(&mut self, p: BlockPos) -> Result<FluidState, Self::Error> {
+        self.fluid_at(p)
+    }
+    fn fluid_height(&mut self, s: FluidState, p: BlockPos) -> Result<f32, Self::Error> {
+        s.height_at(self, [p.x, p.y, p.z])
+    }
+    fn camera_height(&mut self, s: FluidState, p: BlockPos) -> Result<f32, Self::Error> {
+        s.camera_height_at(self, [p.x, p.y, p.z])
+    }
+    fn flow(&mut self, s: FluidState, p: BlockPos) -> Result<Vec3, Self::Error> {
+        flow_at(self, s, p)
+    }
+}
+impl FluidHeightWorld for ItemFluidWorld<'_> {
+    type Error = std::io::Error;
+    fn fluid(&mut self, p: [i32; 3]) -> Result<FluidState, Self::Error> {
+        self.fluid_at(BlockPos::new(p[0], p[1], p[2]))
+    }
+    fn sturdy_down(&mut self, p: [i32; 3]) -> Result<bool, Self::Error> {
+        Ok(self
+            .facts
+            .get(self.state(BlockPos::new(p[0], p[1], p[2])))
+            .sturdy_full
+            & 1
+            != 0)
+    }
+}
+impl FluidFlowWorld for ItemFluidWorld<'_> {
+    type Error = std::io::Error;
+    type Block = horizon_world::registry::BlockStateId;
+    fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Self::Error> {
+        self.fluid_at(p)
+    }
+    fn block(&mut self, p: BlockPos) -> Result<Self::Block, Self::Error> {
+        Ok(self.state(p))
+    }
+    fn blocks_fluid_flow(&self, s: Self::Block) -> bool {
+        self.assets
+            .blocks_fluid_flow
+            .contains(&self.assets.registry.state(s).unwrap().name)
+    }
+    fn is_ice_class(&self, s: Self::Block) -> bool {
+        self.facts
+            .get(s)
+            .classes
+            .iter()
+            .any(|c| c.as_ref() == "IceBlock")
+    }
+    fn is_face_sturdy(
+        &mut self,
+        s: Self::Block,
+        _: BlockPos,
+        d: Direction,
+    ) -> Result<bool, Self::Error> {
+        Ok(self.facts.get(s).sturdy_full & (1 << d as u8) != 0)
+    }
+}
+
 /// Dropped items by block cell, for `ItemEntity.mergeWithNeighbours`'s
 /// search around an item. Holds indexes into the tick's item list.
 #[derive(Default)]
@@ -1082,5 +1253,54 @@ mod merge_tests {
         merge_with_neighbours(&mut items, &mut removed, &mut cells, 0, &max_stack);
         assert_eq!(removed, [true, false]);
         assert_eq!(items[1].stack.count, 2);
+    }
+
+    #[test]
+    fn item_entity_follows_water_currents() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let mut world = crate::world::World::test_scene(&assets, &render, 3).unwrap();
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let mut state = assets.registry.state(water).unwrap().clone();
+        state.properties.insert("level".into(), "1".into());
+        let flowing = assets.registry.resolve(&state).unwrap();
+        for x in 19..=22 {
+            for z in 19..=21 {
+                world.set(x, 3, z, stone).unwrap();
+            }
+        }
+        world.set(20, 4, 20, water).unwrap();
+        world.set(21, 4, 20, flowing).unwrap();
+        let at = Vec3::new(20.5, 4.0, 20.5);
+        let mut item = ItemEntity {
+            health: 5,
+            fire_ticks: -1,
+            id: 0,
+            stack: ItemStack::new("minecraft:dirt", 1),
+            thrower: None,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            on_ground: false,
+            age: 0,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: 0,
+        };
+        item.tick(&world, &assets, &facts, &collision, false);
+        assert!(
+            (item.velocity.x - 0.0135828).abs() < 1e-6,
+            "flowing water must push item entity east with fluid drag: {:?}",
+            item.velocity
+        );
     }
 }
