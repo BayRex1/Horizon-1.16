@@ -1689,6 +1689,9 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
     ) -> Vec<(horizon_client::text::Text, u32)> {
+        #[cfg(feature = "mods")]
+        let mut contributions =
+            horizon_client::mod_tooltip::Contributions::new(self.mods.mods.tooltip_rules());
         let e: &Enchantments = &self.res.stations().enchantments;
         let props = e.props(&stack.item);
         let rarity = horizon_client::item_tooltip::rarity(
@@ -1785,6 +1788,21 @@ impl Game<'_> {
             push(&mut lines, format!(" {p}"), rgba(170, 170, 170, 255));
             push(&mut lines, format!(" {m}"), rgba(170, 170, 170, 255));
         }
+        #[cfg(feature = "mods")]
+        for source in [
+            horizon_mods::EnchantmentSource::Stored,
+            horizon_mods::EnchantmentSource::Applied,
+        ] {
+            contributions.enchantments(
+                &mut lines,
+                stack,
+                e,
+                source,
+                &self.gui.atlas.font,
+                &translate,
+            );
+        }
+        #[cfg(not(feature = "mods"))]
         if display.shows("minecraft:stored_enchantments") {
             for (text, curse) in e.tooltip(stack.stored_enchantments()) {
                 push(
@@ -1798,6 +1816,7 @@ impl Game<'_> {
                 );
             }
         }
+        #[cfg(not(feature = "mods"))]
         if display.shows("minecraft:enchantments") {
             for (text, curse) in e.tooltip(stack.enchantments()) {
                 push(
@@ -1920,6 +1939,8 @@ impl Game<'_> {
                 );
             }
         }
+        #[cfg(feature = "mods")]
+        contributions.item(&mut lines, stack, &self.gui.atlas.font, &translate);
         lines
     }
     /// Menu state for the control socket.

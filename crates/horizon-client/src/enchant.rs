@@ -360,16 +360,31 @@ impl Enchantments {
     }
     /// Tooltip lines for a level list, in `#tooltip_order` then remaining order.
     pub fn tooltip(&self, levels: &[(Arc<str>, u32)]) -> Vec<(String, bool)> {
+        self.tooltip_entries(levels)
+            .into_iter()
+            .map(|(_, text, curse)| (text, curse))
+            .collect()
+    }
+
+    /// Canonical tooltip order with resource IDs retained for typed contributions.
+    pub fn tooltip_entries<'a>(
+        &self,
+        levels: &'a [(Arc<str>, u32)],
+    ) -> Vec<(&'a str, String, bool)> {
         let order = self.tag("minecraft:tooltip_order");
         let mut out = Vec::new();
+        let mut push = |id: &'a str, level| {
+            let (text, curse) = self.full_name(id, level);
+            out.push((id, text, curse));
+        };
         for id in order {
-            if let Some((_, l)) = levels.iter().find(|(e, _)| e == id) {
-                out.push(self.full_name(id, *l));
+            if let Some((id, level)) = levels.iter().find(|(e, _)| e == id) {
+                push(id, *level);
             }
         }
-        for (id, l) in levels {
+        for (id, level) in levels {
             if !order.contains(id) {
-                out.push(self.full_name(id, *l));
+                push(id, *level);
             }
         }
         out

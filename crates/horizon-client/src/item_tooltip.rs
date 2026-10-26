@@ -23,7 +23,7 @@ impl<'a> TooltipDisplay<'a> {
         }
     }
 
-    fn hides_tooltip(&self) -> bool {
+    pub fn hides_tooltip(&self) -> bool {
         matches!(
             self.component.and_then(|display| display.get("hide_tooltip")),
             Some(Tag::Byte(value)) if *value != 0
