@@ -674,6 +674,8 @@ pub struct Extra {
     pub saddled: bool,
     /// The durability a wolf's body armor (`extra.head`) has lost.
     pub body_damage: i32,
+    /// `Cat.RELAX_STATE_ONE`: watching a sleeping owner before lying down.
+    pub relax_one: bool,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -1054,6 +1056,11 @@ pub enum MobEvent {
         count: u32,
         at: [f64; 3],
     },
+    /// `Mob.dropFromGiftLootTable`: a gift loot table's items dropped at `at`.
+    DropGift {
+        table: &'static str,
+        at: [f64; 3],
+    },
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
@@ -1370,6 +1377,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isSilent`.
     pub silent: bool,
+    /// `Cat.isLying` or `isRelaxStateOne`.
+    pub lying: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
     /// The active effects, without namespace (`slowness`, `poison`...).
@@ -1458,6 +1467,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             silent: m.silent,
+            lying: m.species() == Species::Cat && (m.extra.flag || m.extra.relax_one),
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
             effects: m
                 .extra
@@ -1624,6 +1634,10 @@ pub struct PlayerView {
     pub remote: bool,
     /// `isPassenger`.
     pub passenger: bool,
+    /// `isSleeping` and `getSleepTimer` (100 once slept through, then the
+    /// ticks fading out after waking up).
+    pub sleeping: bool,
+    pub sleep_timer: u32,
 }
 impl PlayerView {
     /// `LivingEntity.getVisibilityPercent` without the worn-skull scaling.

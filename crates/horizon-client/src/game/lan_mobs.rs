@@ -381,6 +381,8 @@ mod tests {
             allies: Default::default(),
             remote: false,
             passenger: false,
+            sleeping: false,
+            sleep_timer: 0,
         }
     }
 

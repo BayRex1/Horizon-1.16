@@ -218,6 +218,8 @@ impl Game<'_> {
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
             passenger: self.riding.is_some(),
+            sleeping: self.sleeping.is_some(),
+            sleep_timer: self.sleep_timer,
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -1216,6 +1218,22 @@ impl Game<'_> {
                     [0.0, 0.2, 0.0],
                     10,
                 ),
+                MobEvent::DropGift { table, at } => {
+                    let stacks =
+                        self.res
+                            .items()
+                            .loot_table(table, false, None, &mut self.world.random);
+                    for stack in stacks {
+                        // ItemEntity's own random motion.
+                        let r = &mut self.world.random;
+                        let v = [
+                            f64::from(r.next_float()) * 0.2 - 0.1,
+                            0.2,
+                            f64::from(r.next_float()) * 0.2 - 0.1,
+                        ];
+                        self.spawn_item(stack, at, v, 10);
+                    }
+                }
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,

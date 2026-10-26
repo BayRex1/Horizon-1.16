@@ -1071,6 +1071,8 @@ pub fn main() -> horizon_client::Result<()> {
                 allies: Default::default(),
                 remote: false,
                 passenger: false,
+                sleeping: false,
+                sleep_timer: 0,
             }
         });
         let mut scratch = LegacyRandom::new(0);
