@@ -35,6 +35,10 @@ pub(super) struct CombatTracker {
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.
     pub(super) charged_exploders: Vec<u32>,
+    /// The blast now going off comes from a primed TNT, creeper, wither
+    /// skull, wither or TNT minecart, the sources that empty a hive they
+    /// destroy (`BeehiveBlock.getDrops`).
+    pub(super) hive_emptying_blast: bool,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,

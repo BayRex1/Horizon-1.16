@@ -650,7 +650,9 @@ impl Game<'_> {
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
         self.carts.retain(|x| x.id != c.id);
-        let _ = self.server_explode(at, power, BlockInteraction::Destroy, false);
+        let _ = self.with_hive_emptying_blast(|g| {
+            g.server_explode(at, power, BlockInteraction::Destroy, false)
+        });
     }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server

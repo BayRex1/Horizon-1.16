@@ -994,7 +994,9 @@ pub enum MobEvent {
         mob: u32,
         charged: bool,
     },
-    Explode([f64; 3], f32),
+    /// The kind of the mob blowing up (it may be gone from the list by the
+    /// time the blast is handled) rides along as the last field.
+    Explode([f64; 3], f32, Species),
     /// Melee or ranged damage to another mob.
     AttackMob {
         target: u32,
