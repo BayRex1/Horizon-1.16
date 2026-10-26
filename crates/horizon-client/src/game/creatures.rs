@@ -48,6 +48,9 @@ pub(super) struct Creatures {
     /// Explosion packets from a guest's turn, waiting for it to end
     /// (centre, radius, blocks hit; game/lan_particles.rs).
     pub lan_explosions: Vec<([f64; 3], f32, usize)>,
+    /// Mace smash knockback on the other players from a guest's turn, waiting
+    /// for it to end (game/mace.rs).
+    pub smash_pushes: Vec<super::mace::SmashPush>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
