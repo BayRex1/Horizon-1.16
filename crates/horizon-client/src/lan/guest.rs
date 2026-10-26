@@ -487,7 +487,8 @@ pub fn firework_components(
 
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
 /// `synced_id` names an entry of a synced registry (enchantments, trim
-/// materials and patterns) by its id on this connection.
+/// materials and patterns), or a built-in registry (data component types),
+/// by its id on this connection.
 pub fn stack_to_network(
     item_id: impl Fn(&str) -> i32,
     synced_id: impl Fn(&str, &str) -> Option<i32>,
@@ -532,6 +533,26 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        if let Some(display) = d.other("minecraft:tooltip_display") {
+            use horizon_world::nbt::Tag;
+            let hide = matches!(display.get("hide_tooltip"), Some(Tag::Byte(value)) if *value != 0);
+            let hidden = match display.get("hidden_components") {
+                Some(Tag::List(values)) => values
+                    .iter()
+                    .filter_map(|value| {
+                        let Tag::String(name) = value else {
+                            return None;
+                        };
+                        synced_id("minecraft:data_component_type", &name.to_string().ok()?)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            stack.added.push((
+                horizon_protocol::item::component::TOOLTIP_DISPLAY,
+                horizon_protocol::item::Component::TooltipDisplay { hide, hidden },
+            ));
+        }
         if let Some(rgb) = d.dyed_color {
             stack.added.push((
                 horizon_protocol::item::component::DYED_COLOR,

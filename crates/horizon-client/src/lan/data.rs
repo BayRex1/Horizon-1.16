@@ -295,6 +295,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tooltip_hidden_component_resolves_through_hub_registry_callback() {
+        use crate::items::ItemStack;
+        use horizon_protocol::{
+            item::{Component, component},
+            registry::Ids,
+        };
+        let dir = std::env::temp_dir().join(format!("horizon-tooltip-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("registries.json"), "{}").unwrap();
+        let mut sync = SyncData::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let mut names = vec![String::new(); component::STORED_ENCHANTMENTS as usize + 1];
+        names[component::STORED_ENCHANTMENTS as usize] = "minecraft:stored_enchantments".into();
+        sync.builtin.registries.insert(
+            "minecraft:data_component_type".into(),
+            Ids::from_names(names),
+        );
+        assert!(
+            sync.dynamic
+                .id(
+                    "minecraft:data_component_type",
+                    "minecraft:stored_enchantments"
+                )
+                .is_none()
+        );
+        let mut stack = ItemStack::new("minecraft:enchanted_book", 1);
+        stack.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([(
+                "hidden_components",
+                Tag::List(vec![Tag::String("minecraft:stored_enchantments".into())]),
+            )])),
+        );
+        // The exact SyncData callback Hub::stack passes, with no test-only builtin fallback.
+        let wire = crate::lan::guest::stack_to_network(
+            |_| 0,
+            |registry, name| sync.id(registry, name),
+            &Some(stack),
+        )
+        .unwrap();
+        assert!(
+            matches!(wire.component(component::TOOLTIP_DISPLAY), Some(Component::TooltipDisplay { hidden, .. }) if hidden == &[component::STORED_ENCHANTMENTS])
+        );
+    }
+
+    #[test]
     fn json_becomes_nbt() {
         let v: Value = serde_json::from_str(r#"{"a":1,"b":[true,2.5],"c":"x"}"#).unwrap();
         let t = json_to_nbt(&v);

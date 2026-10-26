@@ -477,4 +477,162 @@ mod tests {
             Some("minecraft:swiftness")
         );
     }
+
+    fn tooltip_registries() -> (Builtin, Dynamic) {
+        let mut components = vec![String::new(); 60];
+        for (id, name) in [
+            (component::TOOLTIP_DISPLAY, "minecraft:tooltip_display"),
+            (component::ENCHANTMENTS, "minecraft:enchantments"),
+            (
+                component::STORED_ENCHANTMENTS,
+                "minecraft:stored_enchantments",
+            ),
+        ] {
+            components[id as usize] = name.to_owned();
+        }
+        (
+            Builtin {
+                registries: [
+                    (
+                        "minecraft:item".into(),
+                        Ids::from_names(vec![
+                            "minecraft:enchanted_book".into(),
+                            "minecraft:diamond_sword".into(),
+                        ]),
+                    ),
+                    (
+                        "minecraft:data_component_type".into(),
+                        Ids::from_names(components),
+                    ),
+                ]
+                .into(),
+            },
+            Dynamic {
+                registries: [(
+                    "minecraft:enchantment".into(),
+                    vec![("minecraft:mending".into(), None)],
+                )]
+                .into(),
+            },
+        )
+    }
+
+    #[test]
+    fn tooltip_visibility_survives_server_inventory_wire_roundtrip() {
+        use crate::item_tooltip::TooltipDisplay;
+        use horizon_protocol::{
+            buf::{Codec, Reader, Writer},
+            item::Slot,
+        };
+        let (builtin, dynamic) = tooltip_registries();
+        for (item, hide, hidden) in [
+            ("minecraft:enchanted_book", false, None),
+            (
+                "minecraft:enchanted_book",
+                false,
+                Some("minecraft:stored_enchantments"),
+            ),
+            (
+                "minecraft:diamond_sword",
+                false,
+                Some("minecraft:enchantments"),
+            ),
+            ("minecraft:diamond_sword", true, None),
+        ] {
+            let mut stack = ItemStack::new(item, 1);
+            if item == "minecraft:enchanted_book" {
+                stack
+                    .data_mut()
+                    .stored_enchantments
+                    .push((Arc::from("minecraft:mending"), 1));
+            } else {
+                stack
+                    .data_mut()
+                    .enchantments
+                    .push((Arc::from("minecraft:mending"), 1));
+            }
+            let display = (hide || hidden.is_some()).then(|| {
+                Tag::compound([
+                    ("hide_tooltip", Tag::Byte(i8::from(hide))),
+                    (
+                        "hidden_components",
+                        Tag::List(
+                            hidden
+                                .into_iter()
+                                .map(|name| Tag::String(name.into()))
+                                .collect(),
+                        ),
+                    ),
+                ])
+            });
+            stack
+                .data_mut()
+                .set_other("minecraft:tooltip_display", display.clone());
+            let wire = crate::lan::guest::stack_to_network(
+                |name| builtin.get("minecraft:item").unwrap().id(name).unwrap(),
+                |registry, name| {
+                    builtin
+                        .get(registry)
+                        .and_then(|ids| ids.id(name))
+                        .or_else(|| dynamic.id(registry, name))
+                },
+                &Some(stack.clone()),
+            )
+            .unwrap();
+            assert_eq!(
+                wire.component(component::TOOLTIP_DISPLAY).is_some(),
+                display.is_some()
+            );
+            let mut bytes = Writer::new();
+            Slot::write(&Some(wire), &mut bytes);
+            let mut reader = Reader::new(&bytes.data);
+            let decoded = Slot::read(&mut reader).unwrap().unwrap();
+            assert_eq!(reader.remaining(), 0);
+            let back = from_network(&decoded, &builtin, &dynamic);
+            assert_eq!(back.enchantments(), stack.enchantments());
+            assert_eq!(back.stored_enchantments(), stack.stored_enchantments());
+            assert_eq!(
+                back.data()
+                    .and_then(|d| d.other("minecraft:tooltip_display")),
+                display.as_ref()
+            );
+            let tooltip = TooltipDisplay::for_stack(&back);
+            assert_eq!(tooltip.name_visible(false), !hide);
+            for component in ["minecraft:enchantments", "minecraft:stored_enchantments"] {
+                assert_eq!(tooltip.shows(component), !hide && hidden != Some(component));
+            }
+        }
+    }
+
+    #[test]
+    fn tooltip_hidden_components_use_registered_ids_only() {
+        let mut stack = ItemStack::new("minecraft:enchanted_book", 1);
+        stack.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([
+                ("hide_tooltip", Tag::Byte(1)),
+                (
+                    "hidden_components",
+                    Tag::List(vec![
+                        Tag::String("minecraft:stored_enchantments".into()),
+                        Tag::String("unknown:component".into()),
+                        Tag::Int(0),
+                    ]),
+                ),
+            ])),
+        );
+        let wire = crate::lan::guest::stack_to_network(
+            |_| 0,
+            |registry, name| {
+                (registry == "minecraft:data_component_type"
+                    && name == "minecraft:stored_enchantments")
+                    .then_some(component::STORED_ENCHANTMENTS)
+            },
+            &Some(stack),
+        )
+        .unwrap();
+        assert!(
+            matches!(wire.component(component::TOOLTIP_DISPLAY), Some(Component::TooltipDisplay { hide: true, hidden }) if hidden == &[component::STORED_ENCHANTMENTS])
+        );
+    }
 }
