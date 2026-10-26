@@ -174,6 +174,9 @@ pub struct Hub {
     level_sync: std::collections::HashMap<String, LevelSync>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
+    /// `spawn-protection` (dedicated servers): the radius around the world
+    /// spawn that only operators may change.
+    pub spawn_protection: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -340,6 +343,7 @@ impl Hub {
             ticking: (20.0, false),
             stepping: 0,
             ops: Default::default(),
+            spawn_protection: 0,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
