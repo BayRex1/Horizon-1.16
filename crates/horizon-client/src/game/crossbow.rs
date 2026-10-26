@@ -220,6 +220,7 @@ impl Game<'_> {
                     a.set_item(ammo);
                     a.set_owner(Some(Who::Player));
                     a.pierce = pierce;
+                    a.fired_from_weapon = Some(weapon.clone());
                 }
                 arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
                 self.creatures.projectiles.push(arrow);
@@ -234,6 +235,11 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:item.crossbow.shoot", Some(eye), 1.0, pitch);
             self.damage_held(if rocket { 3 } else { 1 });
+        }
+        // CrossbowItem.performShooting: SHOT_CROSSBOW with the crossbow, which
+        // is an empty stack (no match) when the shots broke it.
+        if let Some(stack) = self.held().cloned() {
+            self.trigger_item("minecraft:shot_crossbow", &stack);
         }
     }
 }
