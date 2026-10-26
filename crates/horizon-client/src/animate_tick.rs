@@ -58,7 +58,10 @@ enum Animate {
     BubbleColumn {
         drag: bool,
     },
-    Fire,
+    /// Fire, and whether it is soul fire (`SoulFireBlock.canBurn` is always true).
+    Fire {
+        soul: bool,
+    },
     /// An active sculk sensor.
     SculkSensor,
     /// Potent sulfur that is not dry.
@@ -140,7 +143,8 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "bubble_column" => Animate::BubbleColumn {
             drag: prop("drag").as_deref() == Some("true"),
         },
-        "fire" | "soul_fire" => Animate::Fire,
+        "fire" => Animate::Fire { soul: false },
+        "soul_fire" => Animate::Fire { soul: true },
         "dried_ghast" => Animate::DriedGhast {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
@@ -272,6 +276,8 @@ pub struct AnimateContext<'a> {
     pub registry: &'a BlockRegistry,
     /// `Level.isRainingAt`.
     pub raining_at: &'a dyn Fn([i32; 3]) -> bool,
+    /// `FireBlock.canBurn` for a state.
+    pub can_burn: &'a dyn Fn(BlockStateId) -> bool,
     /// Creative main-hand marker block and a resolver for each placed state's sprite.
     pub marker: Option<(&'a str, &'a dyn Fn(BlockStateId) -> Option<ParticleOptions>)>,
 }
@@ -1103,7 +1109,7 @@ fn block_animate_tick(
                 }
             }
         }
-        Animate::Fire => {
+        Animate::Fire { soul } => {
             let r = engine.random();
             if next_int(r, 24) == 0 {
                 let (volume, pitch) = (1.0 + r.next_float(), r.next_float() * 0.7 + 0.3);
@@ -1115,6 +1121,51 @@ fn block_animate_tick(
                     pitch,
                 );
             }
+            fire_smoke(engine, ctx, pos, soul);
+        }
+    }
+}
+/// `BaseFireBlock.animateTick`'s smoke: three puffs over a fire on a floor
+/// that holds it, else two by each neighbour it is burning.
+fn fire_smoke(engine: &mut ParticleEngine, ctx: &AnimateContext, pos: [i32; 3], soul: bool) {
+    let burns = |p: [i32; 3]| soul || (ctx.can_burn)(ctx.state(p));
+    let (fx, fy, fz) = (f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if burns(below) || ctx.sturdy(below) {
+        for _ in 0..3 {
+            let r = engine.random();
+            let p = [
+                fx + r.next_double(),
+                fy + r.next_double() * 0.5 + 0.5,
+                fz + r.next_double(),
+            ];
+            add(engine, T::LargeSmoke, p, [0.0; 3]);
+        }
+        return;
+    }
+    // `random.nextDouble() * 0.1F`: the float widened.
+    let edge = f64::from(0.1f32);
+    // West, east, north, south, above: the face the smoke hugs.
+    let sides: [([i32; 3], fn([f64; 3], f64) -> [f64; 3]); 5] = [
+        ([-1, 0, 0], |r, e| [r[0] * e, r[1], r[2]]),
+        ([1, 0, 0], |r, e| [1.0 - r[0] * e, r[1], r[2]]),
+        ([0, 0, -1], |r, e| [r[0], r[1], r[2] * e]),
+        ([0, 0, 1], |r, e| [r[0], r[1], 1.0 - r[2] * e]),
+        ([0, 1, 0], |r, e| [r[0], 1.0 - r[1] * e, r[2]]),
+    ];
+    for (d, place) in sides {
+        if !burns([pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]]) {
+            continue;
+        }
+        for _ in 0..2 {
+            let r = engine.random();
+            let o = place([r.next_double(), r.next_double(), r.next_double()], edge);
+            add(
+                engine,
+                T::LargeSmoke,
+                [fx + o[0], fy + o[1], fz + o[2]],
+                [0.0; 3],
+            );
         }
     }
 }

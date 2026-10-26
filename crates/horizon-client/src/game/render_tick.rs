@@ -271,6 +271,8 @@ impl Game<'_> {
                 && motion_blocking(world, facts, p[0], p[2], p[1] + 64) <= p[1]
                 && rains_at(world, biomes, p[0], p[1], p[2])
         };
+        let behaviours = self.res.behaviours();
+        let can_burn = |state| behaviours.can_burn(state);
         let ctx = AnimateContext {
             world,
             facts,
@@ -278,6 +280,7 @@ impl Game<'_> {
             biomes,
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
+            can_burn: &can_burn,
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
         };
         if let Some(e) = eye {

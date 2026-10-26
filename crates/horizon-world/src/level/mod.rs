@@ -512,6 +512,10 @@ impl Behaviours {
     pub fn block(&self, state: BlockStateId) -> BlockId {
         self.table.block(state)
     }
+    /// `FireBlock.canBurn`: ignite odds above zero (waterlogged states never burn).
+    pub fn can_burn(&self, state: BlockStateId) -> bool {
+        !self.is_waterlogged(state) && self.data(state).ignite_odds > 0
+    }
     pub fn item_binding(&self, item: &str) -> Option<&ItemBinding> {
         self.items.get(item)
     }

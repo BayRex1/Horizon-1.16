@@ -74,6 +74,7 @@ pub fn main() -> Result<()> {
             biomes: &biomes,
             registry: assets.registry,
             raining_at: &|_| false,
+            can_burn: &|_| false,
             marker: target.map(|name| (name, &options as &dyn Fn(_) -> _)),
         };
         engine.seed_randoms(1057, 0, 0);
