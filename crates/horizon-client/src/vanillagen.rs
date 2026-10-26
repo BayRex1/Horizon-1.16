@@ -3,7 +3,7 @@
 use crate::{
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
-    save::SavedProto,
+    save::{NoisePreset, SavedProto},
     streaming::{ChunkGenerator, LodSampler, Proto},
 };
 use horizon_core::{
@@ -40,6 +40,8 @@ pub struct VanillaTerrain {
     /// Block index -> default state id: `tick_blocks` the other way.
     tick_states: Vec<u32>,
     seed: i64,
+    /// The world preset the dimension comes from.
+    preset: NoisePreset,
     dimension: String,
     /// When the last proto chunk was generated, in milliseconds since
     /// `created`: the ring search waits for a pause in generation.
@@ -79,16 +81,25 @@ impl VanillaTerrain {
         seed: i64,
         dimension: &str,
     ) -> crate::Result<Self> {
-        Self::for_world(dir, registry, biomes, seed, dimension, true)
+        Self::for_world(
+            dir,
+            registry,
+            biomes,
+            seed,
+            NoisePreset::Normal,
+            dimension,
+            true,
+        )
     }
-    /// A dimension of a world whose `generate_structures` is `structures`
-    /// (`ChunkGenerator.createStructures` and `findNearestMapStructure` do
-    /// nothing without).
+    /// A dimension of a world made from the world preset `preset` whose
+    /// `generate_structures` is `structures` (`ChunkGenerator.createStructures`
+    /// and `findNearestMapStructure` do nothing without).
     pub fn for_world(
         dir: &Path,
         registry: &'static BlockRegistry,
         biomes: &Biomes,
         seed: i64,
+        preset: NoisePreset,
         dimension: &str,
         structures: bool,
     ) -> crate::Result<Self> {
@@ -99,7 +110,7 @@ impl VanillaTerrain {
             .map(|name| biomes.id(name))
             .collect();
         let generator =
-            OverworldGenerator::for_world(data, seed, "minecraft:normal", dimension, structures)?;
+            OverworldGenerator::for_world(data, seed, preset.id(), dimension, structures)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -142,6 +153,7 @@ impl VanillaTerrain {
             tick_blocks,
             tick_states,
             seed,
+            preset,
             dimension: dimension.to_owned(),
             last_proto: std::sync::atomic::AtomicU64::new(0),
             created: std::time::Instant::now(),

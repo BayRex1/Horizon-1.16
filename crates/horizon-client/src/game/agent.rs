@@ -562,6 +562,7 @@ impl Game<'_> {
                 "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
                 "allow_commands": options.commands(*creative),
                 "superflat": options.flat,
+                "world_type": options.world_type(),
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),

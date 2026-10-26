@@ -67,7 +67,7 @@ impl Builder {
                 let generator = match OverworldGenerator::for_dimension(
                     terrain.generator.data().clone(),
                     terrain.seed,
-                    "minecraft:normal",
+                    terrain.preset.id(),
                     &terrain.dimension,
                 ) {
                     Ok(generator) => generator,
@@ -473,6 +473,61 @@ impl VanillaLodSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::save::NoisePreset;
+    #[test]
+    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    fn world_presets_shape_the_overworld_terrain() -> crate::Result<()> {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
+        );
+        let assets = crate::assets::Assets::load(&root)?;
+        let biomes = crate::biome::Biomes::load(&root)?;
+        // Surface height and biome over a coarse grid of the same seed.
+        let samples = |preset: NoisePreset| -> crate::Result<Vec<(i32, u32)>> {
+            let terrain = VanillaTerrain::for_world(
+                &root.join("worldgen"),
+                assets.registry,
+                &biomes,
+                1234,
+                preset,
+                "minecraft:overworld",
+                true,
+            )?;
+            let mut worker = terrain.generator.worker();
+            let samples: Vec<_> = (-2048..2048)
+                .step_by(256)
+                .flat_map(|x| (-2048..2048).step_by(256).map(move |z| (x, z)))
+                .filter_map(|(x, z)| worker.surface_sample(x, z))
+                .map(|s| (s.height, s.biome.0))
+                .collect();
+            assert!(!samples.is_empty(), "{preset:?}: no surface samples");
+            Ok(samples)
+        };
+        let mean = |s: &[(i32, u32)]| s.iter().map(|(h, _)| h).sum::<i32>() / s.len() as i32;
+        let normal = samples(NoisePreset::Normal)?;
+        let amplified = samples(NoisePreset::Amplified)?;
+        let large = samples(NoisePreset::LargeBiomes)?;
+        // Amplified: the same climate, far taller terrain.
+        let (low, high) = (mean(&normal), mean(&amplified));
+        // Large Biomes: the climate noise spread four times wider, so most
+        // points sit in another biome than in the normal preset.
+        let moved = normal
+            .iter()
+            .zip(&large)
+            .filter(|(n, l)| n.1 != l.1)
+            .count();
+        eprintln!(
+            "mean surface: normal {low}, amplified {high}; large biomes moved {moved} of {}",
+            normal.len()
+        );
+        assert!(high > low + 16, "normal {low}, amplified {high}");
+        assert!(
+            moved * 2 > normal.len(),
+            "large biomes moved {moved} of {}",
+            normal.len()
+        );
+        Ok(())
+    }
     #[test]
     #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
     fn decorated_lod_refines_real_seed_canopies_and_all_dimensions() -> crate::Result<()> {

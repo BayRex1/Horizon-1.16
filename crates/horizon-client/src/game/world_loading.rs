@@ -320,10 +320,12 @@ pub(super) fn make_streaming(
             res.threads(),
         )
     } else {
-        // WorldOptions.generateStructures, from the world's settings.
-        let structures =
-            horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
+        // WorldOptions.generateStructures and the world preset, from the
+        // world's settings.
+        let generation = horizon_client::save::WorldGen::read(world_root).unwrap_or_default();
+        let structures = generation.structures;
+        let preset = generation.preset;
+        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
         if dim == Dim::Overworld && structures {

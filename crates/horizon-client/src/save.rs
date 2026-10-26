@@ -2579,16 +2579,59 @@ const INT_RULES: [&str; 11] = [
     "respawn_radius",
 ];
 
-/// World and player state stored in `level.dat`, the saved-data files and
-/// the player file.
 /// The world options CreateWorldScreen sets (`WorldOptions` and the world
 /// preset) that `world_gen_settings` keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldGen {
-    /// The `minecraft:flat` preset (Superflat) instead of `normal`.
+    /// The `minecraft:flat` preset (Superflat) instead of a noise preset.
     pub flat: bool,
     pub structures: bool,
     pub bonus_chest: bool,
+    /// The noise preset of a world that isn't flat.
+    pub preset: NoisePreset,
+}
+/// The world presets whose overworld is a noise generator with the
+/// overworld biomes: `worldgen/world_preset/{normal,large_biomes,amplified}`,
+/// which differ only in that generator's noise settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NoisePreset {
+    #[default]
+    Normal,
+    LargeBiomes,
+    Amplified,
+}
+impl NoisePreset {
+    /// The world preset's id, as `OverworldGenerator::for_world` takes it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Normal => "minecraft:normal",
+            Self::LargeBiomes => "minecraft:large_biomes",
+            Self::Amplified => "minecraft:amplified",
+        }
+    }
+    /// The preset of a world preset id (`level-type`), if it is one of these.
+    pub fn from_id(id: &str) -> Option<Self> {
+        [Self::Normal, Self::LargeBiomes, Self::Amplified]
+            .into_iter()
+            .find(|p| p.id() == id)
+    }
+    /// The overworld generator's noise settings in the preset.
+    fn settings(self) -> &'static str {
+        match self {
+            Self::Normal => "minecraft:overworld",
+            Self::LargeBiomes => "minecraft:large_biomes",
+            Self::Amplified => "minecraft:amplified",
+        }
+    }
+    /// The preset of an overworld generated with `settings`; any other
+    /// settings generate as `normal`, as they did before presets were read.
+    fn from_settings(settings: &str) -> Self {
+        match settings.trim_start_matches("minecraft:") {
+            "large_biomes" => Self::LargeBiomes,
+            "amplified" => Self::Amplified,
+            _ => Self::Normal,
+        }
+    }
 }
 impl WorldGen {
     /// A saved world's choices, from its `world_gen_settings`.
@@ -2604,6 +2647,8 @@ impl WorldGen {
                 .is_some_and(|t| t.trim_start_matches("minecraft:") == "flat"),
             structures: flag("generate_structures", true),
             bonus_chest: flag("bonus_chest", false),
+            preset: text(generator.and_then(|g| g.get("settings")))
+                .map_or_else(NoisePreset::default, |s| NoisePreset::from_settings(&s)),
         })
     }
 }
@@ -2613,6 +2658,7 @@ impl Default for WorldGen {
             flat: false,
             structures: true,
             bonus_chest: false,
+            preset: NoisePreset::Normal,
         }
     }
 }
@@ -2705,7 +2751,7 @@ pub fn write_world_gen_settings_with(
                         } else {
                             dimension(
                                 "minecraft:overworld",
-                                "minecraft:overworld",
+                                options.preset.settings(),
                                 preset("minecraft:overworld"),
                             )
                         },
@@ -2731,6 +2777,8 @@ pub fn write_world_gen_settings_with(
         ]),
     )
 }
+/// World and player state stored in `level.dat`, the saved-data files and
+/// the player file.
 #[derive(Clone, Debug, Default)]
 pub struct Level {
     pub name: String,

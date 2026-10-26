@@ -767,8 +767,28 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
         crate::save::WorldGen {
             flat: true,
             structures: true,
-            bonus_chest: true
+            bonus_chest: true,
+            preset: crate::save::NoisePreset::Normal,
         }
+    );
+    // `#minecraft:normal`'s order after Superflat: Large Biomes, Amplified,
+    // then Default again.
+    use crate::save::NoisePreset;
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+        let Mode::Create { options, .. } = &f.title.mode else {
+            panic!()
+        };
+        seen.push((options.world_type(), options.world_gen().preset));
+    }
+    assert_eq!(
+        seen,
+        [
+            ("minecraft:large_biomes", NoisePreset::LargeBiomes),
+            ("minecraft:amplified", NoisePreset::Amplified),
+            ("minecraft:normal", NoisePreset::Normal),
+        ]
     );
     // The More tab's screens don't exist yet.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
@@ -783,6 +803,7 @@ fn new_world_generation_settings_round_trip() {
         flat: true,
         structures: false,
         bonus_chest: true,
+        preset: crate::save::NoisePreset::Normal,
     };
     crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
     assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
@@ -797,6 +818,42 @@ fn new_world_generation_settings_round_trip() {
         )
         .as_deref(),
         Some("minecraft:flat")
+    );
+    // Large Biomes and Amplified: the preset's overworld noise settings, read
+    // back as that preset. Re-Create makes a Default world of any noise world
+    // (CreateWorldScreen.createFromExisting: WorldPresets.fromSettings is
+    // `normal`, which WorldCreationUiState.updatePresetLists sets).
+    use crate::save::NoisePreset;
+    for (preset, settings) in [
+        (NoisePreset::LargeBiomes, "minecraft:large_biomes"),
+        (NoisePreset::Amplified, "minecraft:amplified"),
+        (NoisePreset::Normal, "minecraft:overworld"),
+    ] {
+        let dir = f.root.join(settings.trim_start_matches("minecraft:"));
+        let options = crate::save::WorldGen {
+            flat: false,
+            structures: true,
+            bonus_chest: false,
+            preset,
+        };
+        crate::save::write_world_gen_settings(&dir, 7, options).unwrap();
+        assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
+        let settings_tag = crate::save::world_gen_settings(&dir).unwrap();
+        let generator = settings_tag
+            .get("dimensions")
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        let field = |key: &str| crate::save::text(generator.and_then(|g| g.get(key)));
+        assert_eq!(field("type").as_deref(), Some("minecraft:noise"));
+        assert_eq!(field("settings").as_deref(), Some(settings));
+        let level = crate::save::Level::default();
+        let recreate = super::WorldOptions::of_world(&level, false, &dir);
+        assert!(!recreate.flat && recreate.preset == NoisePreset::Normal);
+    }
+    // A flat world reads back as the normal noise preset, as before.
+    assert_eq!(
+        crate::save::WorldGen::read(&f.root.join("flat")).map(|w| w.preset),
+        Some(NoisePreset::Normal)
     );
 }
 

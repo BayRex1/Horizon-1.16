@@ -13,8 +13,13 @@ End, plus rectangles around vanilla structure starts found by scanning each
 seed (villages, mineshafts, strongholds, ancient cities, trial chambers,
 monuments, mansions, ...), and the fixed sites of REGRESSIONS.
 
+--preset large_biomes|amplified generates the overworld of that world preset
+(its noise settings) on both sides instead of the normal one. The Nether and
+the End are the same in every preset, so only the overworld runs then.
+
 usage: test_chunk_generation_parity.py [--seeds N] [--per-structure K]
-       [--filter REGEX] [--dimension overworld|the_nether|the_end] [--keep]
+       [--filter REGEX] [--dimension overworld|the_nether|the_end]
+       [--preset normal|large_biomes|amplified] [--keep]
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -272,7 +277,8 @@ def compare(vanilla, rust, names, label, limit=6, quiet=False):
 
 
 def scan(oracle, binary, seed, dimension, radius):
-    out = build_dir() / f'scan-{dimension}-{seed}.txt'
+    preset = os.environ.get('HORIZON_PRESET', 'normal')
+    out = build_dir() / (f'scan-{dimension}-{seed}.txt' if preset == 'normal' else f'scan-{preset}-{dimension}-{seed}.txt')
     oracle.run(out, ['scan', seed, dimension, -radius, -radius, radius, radius])
     starts = []
     for line in out.read_text().splitlines():
@@ -310,10 +316,14 @@ def main():
     parser.add_argument('--dimension', action='append')
     parser.add_argument('--phase', choices=['terrain', 'structures', 'full'], default='full', help='stop before features, or run structure pieces only')
     parser.add_argument('--terrain-only', action='store_true', help='skip the structure sites')
+    parser.add_argument('--preset', choices=['normal', 'large_biomes', 'amplified'], default='normal', help="the overworld's world preset")
     parser.add_argument('--structures-only', action='store_true')
     args = parser.parse_args()
     os.environ['HORIZON_PHASE'] = args.phase
+    os.environ['HORIZON_PRESET'] = args.preset
     dimensions = args.dimension or ['overworld', 'the_nether', 'the_end']
+    if args.preset != 'normal':
+        dimensions = [d for d in dimensions if d == 'overworld']
     oracle = Oracle()
     binary = rust_binary()
     names = state_names()
@@ -354,7 +364,7 @@ def main():
                     structure_seen[kind] += 1
             if not rects:
                 continue
-            tag = f'{dimension}-{seed}-{args.phase}' + ('-iso' if os.environ.get('HORIZON_ISOLATED') else '') + ('-rect' if args.rect else '')
+            tag = ('' if args.preset == 'normal' else f'{args.preset}-') + f'{dimension}-{seed}-{args.phase}' + ('-iso' if os.environ.get('HORIZON_ISOLATED') else '') + ('-rect' if args.rect else '')
             vanilla_path, rust_path = build / f'vanilla-{tag}.txt', build / f'rust-{tag}.txt'
             t0 = time.time()
             # Vanilla and Horizon generate the same chunks independently: run them side by side.

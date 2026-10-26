@@ -2,10 +2,10 @@
 """A new world's generator settings from server.properties, against vanilla's dedicated server.
 
 DedicatedServerProperties.WorldDimensionData makes a world that doesn't exist yet from `level-type` (a world
-preset: `flat`, `minecraft:normal`, or a name it can't find, which it warns about and replaces with
-`minecraft:normal`), a flat world's `generator-settings` (FlatLevelGeneratorSettings: its layers, biome,
-lakes and features; a layer that doesn't parse is left out and logged, and settings without layers fall back
-to the preset's classic ones) and `generate-structures`.
+preset: `flat`, `minecraft:normal`, `amplified`, `minecraft:large_biomes`, or a name it can't find, which it
+warns about and replaces with `minecraft:normal`), a flat world's `generator-settings`
+(FlatLevelGeneratorSettings: its layers, biome, lakes and features; a layer that doesn't parse is left out and
+logged, and settings without layers fall back to the preset's classic ones) and `generate-structures`.
 
 Each case starts vanilla's server and Horizon's (`horizon-client --dedicated --nogui`) in a new folder, waits
 for `Done` and stops them. Compared exactly: the world's `data/minecraft/world_gen_settings.dat`, tag types
@@ -15,7 +15,7 @@ the worker's number is left out). In a world without structures (`generate-struc
 finds none) and how many of the saved chunks hold structure starts or references (none:
 ChunkStatusTasks.generateStructureStarts does nothing).
 
-Horizon generates the normal and flat presets only: `large_biomes`, `amplified`, `single_biome_surface` and
+Horizon generates the normal, flat, large_biomes and amplified presets: `single_biome_surface` and
 `debug_all_block_states` aren't tested.
 """
 import json
@@ -62,6 +62,11 @@ CASES = {
     },
     'normal': {'level-type': 'minecraft:normal', 'level-seed': 'abc', 'generate-structures': 'false'},
     'unknown': {'level-type': 'Some Type', 'level-seed': '42'},
+    'amplified': {'level-type': 'AMPLIFIED', 'level-seed': '5'},
+    'large-biomes': {'level-type': 'minecraft:large_biomes', 'level-seed': '-3'},
+    # LEGACY_PRESET_NAMES' `largebiomes` is only looked up when Identifier.tryParse fails, which it doesn't:
+    # minecraft:largebiomes isn't a preset, so this warns and makes a normal world.
+    'legacy-large-biomes': {'level-type': 'largebiomes', 'level-seed': '9'},
 }
 WORKER = re.compile(r'\[Worker-Main-\d+/(WARN|ERROR)\]: (.*)')
 LOCATE = ['locate structure #minecraft:village', 'locate structure minecraft:mineshaft']
@@ -151,12 +156,17 @@ def main():
         raise AssertionError(f'world settings differ (see {build}/vanilla.txt and horizon.txt):\n' + diff[:6000])
     if not any('minecraft:flat' in l for l in vanilla) or not any(l.startswith('ERROR: ') for l in vanilla):
         raise AssertionError(f'vanilla made no flat world or logged no error (see {build})')
+    for case, settings in [('amplified', 'minecraft:amplified'), ('large-biomes', 'minecraft:large_biomes')]:
+        lines = vanilla[vanilla.index(f'# {case}'):]
+        lines = lines[:next((i for i, l in enumerate(lines[1:], 1) if l.startswith('# ')), len(lines))]
+        if not any(settings in l for l in lines):
+            raise AssertionError(f'vanilla\'s {case} world has no {settings} overworld (see {build})')
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         cases=list(CASES), lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
-        scope='a new dedicated-server world: level-type (flat, normal, unknown), a flat world\'s '
-              'generator-settings, generate-structures, as world_gen_settings.dat and the lines logged; without '
+        scope='a new dedicated-server world: level-type (flat, normal, amplified, large_biomes, largebiomes, unknown), a flat '
+              'world\'s generator-settings, generate-structures, as world_gen_settings.dat and the lines logged; without '
               'structures, locate structure\'s replies and the saved chunks\' structure starts and references.'))
     print(f'server world gen: {len(CASES)} cases, {len(vanilla)} lines identical')
 

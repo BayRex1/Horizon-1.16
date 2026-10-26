@@ -3,6 +3,7 @@
 use super::{Button, Title};
 use crate::{
     hud::{HudAtlas, HudBatch},
+    save::NoisePreset,
     text::Text,
     ui,
 };
@@ -34,6 +35,8 @@ pub struct WorldOptions {
     pub flat: bool,
     pub structures: bool,
     pub bonus_chest: bool,
+    /// Default, Large Biomes or Amplified while not Superflat.
+    pub preset: NoisePreset,
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -45,6 +48,7 @@ impl Default for WorldOptions {
             flat: false,
             structures: true,
             bonus_chest: false,
+            preset: NoisePreset::Normal,
         }
     }
 }
@@ -66,6 +70,11 @@ impl WorldOptions {
             flat: generation.flat,
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
+            // createFromExisting: WorldPresets.fromSettings names any noise
+            // world `normal`, and WorldCreationUiState.updatePresetLists then
+            // setWorldType(normal) rebuilds its dimensions (only presets with
+            // a PresetEditor, Superflat here, keep theirs).
+            preset: NoisePreset::Normal,
             ..Self::default()
         }
     }
@@ -86,6 +95,15 @@ impl WorldOptions {
             flat: self.flat,
             structures: self.structures,
             bonus_chest: self.bonus_chest(),
+            preset: self.preset,
+        }
+    }
+    /// The World Type: its world preset's id.
+    pub fn world_type(&self) -> &'static str {
+        if self.flat {
+            "minecraft:flat"
+        } else {
+            self.preset.id()
         }
     }
     /// A press on one of the open tab's cycle buttons or switches.
@@ -101,7 +119,16 @@ impl WorldOptions {
             }
             23 => self.difficulty = (self.difficulty + 1) % DIFFICULTIES.len(),
             24 => self.commands = Some(!self.commands(*creative)),
-            25 => self.flat = !self.flat,
+            // `#minecraft:normal`'s order: Default, Superflat, Large Biomes,
+            // Amplified (Single Biome needs CreateBuffetWorldScreen).
+            25 => {
+                (self.flat, self.preset) = match (self.flat, self.preset) {
+                    (false, NoisePreset::Normal) => (true, NoisePreset::Normal),
+                    (true, _) => (false, NoisePreset::LargeBiomes),
+                    (false, NoisePreset::LargeBiomes) => (false, NoisePreset::Amplified),
+                    (false, NoisePreset::Amplified) => (false, NoisePreset::Normal),
+                }
+            }
             27 => self.structures = !self.structures,
             28 => self.bonus_chest = !self.bonus_chest,
             _ => {}
@@ -232,13 +259,10 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 gx,
                 gy,
                 150.0,
+                // WorldTypeEntry.describePreset: the id's `generator` language key.
                 labelled(
                     "selectWorld.mapType",
-                    tr(if o.flat {
-                        "generator.minecraft.flat"
-                    } else {
-                        "generator.minecraft.normal"
-                    }),
+                    tr(&format!("generator.{}", o.world_type().replace(':', "."))),
                 ),
                 true,
                 25,
@@ -487,6 +511,10 @@ impl Title {
             )),
             0 if over(gx, gy + 97.0, 210.0) => {
                 Some(Text::translate("selectWorld.allowCommands.info", &[]))
+            }
+            // WorldTab: the world type's tooltip while Amplified.
+            1 if over(gx, gy, 150.0) && !o.flat && o.preset == NoisePreset::Amplified => {
+                Some(Text::translate("generator.minecraft.amplified.info", &[]))
             }
             1 if over(gx + 266.0, gy + 73.0, 44.0) => {
                 Some(Text::translate("selectWorld.mapFeatures.info", &[]))

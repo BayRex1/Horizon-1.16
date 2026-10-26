@@ -220,7 +220,13 @@ public final class VanillaChunkGenerationOracle {
         var settings = world.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(switch (dimension) {
             case "the_nether" -> NoiseGeneratorSettings.NETHER;
             case "the_end" -> NoiseGeneratorSettings.END;
-            default -> NoiseGeneratorSettings.OVERWORLD;
+            // HORIZON_PRESET: the overworld of the large_biomes or amplified world preset.
+            default -> switch (System.getenv().getOrDefault("HORIZON_PRESET", "normal")) {
+                case "large_biomes" -> NoiseGeneratorSettings.LARGE_BIOMES;
+                case "amplified" -> NoiseGeneratorSettings.AMPLIFIED;
+                case "normal" -> NoiseGeneratorSettings.OVERWORLD;
+                default -> throw new IllegalArgumentException("HORIZON_PRESET: no world preset " + System.getenv("HORIZON_PRESET"));
+            };
         });
         var presets = world.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST);
         BiomeSource biomeSource = switch (dimension) {

@@ -319,7 +319,8 @@ impl Game<'_> {
     /// DedicatedServerProperties.createDimensions for a world that doesn't
     /// exist yet: `level-type`'s preset, a flat world's `generator-settings`
     /// and `generate-structures`, written before the world opens so that
-    /// streaming reads them. Horizon generates the normal and flat presets.
+    /// streaming reads them. Horizon generates the normal, flat, large_biomes
+    /// and amplified presets.
     fn write_world_gen(&self, dir: &std::path::Path, props: &ServerProperties) -> Result<()> {
         let level_type = &props.level_type;
         let preset = parse_identifier(level_type)
@@ -335,7 +336,8 @@ impl Game<'_> {
                 "minecraft:normal".to_owned()
             });
         let flat = preset == "minecraft:flat";
-        if !flat && preset != "minecraft:normal" {
+        let noise = horizon_client::save::NoisePreset::from_id(&preset);
+        if !flat && noise.is_none() {
             log_from(
                 "Worker-Main-1",
                 "WARN",
@@ -362,6 +364,7 @@ impl Game<'_> {
             flat,
             structures: props.generate_structures,
             bonus_chest: false,
+            preset: noise.unwrap_or_default(),
         };
         horizon_client::save::write_world_gen_settings_with(dir, props.seed, options, settings)
     }

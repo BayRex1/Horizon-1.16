@@ -2,6 +2,7 @@
 //!
 //! chunk_dump <client resource dir> <seed> <dimension> <x0,z0,x1,z1>...
 //! With HORIZON_SCAN set, one rectangle lists the structure starts in it.
+//! HORIZON_PRESET picks the world preset (`normal` when unset).
 //! HORIZON_SAVED_STARTS names a JSON file of saved starts (`[{"id", "chunk":
 //! [x, z], "pieces": [...]}]`, jigsaw pieces as a save lists them) that take
 //! the place of the starts generation builds in their chunks.
@@ -127,7 +128,12 @@ pub fn main() -> Result<(), Error> {
         return Ok(());
     }
     let data = GeneratorData::load(&resources.join("worldgen"), blocks)?;
-    let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", &dimension)?;
+    // HORIZON_PRESET: the world preset (normal, large_biomes or amplified).
+    let preset = format!(
+        "minecraft:{}",
+        std::env::var("HORIZON_PRESET").unwrap_or_else(|_| "normal".into())
+    );
+    let generator = OverworldGenerator::for_dimension(data, seed, &preset, &dimension)?;
     let mut worker = generator.worker();
     // HORIZON_PHASE: terrain (no decoration), structures (pieces only) or full.
     let phase = std::env::var("HORIZON_PHASE").unwrap_or_else(|_| "full".into());
