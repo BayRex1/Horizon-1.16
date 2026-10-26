@@ -3123,6 +3123,7 @@ impl Game<'_> {
         // Turtle.ageBoundaryReached: food that finishes a baby's growth.
         if baby_turtle && !self.mobs[index].is_baby() {
             self.handle_mob_events(vec![MobEvent::GiftLoot {
+                mob: self.mobs[index].id,
                 table: "minecraft:gameplay/turtle_grow",
                 at: feet,
             }])?;
