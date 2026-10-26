@@ -1294,6 +1294,14 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
+    /// The active effects, without namespace (`slowness`, `poison`...).
+    pub effects: Vec<&'static str>,
+}
+impl Seen {
+    /// `LivingEntity.hasEffect`, by id without namespace.
+    pub fn has_effect(&self, effect: &str) -> bool {
+        self.effects.contains(&effect)
+    }
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1369,6 +1377,12 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
+            effects: m
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.0.trim_start_matches("minecraft:"))
+                .collect(),
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1515,6 +1529,8 @@ pub struct PlayerView {
     pub yaw: f32,
     /// The Hero of the Village effect.
     pub hero: bool,
+    /// The active effects, without namespace (`slowness`, `poison`...).
+    pub effects: Vec<&'static str>,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
     /// The mobs on the player's team (`isAlliedTo`): combat targeting
@@ -1537,6 +1553,12 @@ impl PlayerView {
             visibility *= 0.7 * f64::from(self.armor_cover).max(0.1);
         }
         visibility
+    }
+}
+impl PlayerView {
+    /// `LivingEntity.hasEffect`, by id without namespace.
+    pub fn has_effect(&self, effect: &str) -> bool {
+        self.effects.contains(&effect)
     }
 }
 #[derive(Clone)]
@@ -1932,9 +1954,10 @@ impl Mob {
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
     pub fn movement_speed(&self) -> f64 {
-        let mut v =
-            strider::movement_speed(self, self.attrs.speed + enderman::attacking_speed(self))
-                * self.speed_bonus();
+        let mut v = strider::movement_speed(
+            self,
+            witch::speed(self, self.attrs.speed + enderman::attacking_speed(self)),
+        ) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
