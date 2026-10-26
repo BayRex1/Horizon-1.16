@@ -634,6 +634,9 @@ pub struct Attrs {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
+    /// Computed attributes received from a server. These override local
+    /// defaults/effect reconstruction, never an authoritative server's map.
+    pub synced_attributes: HashMap<String, f64>,
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
     pub passenger: bool,
@@ -1641,6 +1644,13 @@ impl Mob {
                 self.position.z + w,
             ),
         )
+    }
+    pub fn synced_attribute(&self, name: &str, default: f64) -> f64 {
+        self.extra
+            .synced_attributes
+            .get(name)
+            .copied()
+            .unwrap_or(default)
     }
     pub fn alive(&self) -> bool {
         self.health > 0.0
