@@ -622,6 +622,7 @@ impl Game<'_> {
                 &mut self.world.random,
                 Some((&mut self.rand_sequences, self.level.seed)),
                 decay,
+                false,
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
