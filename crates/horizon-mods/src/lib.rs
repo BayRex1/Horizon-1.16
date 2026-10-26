@@ -20,3 +20,10 @@ pub use content::Content;
 pub use manifest::{Capability, Manifest, Package, Side, find};
 #[cfg(feature = "runtime")]
 pub use runtime::*;
+
+#[cfg(feature = "runtime")]
+pub mod tooltip;
+#[cfg(feature = "runtime")]
+pub use tooltip::{
+    EnchantmentSelector, EnchantmentSource, TooltipRule, TooltipRules, TooltipSelector,
+};

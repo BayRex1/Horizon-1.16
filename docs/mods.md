@@ -645,3 +645,9 @@ Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
 API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
 textures), then server hooks (0.3) and block entities, menus, capabilities and
 `net` (0.4), in the order the ATM10 inventory needs them.
+
+## Experimental tooltip contributions
+
+Client mods can register bounded translation hints for item IDs and applied or
+stored enchantments. See the [tooltip API contract](api/tooltip.md) for the
+proposed API level, visibility rules, lifecycle and limits.

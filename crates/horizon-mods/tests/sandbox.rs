@@ -202,7 +202,7 @@ fn undeclared_capabilities_are_refused() {
 /// from the functions they import.
 #[test]
 fn a_mod_for_a_newer_horizon_is_refused() {
-    use horizon_mods::api_level::{LEVEL, imports, needed};
+    use horizon_mods::api_level::{imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
@@ -252,8 +252,9 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest shows a minimap (`render.set-minimap`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    // Its newest import is command.run-quiet (level 3), independent of
+    // newer capabilities this host serves but this guest does not import.
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 3);
 }
 
 #[test]

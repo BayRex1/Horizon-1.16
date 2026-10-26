@@ -7,13 +7,13 @@
 //! version's level so the launcher can tell before it installs.
 
 /// The newest level this Horizon serves.
-pub const LEVEL: u32 = 3;
+pub const LEVEL: u32 = 4;
 
 /// Every function the game offers mods, as `interface.function`, with its
 /// level. Level 0 is the contract of Horizon 0.2.67 to 0.2.69. A new
 /// function takes the next level and raises [`LEVEL`] (the `api_reference`
 /// test fails until it is listed here).
-pub const FUNCTIONS: [(&str, u32); 34] = [
+pub const FUNCTIONS: [(&str, u32); 36] = [
     ("log.write", 0),
     ("game.get-player", 0),
     ("game.get-clock", 0),
@@ -48,6 +48,8 @@ pub const FUNCTIONS: [(&str, u32); 34] = [
     ("players.broadcast", 1),
     ("game.raycast", 2),
     ("command.run-quiet", 3),
+    ("tooltip.replace", 4),
+    ("tooltip.clear", 4),
 ];
 
 /// What the game's program carries so the launcher can read its level
@@ -169,6 +171,16 @@ mod tests {
         assert_eq!(read_mark(&program), Some(LEVEL));
         assert_eq!(read_mark(b"horizon-mod-api-level:12;"), None);
         assert_eq!(read_mark(b"no mark"), None);
+    }
+
+    #[test]
+    fn tooltip_imports_require_level_four_without_changing_old_levels() {
+        assert_eq!(
+            needed(["tooltip.replace", "tooltip.clear"]),
+            (4, Some("tooltip.replace"))
+        );
+        assert_eq!(level_of("command.run-quiet"), Some(3));
+        assert_eq!(level_of("hud.set-panel"), Some(0));
     }
 
     #[test]

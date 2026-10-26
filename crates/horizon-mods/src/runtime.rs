@@ -79,6 +79,14 @@ pub use render_bindings::horizon::mods::render::{
 };
 use render_bindings::{RenderHost, horizon::mods::render};
 
+pub(crate) mod tooltip_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "tooltip-host",
+    });
+}
+use tooltip_bindings::{TooltipHost, horizon::mods::tooltip};
+
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
 /// Fuel (about one unit per WebAssembly instruction) per call: a bound on
@@ -288,6 +296,7 @@ struct State {
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     panel: Option<Panel>,
+    tooltip: crate::TooltipRules,
     ui: UiState,
     /// Capability `render`'s HUD shapes, drawn until replaced.
     shapes: Vec<Shape>,
@@ -392,6 +401,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            TooltipHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -455,6 +466,7 @@ impl Mods {
             snapshot,
             out: Vec::new(),
             panel: None,
+            tooltip: crate::TooltipRules::default(),
             ui: UiState::default(),
             shapes: Vec::new(),
             corner: None,
@@ -749,6 +761,12 @@ impl Mods {
             Some(Ok(None)) | None => {}
         }
         true
+    }
+    /// Retained tooltip rules from running instances, in module load order.
+    pub fn tooltip_rules(&self) -> impl Iterator<Item = &crate::TooltipRules> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some(&e.run.as_ref()?.store.data().tooltip))
     }
     /// The running mods' HUD panels.
     pub fn panels(&self) -> impl Iterator<Item = &Panel> {
@@ -1518,4 +1536,13 @@ fn storage_key_ok(key: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
     chars_ok && key != "." && key != ".."
+}
+
+impl tooltip::Host for State {
+    fn replace(&mut self, rules: Vec<tooltip::Rule>) -> Result<(), String> {
+        self.tooltip.replace(rules)
+    }
+    fn clear(&mut self) {
+        self.tooltip.clear();
+    }
 }

@@ -537,7 +537,7 @@ world horizon-server-mod {
     export server-events;
 }
 
-/// A mod with widgets (capability `ui`): the SDK builds every mod against
+/// A mod with widgets (capability `ui`): the SDK's additive world includes
 /// this world. Mods built for `horizon-mod` alone (no `ui-events` export)
 /// still load and simply hear nothing of their widgets.
 world horizon-ui-mod {
@@ -558,4 +558,34 @@ world ui-host {
 world render-host {
     import render;
     import input;
+}
+
+/// Capability `tooltip`, experimental and client-only. Retained, module-owned
+/// translation contributions; no hovered item data crosses into WebAssembly.
+interface tooltip {
+    enum enchantment-source { applied, stored }
+    record enchantment-selector { source: enchantment-source, id: string }
+    variant selector { item-id(string), enchantment(enchantment-selector) }
+    record rule {
+        id: string,
+        selector: selector,
+        translation-key: string,
+        /// RGB, or host gray when absent.
+        color: option<u32>,
+    }
+    /// Atomically replace this module's rules. Invalid input preserves old rules.
+    replace: func(rules: list<rule>) -> result<_, string>;
+    /// Remove all of this module's contributions.
+    clear: func();
+}
+
+/// Additive SDK world: all existing exported records and variants stay unchanged.
+world horizon-tooltip-mod {
+    include horizon-ui-mod;
+    import tooltip;
+}
+
+/// The game's side of capability `tooltip` (imports only).
+world tooltip-host {
+    import tooltip;
 }

@@ -31,7 +31,7 @@
 
 wit_bindgen::generate!({
     path: "wit",
-    world: "horizon-ui-mod",
+    world: "horizon-tooltip-mod",
     pub_export_macro: true,
     export_macro_name: "__export_horizon_mod",
     default_bindings_module: "horizon_mod_sdk",
@@ -39,7 +39,7 @@ wit_bindgen::generate!({
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
-pub use horizon::mods::{chat, command, game, hud, input, log, render, storage, ui};
+pub use horizon::mods::{chat, command, game, hud, input, log, render, storage, tooltip, ui};
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.

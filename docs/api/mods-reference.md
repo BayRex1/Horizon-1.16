@@ -17,6 +17,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `render` | [`render`](#render) | draw on your screen, shake and zoom the camera |
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
+| `tooltip` | [`tooltip`](#tooltip) | add translated hints to item tooltips |
 
 ## World `horizon-mod`
 
@@ -34,7 +35,7 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 
 ## World `horizon-ui-mod`
 
-A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
+A mod with widgets (capability `ui`): the SDK's additive world includes this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
 - Imports (what the game offers): `ui`, `render`, `input`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
@@ -51,7 +52,21 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 The game's side of capability `render` (imports only).
 
 - Imports (what the game offers): `render`, `input`
-- Exports (what the mod provides): 
+- Exports (what the mod provides): none
+
+## World `horizon-tooltip-mod`
+
+Additive SDK world: all existing exported records and variants stay unchanged.
+
+- Imports (what the game offers): `tooltip`, `ui`, `render`, `input`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Exports (what the mod provides): `ui-events`, `events`
+
+## World `tooltip-host`
+
+The game's side of capability `tooltip` (imports only).
+
+- Imports (what the game offers): `tooltip`
+- Exports (what the mod provides): none
 
 ## `log`
 
@@ -533,3 +548,44 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `command` | `func(player: player, name: string, args: string) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |
+
+## `tooltip`
+
+Access: capability `tooltip`.
+
+Capability `tooltip`, experimental and client-only. Retained, module-owned translation contributions; no hovered item data crosses into WebAssembly.
+
+### enum `enchantment-source`
+
+| Case | |
+| --- | --- |
+| `applied` |  |
+| `stored` |  |
+
+### record `enchantment-selector`
+
+| Field | Type | |
+| --- | --- | --- |
+| `source` | `enchantment-source` |  |
+| `id` | `string` |  |
+
+### variant `selector`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `item-id` | `string` |  |
+| `enchantment` | `enchantment-selector` |  |
+
+### record `rule`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `selector` | `selector` |  |
+| `translation-key` | `string` |  |
+| `color` | `option<u32>` | RGB, or host gray when absent. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `replace` | `func(rules: list<rule>) -> result<_, string>` | Atomically replace this module's rules. Invalid input preserves old rules. |
+| `clear` | `func()` | Remove all of this module's contributions. |

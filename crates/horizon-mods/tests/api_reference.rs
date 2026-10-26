@@ -145,6 +145,9 @@ fn markdown() -> String {
         let world = &resolve.worlds[world];
         let prefix = format!("{}:{}/", name.namespace, name.name);
         let names = |keys: Vec<&wit_parser::WorldKey>| {
+            if keys.is_empty() {
+                return "none".to_owned();
+            }
             keys.into_iter()
                 .map(|key| {
                     let full = resolve.name_world_key(key);

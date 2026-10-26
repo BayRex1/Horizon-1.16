@@ -97,9 +97,11 @@ pub enum Capability {
     Input,
     /// The players on the server and messages to them (server mods).
     Players,
+    /// Retained item tooltip translation contributions (client only).
+    Tooltip,
 }
 impl Capability {
-    pub const ALL: [Capability; 10] = [
+    pub const ALL: [Capability; 11] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -110,6 +112,7 @@ impl Capability {
         Capability::Render,
         Capability::Input,
         Capability::Players,
+        Capability::Tooltip,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -128,6 +131,7 @@ impl Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Tooltip => "tooltip",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -135,7 +139,7 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input
+            Capability::Ui | Capability::Render | Capability::Input | Capability::Tooltip
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -153,6 +157,7 @@ impl Capability {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
             Capability::Players => "see who is on the server and message them",
+            Capability::Tooltip => "add translated hints to item tooltips",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -188,6 +193,7 @@ impl fmt::Display for Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Tooltip => "tooltip",
         };
         f.write_str(name)
     }
@@ -517,6 +523,32 @@ capabilities = ["game-read", "hud"]
         assert_eq!(p.manifest.id, "coords_hud");
         assert_eq!(p.wasm.as_deref(), Some(&b"\0asm"[..]));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tooltip_is_experimental_client_capability_on_existing_manifest_lines() {
+        let base = "id = \"m\"\nname = \"M\"\nversion = \"1\"\napi = \"0.2\"\n";
+        let missing =
+            Manifest::parse(&format!("{base}capabilities = [\"tooltip\"]\n")).unwrap_err();
+        assert!(missing.contains("experimental"));
+        let opted = format!("{base}capabilities = [\"tooltip\"]\nexperimental = [\"tooltip\"]\n");
+        let manifest = Manifest::parse(&opted).unwrap();
+        manifest
+            .check_imports(["horizon:mods/tooltip@0.1.0"])
+            .unwrap();
+        let undeclared = Manifest::parse(base).unwrap();
+        assert!(
+            undeclared
+                .check_imports(["horizon:mods/tooltip@0.1.0"])
+                .is_err()
+        );
+        let server = opted.replace("0.2", "0.3") + "side = \"server\"\n";
+        assert!(
+            Manifest::parse(&server)
+                .unwrap_err()
+                .contains("for client mods")
+        );
+        assert_eq!(APIS, ["0.1", "0.2", "0.3"]);
     }
 
     #[test]
