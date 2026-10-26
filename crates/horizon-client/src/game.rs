@@ -3083,6 +3083,12 @@ impl Game<'_> {
                     let face = horizon_core::geometry::Direction::ALL[data.clamp(0, 5) as usize];
                     self.breaking_block_effects([pos.x, pos.y, pos.z], face.normal(), id == 2020);
                 }
+                // LevelEventHandler 1010 and 1011: the parrots nearby dance or stop.
+                LevelEvent::LevelEvent {
+                    id: id @ (1010 | 1011),
+                    pos,
+                    ..
+                } => self.notify_record_playing([pos.x, pos.y, pos.z], id == 1010),
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
