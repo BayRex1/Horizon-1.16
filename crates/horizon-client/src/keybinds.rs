@@ -318,51 +318,59 @@ impl KeyBinds {
             .map(|(n, _, _)| *n)
             .collect()
     }
-    /// The mapping a physical input triggers (first in list order).
-    pub fn mapping_for(&self, key: &str) -> Option<&'static str> {
-        MAPPINGS.iter().map(|m| m.0).find(|n| self.get(n) == key)
-    }
-    /// Translate a physical key into the default key of the mapping it is
-    /// bound to, so game code written against vanilla defaults follows the
-    /// player's bindings. `None` means the key now does nothing; mouse
-    /// mappings bound to keys come back as `Err(button)`.
-    pub fn translate(&self, key: KeyCode) -> Option<Result<KeyCode, MouseButton>> {
-        let Some(name) = key_name(key) else {
-            return Some(Ok(key));
-        };
-        if let Some(mapping) = self.mapping_for(name) {
-            let default = Self::default_of(mapping);
-            if let Some(code) = key_code(default) {
-                return Some(Ok(code));
-            }
-            return mouse_button(default).map(Err);
-        }
-        // An unbound key whose default meaning was moved elsewhere is inert.
-        if MAPPINGS
+    /// Every mapping a physical input triggers, in list order: a key bound
+    /// to two actions (W for forward and sprint) fires both.
+    fn mappings_for<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'static str> + 'a {
+        MAPPINGS
             .iter()
-            .any(|(n, d, _)| *d == name && !self.is_default(n))
-        {
-            return None;
+            .map(|m| m.0)
+            .filter(move |n| self.get(n) == key)
+    }
+    /// Translate a physical key into the default keys of the mappings it is
+    /// bound to, so game code written against vanilla defaults follows the
+    /// player's bindings. Empty means the key now does nothing; mouse
+    /// mappings bound to keys come back as `Err(button)`.
+    pub fn translate(&self, key: KeyCode) -> Vec<Result<KeyCode, MouseButton>> {
+        let Some(name) = key_name(key) else {
+            return vec![Ok(key)];
+        };
+        let bound: Vec<_> = self
+            .mappings_for(name)
+            .filter_map(|m| {
+                let default = Self::default_of(m);
+                key_code(default)
+                    .map(Ok)
+                    .or_else(|| mouse_button(default).map(Err))
+            })
+            .collect();
+        // An unbound key whose default meaning was moved elsewhere is inert.
+        if bound.is_empty() && !self.default_moved(name) {
+            return vec![Ok(key)];
         }
-        Some(Ok(key))
+        bound
     }
     /// Translate a mouse button the same way (keys bound to mouse buttons).
-    pub fn translate_mouse(&self, button: MouseButton) -> Option<Result<KeyCode, MouseButton>> {
+    pub fn translate_mouse(&self, button: MouseButton) -> Vec<Result<KeyCode, MouseButton>> {
         let name = mouse_name(button);
-        if let Some(mapping) = self.mapping_for(&name) {
-            let default = Self::default_of(mapping);
-            if let Some(b) = mouse_button(default) {
-                return Some(Err(b));
-            }
-            return key_code(default).map(Ok);
+        let bound: Vec<_> = self
+            .mappings_for(&name)
+            .filter_map(|m| {
+                let default = Self::default_of(m);
+                mouse_button(default)
+                    .map(Err)
+                    .or_else(|| key_code(default).map(Ok))
+            })
+            .collect();
+        if bound.is_empty() && !self.default_moved(&name) {
+            return vec![Err(button)];
         }
-        if MAPPINGS
+        bound
+    }
+    /// Some mapping with `name` as its default key was rebound elsewhere.
+    fn default_moved(&self, name: &str) -> bool {
+        MAPPINGS
             .iter()
             .any(|(n, d, _)| *d == name && !self.is_default(n))
-        {
-            return None;
-        }
-        Some(Err(button))
     }
     /// `AbstractContainerScreen.checkHotbarMouseClicked`: off hand, then hotbar.
     pub fn container_mouse_key(&self, button: MouseButton, creative: bool) -> Option<KeyCode> {
@@ -421,19 +429,26 @@ mod tests {
     #[test]
     fn rebinding_translates_to_defaults() {
         let mut k = KeyBinds::default();
-        assert_eq!(k.translate(KeyCode::KeyW), Some(Ok(KeyCode::KeyW)));
+        assert_eq!(k.translate(KeyCode::KeyW), [Ok(KeyCode::KeyW)]);
         // Forward on the up arrow, inventory on W.
         k.set("key.forward", "key.keyboard.up");
         k.set("key.inventory", "key.keyboard.w");
-        assert_eq!(k.translate(KeyCode::ArrowUp), Some(Ok(KeyCode::KeyW)));
-        assert_eq!(k.translate(KeyCode::KeyW), Some(Ok(KeyCode::KeyE)));
+        assert_eq!(k.translate(KeyCode::ArrowUp), [Ok(KeyCode::KeyW)]);
+        assert_eq!(k.translate(KeyCode::KeyW), [Ok(KeyCode::KeyE)]);
         // E's default meaning moved and nothing else uses it.
-        assert_eq!(k.translate(KeyCode::KeyE), None);
+        assert!(k.translate(KeyCode::KeyE).is_empty());
         // Attack on a key.
         k.set("key.attack", "key.keyboard.r");
-        assert_eq!(k.translate(KeyCode::KeyR), Some(Err(MouseButton::Left)));
-        assert_eq!(k.translate_mouse(MouseButton::Left), None);
-        assert_eq!(k.translate(KeyCode::Escape), Some(Ok(KeyCode::Escape)));
+        assert_eq!(k.translate(KeyCode::KeyR), [Err(MouseButton::Left)]);
+        assert!(k.translate_mouse(MouseButton::Left).is_empty());
+        assert_eq!(k.translate(KeyCode::Escape), [Ok(KeyCode::Escape)]);
+        // W for forward and sprint at once (#2161): both fire.
+        k.set("key.sprint", "key.keyboard.up");
+        assert_eq!(
+            k.translate(KeyCode::ArrowUp),
+            [Ok(KeyCode::KeyW), Ok(KeyCode::ControlLeft)]
+        );
+        k.set("key.sprint", "key.keyboard.left.control");
         assert!(k.conflicts("key.forward").is_empty());
         k.set("key.jump", "key.keyboard.up");
         assert_eq!(k.conflicts("key.forward"), ["key.jump"]);

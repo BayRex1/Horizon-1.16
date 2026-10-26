@@ -351,7 +351,8 @@ impl Game<'_> {
                 let key = if typing && arg(2)? != "up" {
                     key
                 } else {
-                    match self.settings.keys.translate(key) {
+                    // ponytail: the agent path keeps the first mapping of a shared key.
+                    match self.settings.keys.translate(key).into_iter().next() {
                         Some(Ok(k)) => k,
                         Some(Err(button)) => {
                             let action = arg(2)?;
