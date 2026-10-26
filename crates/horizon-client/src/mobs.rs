@@ -31,6 +31,7 @@ pub mod enderman;
 pub mod equine;
 pub mod farm;
 pub mod finalize;
+pub mod fox;
 pub mod gear;
 pub mod goals;
 pub mod golem;

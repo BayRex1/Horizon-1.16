@@ -179,6 +179,7 @@ pub fn register(m: &mut Mob) {
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
         Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Fox => super::fox::register(m),
         Family::Generic => {
             generic(m);
             if m.species() == Species::Rabbit {
@@ -1167,6 +1168,7 @@ fn species_ai_step(
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Turtle => super::turtle::ai_step(m, w, events),
+        Species::Fox => super::fox::ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;
         }
