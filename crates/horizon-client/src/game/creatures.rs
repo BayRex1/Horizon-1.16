@@ -996,6 +996,9 @@ impl Game<'_> {
                                         volume,
                                         pitch,
                                     );
+                                } else {
+                                    // Left for the end of the tick.
+                                    t.outbox.push(event);
                                 }
                             }
                         }
@@ -1258,6 +1261,7 @@ impl Game<'_> {
                     self.creaking_tear_down(center, spread)
                 }
                 MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
+                MobEvent::Reinforcements { mob, target } => self.call_reinforcements(mob, target),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
                 MobEvent::VillagerBirth {
                     parent,
