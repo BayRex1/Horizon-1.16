@@ -649,6 +649,8 @@ pub const WOLF_ARMOR_DURABILITY: i32 = 64;
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
