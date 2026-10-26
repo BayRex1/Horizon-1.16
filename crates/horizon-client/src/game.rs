@@ -1007,7 +1007,6 @@ impl LevelAccess for GameLevel<'_> {
         };
         match query {
             EntityQuery::Minecart => carts(),
-            EntityQuery::Minecart => carts(),
             EntityQuery::Arrows => arrows(),
             EntityQuery::Mobs => players() + mobs(),
             EntityQuery::Everything => players() + carts() + mobs() + others(),
