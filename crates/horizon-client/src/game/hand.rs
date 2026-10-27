@@ -410,12 +410,10 @@ impl HandWorld for GameHands<'_, '_> {
         false
     }
     fn piercing_weapon(&mut self) -> bool {
-        // `Player.attack` hands a `piercing_weapon` to `PiercingWeapon.attack`
-        // whether the crosshair holds an entity, a block or nothing.
-        self.game
-            .held()
-            .and_then(|stack| self.game.res.items().get(&stack.item))
-            .is_some_and(|info| info.piercing_weapon.is_some())
+        // The jab runs on the server, from `Game::attack` (`S::Attack`): the
+        // client still has to mine blocks with a spear and send that packet,
+        // so it does not take the attack over here.
+        false
     }
     fn attack_animation(&mut self) -> SwingAnimation {
         SwingAnimation::DEFAULT
@@ -423,9 +421,7 @@ impl HandWorld for GameHands<'_, '_> {
     fn interact_animation(&mut self, _: Hand) -> SwingAnimation {
         SwingAnimation::DEFAULT
     }
-    fn piercing_attack(&mut self, _: SwingAnimation) {
-        self.game.piercing_attack();
-    }
+    fn piercing_attack(&mut self, _: SwingAnimation) {}
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
