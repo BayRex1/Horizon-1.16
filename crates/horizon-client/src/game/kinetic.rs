@@ -1,21 +1,28 @@
+//! `KineticWeapon`: a spear's right-click charge, 26.3's `Item.use` kinetic
 //! branch and `ItemStack.onUseTick` -> `KineticWeapon.damageEntities`.
 //!
-//! Holding use starts the charge, and every tick from `delay_ticks` on the
-//! spear reaches along the look line (`PiercingWeapon`'s `getHitEntitiesAlong`
-//! with the collider clip, so grass and other non-colliding blocks do not
-//! stop it). Each reached mob is hit once per `contact_cooldown_ticks`, its
-//! damage/knockback/dismount decided by the weapon's conditions against the
-//! attacker's speed along the look line and the closing speed.
+//! Holding use starts the charge. From `delay_ticks` on, each tick sweeps
+//! `PiercingWeapon`'s line (`ProjectileUtil.getHitEntitiesAlong` with the
+//! collider clip, so grass and other non-colliding blocks do not stop it) and
+//! hits each reached mob once per `contact_cooldown_ticks`. A hit's damage,
+//! knockback and dismount come from the weapon's conditions against the
+//! attacker's speed along the look line and the closing speed, which is what
+//! divides a charge into its stages.
 use super::{Game, view_vector};
 use horizon_client::collisions::SceneCollisions;
 use horizon_client::items::{AttackRange, ItemInfo, KineticWeapon};
 use horizon_core::geometry::Vec3;
 
-/// `LivingEntity.MOTION_SCALE`: `getMotion` reports speed in blocks a second.
+/// `KineticWeapon.getMotion`: speed in blocks a second.
 const MOTION_SCALE: f64 = 20.0;
-/// `Player`'s share of a condition's thresholds (`LivingEntity` charges at a
-/// fifth of a player's).
+/// `KineticWeapon.damageEntities` charges at a fifth of a player's thresholds.
 const PLAYER_FACTOR: f64 = 1.0;
+/// `KineticWeapon.HIT_FEEDBACK_TICKS`: how long the hurt pose holds after a
+/// charge that only knocked the target back.
+const HIT_FEEDBACK_TICKS: i32 = 10;
+/// `LivingEntity.stabAttack`'s first knockback: the flat shove before the
+/// attacker's knockback attribute.
+const STAB_KNOCKBACK: f32 = 0.4;
 
 impl Game<'_> {
     /// `Item.use`'s kinetic branch: the spear is held like a shield until
@@ -30,6 +37,7 @@ impl Game<'_> {
         // `resetRecentKineticEnemies`: a new charge may reach a mob the last
         // one already hit.
         self.kinetic_recent.clear();
+        self.kinetic_trail.clear();
         self.using = Some((self.held_slot(), 0));
         if let Some(sound) = &kinetic.sound {
             let at = self.player_feet();
@@ -47,73 +55,72 @@ impl Game<'_> {
             return;
         };
         let look = view_vector(self.yaw, self.pitch);
-        let motion = |velocity: Vec3| [velocity.x, velocity.y, velocity.z];
         let projection =
             |m: [f64; 3]| (m[0] * look[0] + m[1] * look[1] + m[2] * look[2]) * MOTION_SCALE;
-        // `Entity.getKnownMovement`: over the charge's last few ticks, since
-        // the server copy of the window's player takes its movement from
-        // batched position packets.
+        // `Entity.getKnownMovement`: the server copy of the window's player
+        // takes its movement from batched position packets, so one tick's step
+        // understates it; the charge's own recent eye positions stand in.
         let time = self.world.game_time;
         self.kinetic_trail.push((eye, time));
         if self.kinetic_trail.len() > 6 {
             self.kinetic_trail.remove(0);
         }
-        let eye_step =
+        let travelled =
             self.kinetic_trail
                 .first()
                 .filter(|(_, at)| *at < time)
                 .map(|(oldest, at)| {
                     let ticks = time - at;
-                    let step: [f64; 3] =
-                        std::array::from_fn(|i| (eye[i] - oldest[i]) / ticks as f64);
-                    projection(step)
+                    std::array::from_fn::<f64, 3, _>(|i| (eye[i] - oldest[i]) / ticks as f64)
                 });
-        let attacker_speed = self
+        let velocity = self
             .player
             .as_ref()
-            .map_or(0.0, |p| projection(motion(p.velocity)))
-            .max(eye_step.unwrap_or(0.0));
+            .map(|p| [p.velocity.x, p.velocity.y, p.velocity.z]);
+        let movement = velocity
+            .map_or(0.0, projection)
+            .max(travelled.map_or(0.0, projection));
+        let attacker_speed = movement;
         let range = self.charge_range();
         let (min, max) = range.effective(self.creative);
-        let movement = self
-            .player
-            .as_ref()
-            .map_or(0.0, |p| projection(motion(p.velocity)));
-        let (min, max) = if min <= 0.0 && max <= 0.0 {
-            (2.0, 4.5)
-        } else {
-            (min, max)
-        };
         let from: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * f64::from(min));
         let to: [f64; 3] =
             std::array::from_fn(|i| eye[i] + look[i] * (f64::from(max) + movement.max(0.0)));
-        let end = self.clip_collider(from, to).unwrap_or(to);
+        // `getHitEntitiesAlong` clips from the eye: a wall before the spear tip
+        // reaches nothing at all.
+        let end = self.clip_collider(eye, to).unwrap_or(to);
+        let distance = |p: [f64; 3]| {
+            ((p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)).sqrt()
+        };
+        if distance(end) < distance(from) {
+            return;
+        }
         let margin = f64::from(range.hitbox_margin);
-        let damage = self.base_attack_damage();
-        let mut affected = false;
+        let (from_v, end_v) = (
+            Vec3::new(from[0], from[1], from[2]),
+            Vec3::new(end[0], end[1], end[2]),
+        );
+        let base_damage = self.base_attack_damage();
         for index in 0..self.mobs.len() {
             let mob = &self.mobs[index];
-            if !mob.alive() || mob.death_time > 0 {
+            // `PiercingWeapon.canHitEntity`.
+            if !mob.alive() || mob.removed || mob.death_time > 0 {
                 continue;
             }
             let box_ = mob.bounds().inflate(Vec3::new(margin, margin, margin));
-            let (from_v, end_v) = (
-                Vec3::new(from[0], from[1], from[2]),
-                Vec3::new(end[0], end[1], end[2]),
-            );
             if box_.clip(from_v, end_v).is_none() {
                 continue;
             }
             let id = mob.id;
-            let time = self.world.game_time;
             let cooldown = i64::from(kinetic.contact_cooldown_ticks);
             if let Some(&at) = self.kinetic_recent.get(&id)
                 && time - at < cooldown
             {
                 continue;
             }
-            let target_speed = projection(motion(mob.velocity));
-            // `KineticWeapon.damageEntities`: how fast the attacker closes in.
+            let target_motion = [mob.velocity.x, mob.velocity.y, mob.velocity.z];
+            let target_speed = projection(target_motion);
+            // The closing speed `KineticWeapon` tests and scales damage by.
             let relative = (attacker_speed - target_speed).max(0.0);
             let test = |condition: Option<horizon_client::items::KineticCondition>| {
                 condition.is_some_and(|c| c.test(ticks, attacker_speed, relative, PLAYER_FACTOR))
@@ -125,25 +132,45 @@ impl Game<'_> {
                 continue;
             }
             self.kinetic_recent.insert(id, time);
-            let amount = damage + (relative * f64::from(kinetic.damage_multiplier)).floor() as f32;
+            // `Mth.floor(relativeSpeed * damageMultiplier)` over the hand's
+            // base attack damage.
+            let amount =
+                base_damage + (relative * f64::from(kinetic.damage_multiplier)).floor() as f32;
             let kind = self.mobs[index].kind.id.clone();
-            let source = match self.player.as_ref() {
-                Some(p) => self.attack_source([p.position.x, p.position.y, p.position.z]),
-                None => return,
-            };
-            let landed = deals_damage && self.hurt_by_player(index, amount, source);
-            if knockback || landed {
-                let (power, _) = self.extra_knockback(&kind, 1.0);
-                if power > 0.0 {
-                    let (xd, zd) = self.extra_knockback_direction();
-                    self.mobs[index].knockback(f64::from(power), xd, zd);
+            if deals_damage {
+                let source = match self.player.as_ref() {
+                    Some(p) => self.attack_source([p.position.x, p.position.y, p.position.z]),
+                    None => return,
+                };
+                let _ = self.hurt_by_player(index, amount, source);
+            }
+            if knockback {
+                // `stabAttack`: a flat shove, then the attacker's knockback.
+                let (enchanted, _) = self.extra_knockback(&kind, 0.0);
+                let (xd, zd) = self.extra_knockback_direction();
+                if STAB_KNOCKBACK > 0.0 {
+                    self.mobs[index].knockback(f64::from(STAB_KNOCKBACK), xd, zd);
+                }
+                if enchanted > 0.0 {
+                    self.mobs[index].knockback(f64::from(enchanted), xd, zd);
+                }
+                // `causeExtraKnockback` slows the attacker down.
+                if let Some(p) = self.player.as_mut() {
+                    p.velocity.x *= 0.6;
+                    p.velocity.z *= 0.6;
                 }
             }
-            affected |= landed || knockback || dismounts;
-        }
-        if affected && let Some(sound) = &kinetic.hit_sound {
-            let at = self.player_feet();
-            self.audio.play(sound, at, 1.0, 1.0);
+            if dismounts && self.mobs[index].extra.passenger {
+                // `stopRiding`, but for what `cannot_be_dismounted_by_item_usage`
+                // keeps on (an interaction entity).
+                let immune = self.mobs[index].kind.id.contains("interaction");
+                if !immune {
+                    self.dismount_mob(id);
+                }
+            }
+            // `broadcastEntityEvent(this, 2)`: the hurt pose, also for a hit
+            // that only knocked the target back.
+            self.mobs[index].hurt_time = HIT_FEEDBACK_TICKS;
         }
     }
     fn player_feet(&self) -> Option<[f64; 3]> {

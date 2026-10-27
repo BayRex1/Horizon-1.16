@@ -1218,7 +1218,7 @@ impl Game<'_> {
     /// LivingEntity.stopRiding for a mob: off its vehicle
     /// (Entity.removePassenger), then to where the vehicle lets it out
     /// (LivingEntity.dismountVehicle).
-    fn dismount_mob(&mut self, rider: u32) {
+    pub(crate) fn dismount_mob(&mut self, rider: u32) {
         let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
             return;
         };
