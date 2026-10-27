@@ -232,6 +232,24 @@ pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinE
     }
 }
 
+const PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
+
+/// The signed-in account's own skin and cape, from the services profile
+/// (`GET /minecraft/profile`). A single-player or LAN server doesn't send
+/// the local player's `textures` property, so the client asks for it.
+/// `None` when the token is refused or the services don't answer.
+pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
+    let body = agent()
+        .get(PROFILE_URL)
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let profile: serde_json::Value = serde_json::from_str(&body).ok()?;
+    Some(crate::skins::services_profile_textures(&profile))
+}
+
 /// What the session service says about a player joining this server
 /// (MinecraftServicesSessionService.hasJoinedServer).
 #[derive(Clone, Debug, PartialEq)]

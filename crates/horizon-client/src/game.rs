@@ -10459,11 +10459,15 @@ impl Game<'_> {
                 let Some(arm) = self.res.player_arm().clone() else {
                     continue;
                 };
+                // The player's own skin once it is downloaded (the model's
+                // `skin`, as the third-person model draws it), else Steve.
+                let sprites = &self.gui.atlas.sprites;
                 let Some(r) = self
-                    .gui
-                    .atlas
-                    .sprites
-                    .get("entity/player/wide/steve")
+                    .player_model
+                    .as_ref()
+                    .and_then(|m| m.skin.as_deref())
+                    .and_then(|skin| sprites.get(skin))
+                    .or_else(|| sprites.get("entity/player/wide/steve"))
                     .copied()
                 else {
                     continue;

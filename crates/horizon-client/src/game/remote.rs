@@ -106,6 +106,13 @@ enum Received {
     Chunk(Arc<ChunkFormat>),
 }
 
+/// Where the signed-in account's own skin fetch stands.
+enum OwnTextures {
+    Idle,
+    Fetching(std::sync::mpsc::Receiver<Option<horizon_client::skins::Textures>>),
+    Done,
+}
+
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
@@ -182,6 +189,10 @@ pub(super) struct Remote {
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
+    /// The signed-in account's own textures, fetched once after joining:
+    /// servers that don't send the local player's profile (single player,
+    /// LAN) leave it on the default skin otherwise.
+    own_textures: OwnTextures,
     /// The skin texture each profile's players show, once its download is ready.
     skins: HashMap<u128, String>,
     listed: std::collections::HashSet<u128>,
@@ -492,6 +503,7 @@ impl Game<'_> {
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
+            own_textures: OwnTextures::Idle,
             skins: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
@@ -3086,6 +3098,42 @@ impl Game<'_> {
             .collect();
         Some((players, r.online_mode, upside_down))
     }
+    /// Fetch the signed-in account's skin once the join is done, and hand it
+    /// to the skin lookup as the local player's textures when the server
+    /// sent none.
+    fn poll_own_textures(&mut self) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        match &r.own_textures {
+            OwnTextures::Idle if r.joined => {
+                let Some(session) = horizon_client::auth::current() else {
+                    r.own_textures = OwnTextures::Done;
+                    return;
+                };
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(horizon_client::auth::own_textures(&session));
+                });
+                r.own_textures = OwnTextures::Fetching(rx);
+            }
+            OwnTextures::Fetching(rx) => match rx.try_recv() {
+                Ok(textures) => {
+                    if let Some(t) = textures
+                        && r.skin_textures
+                            .get(&r.profile)
+                            .is_none_or(|k| k.skin.is_none())
+                    {
+                        r.skin_textures.insert(r.profile, t);
+                    }
+                    r.own_textures = OwnTextures::Done;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(_) => r.own_textures = OwnTextures::Done,
+            },
+            _ => {}
+        }
+    }
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
@@ -3094,6 +3142,10 @@ impl Game<'_> {
             return;
         };
         let local = r.profile;
+        self.poll_own_textures();
+        let Some(r) = self.remote.as_ref() else {
+            return;
+        };
         let entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()

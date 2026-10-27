@@ -119,6 +119,34 @@ pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
     let (value, signature) = parse_profile(profile).textures?;
     unpack(&value, signature, &TEXTURE_URIS).skin
 }
+
+/// The textures of a Minecraft services `/minecraft/profile` answer: the
+/// `ACTIVE` skin and cape (`MinecraftProfileResponse`). Unsigned, like the
+/// local player's own textures, and only URLs under the allowed domains count.
+pub fn services_profile_textures(profile: &serde_json::Value) -> Textures {
+    let active = |key: &str| {
+        profile
+            .get(key)?
+            .as_array()?
+            .iter()
+            .find(|t| t.get("state").and_then(|s| s.as_str()) == Some("ACTIVE"))?
+            .get("url")?
+            .as_str()
+            .filter(|url| {
+                TEXTURE_URIS
+                    .iter()
+                    .any(|u| url.starts_with(&u.replace("{textureId}", "")))
+            })
+            .map(str::to_owned)
+    };
+    Textures {
+        skin: active("skins"),
+        cape: active("capes"),
+        elytra: None,
+        signed: false,
+    }
+}
+
 /// `profile_skin_url` on a block entity's `profile` NBT (`SkullBlockEntity`):
 /// the same `properties` list, held as a compound. A name-only profile (a
 /// string tag) has no properties and no skin URL.
@@ -950,6 +978,36 @@ mod tests {
         let bad = serde_json::json!({"properties": [{"name": "textures", "value": "not base64"}]});
         assert_eq!(super::profile_skin_url(&bad), None);
         assert_eq!(super::profile_skin_url(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn services_profile_answers_give_the_active_skin_and_cape() {
+        let profile = serde_json::json!({
+            "skins": [
+                {"state": "INACTIVE", "url": "https://textures.minecraft.net/texture/old"},
+                {"state": "ACTIVE", "url": "https://textures.minecraft.net/texture/skin1", "variant": "CLASSIC"}
+            ],
+            "capes": [{"state": "ACTIVE", "url": "http://textures.minecraft.net/texture/cape1"}]
+        });
+        let t = super::services_profile_textures(&profile);
+        assert_eq!(
+            t.skin.as_deref(),
+            Some("https://textures.minecraft.net/texture/skin1")
+        );
+        assert_eq!(
+            t.cape.as_deref(),
+            Some("http://textures.minecraft.net/texture/cape1")
+        );
+        assert!(!t.signed);
+        let elsewhere = serde_json::json!({"skins": [{"state": "ACTIVE", "url": "https://evil.example/texture/x"}]});
+        assert_eq!(
+            super::services_profile_textures(&elsewhere),
+            super::Textures::default()
+        );
+        assert_eq!(
+            super::services_profile_textures(&serde_json::json!({})),
+            super::Textures::default()
+        );
     }
 
     /// Textures come over plain HTTP too (a local server here; https is the
