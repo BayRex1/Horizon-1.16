@@ -13763,10 +13763,10 @@ fn build_renderer(
         previous,
         api,
     ))?;
-    renderer.hud.fire_animations = atlas
-        .fire_animations
+    renderer.hud.animations = atlas
+        .animations
         .iter()
-        .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
+        .map(|(rect, animation)| (*rect, animation.clone(), None))
         .collect();
     Ok(renderer)
 }
@@ -13816,10 +13816,10 @@ fn loading_renderer(
         api,
     ))?;
     if let Some(atlas) = atlas {
-        renderer.hud.fire_animations = atlas
-            .fire_animations
+        renderer.hud.animations = atlas
+            .animations
             .iter()
-            .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
+            .map(|(rect, animation)| (*rect, animation.clone(), None))
             .collect();
     }
     Ok(renderer)

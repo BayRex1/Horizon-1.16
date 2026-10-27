@@ -64,7 +64,10 @@ pub struct HudAtlas {
     /// Sprites whose `.png.mcmeta` sets `blur` or `clamp`; the others
     /// sample as vanilla's defaults (nearest, repeat).
     pub flags: HashMap<String, TextureFlags>,
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
+    /// The animated sprites the atlas holds: the GUI draws a block item with
+    /// the atlas's copy of the block's texture, so the copy has to keep the
+    /// animation, as vanilla's GUI draws the block model with the block atlas.
+    pub animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
     white: Rect,
@@ -495,34 +498,46 @@ impl HudAtlas {
                 },
             );
         }
-        let mut fire_sprites = crate::sprites::Sprites::default();
-        let mut fire_animations = Vec::new();
-        for name in [
-            "block/fire_0",
-            "block/fire_1",
-            "block/soul_fire_0",
-            "block/soul_fire_1",
-        ] {
-            if let Some(rect) = sprites.get(name).copied() {
-                let layer = fire_sprites.insert(root, &format!("minecraft:{name}"))?;
-                if let Some(animation) = fire_sprites
-                    .animations
-                    .iter()
-                    .find(|a| a.layer == layer)
-                    .cloned()
-                {
-                    let (tw, th) = rect.texels((width, height));
-                    let image = animation.resized_pixels(animation.frame(0), tw, th);
-                    let x = (rect.u0 * width as f32).round() as usize;
-                    let y = (rect.v0 * height as f32).round() as usize;
-                    let row_bytes = tw as usize * 4;
-                    for row in 0..th as usize {
-                        let dst = ((y + row) * width as usize + x) * 4;
-                        let src = row * row_bytes;
-                        pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
-                    }
-                    fire_animations.push((rect, animation));
+        // The animated sprites the atlas holds. The GUI draws a block item
+        // with the atlas's copy of the block's texture (the HUD has one
+        // texture, vanilla's GUI draws the block model with the block atlas),
+        // so the copy has to show the frame of the tick like the world does.
+        let mut animated = crate::sprites::Sprites::default();
+        let mut animations = Vec::new();
+        let mut animated_names: Vec<&String> = sprites
+            .keys()
+            .filter(|name| name.starts_with("block/") || name.starts_with("item/"))
+            .collect();
+        animated_names.sort();
+        for name in animated_names {
+            let Some(rect) = sprites.get(name).copied() else {
+                continue;
+            };
+            let metadata = root.join(format!("assets/minecraft/textures/{name}.png.mcmeta"));
+            let Ok(text) = fs::read_to_string(&metadata) else {
+                continue;
+            };
+            if !text.contains("\"animation\"") {
+                continue;
+            }
+            let layer = animated.insert(root, &format!("minecraft:{name}"))?;
+            if let Some(animation) = animated
+                .animations
+                .iter()
+                .find(|a| a.layer == layer)
+                .cloned()
+            {
+                let (tw, th) = rect.texels((width, height));
+                let image = animation.resized_pixels(animation.frame(0), tw, th);
+                let x = (rect.u0 * width as f32).round() as usize;
+                let y = (rect.v0 * height as f32).round() as usize;
+                let row_bytes = tw as usize * 4;
+                for row in 0..th as usize {
+                    let dst = ((y + row) * width as usize + x) * 4;
+                    let src = row * row_bytes;
+                    pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
                 }
+                animations.push((rect, animation));
             }
         }
         let white = sprites["horizon/white"];
@@ -541,7 +556,7 @@ impl HudAtlas {
             sprites,
             translucent,
             flags,
-            fire_animations,
+            animations,
             font,
             white,
         })
@@ -1033,7 +1048,13 @@ impl HudUniform {
     }
 }
 pub struct HudRenderer {
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation, usize)>,
+    /// The atlas's animated sprites: the frame of the tick is uploaded into
+    /// the atlas texture, so the GUI shows the animation.
+    pub animations: Vec<(
+        Rect,
+        crate::sprites::SpriteAnimation,
+        Option<crate::sprites::FrameBlend>,
+    )>,
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
@@ -1235,7 +1256,7 @@ impl HudRenderer {
         });
         Ok(Self {
             atlas_texture: None,
-            fire_animations: Vec::new(),
+            animations: Vec::new(),
             pipeline,
             invert_pipeline,
             additive_pipeline,
@@ -1248,7 +1269,10 @@ impl HudRenderer {
             capacity,
         })
     }
-    pub fn animate_fire(
+    /// The atlas's animated sprites: the frame of the tick is uploaded into the
+    /// atlas texture, so a block item in the GUI animates like the block in
+    /// the world (vanilla's GUI draws the block model with the block atlas).
+    pub fn animate_sprites(
         &mut self,
         uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
@@ -1257,13 +1281,13 @@ impl HudRenderer {
         let Some(texture) = &self.atlas_texture else {
             return;
         };
-        for (rect, animation, previous) in &mut self.fire_animations {
-            let frame = animation.frame(tick);
-            if frame == *previous {
+        for (rect, animation, previous) in &mut self.animations {
+            let blend = animation.blend(tick);
+            if previous == &Some(blend) {
                 continue;
             }
             let (w, h) = rect.texels((texture.width(), texture.height()));
-            let pixels = animation.resized_pixels(frame, w, h);
+            let pixels = animation.blended_pixels(blend, w, h);
             uploads.texture(
                 encoder,
                 wgpu::TexelCopyTextureInfo {
@@ -1280,7 +1304,7 @@ impl HudRenderer {
                 h,
                 &pixels,
             );
-            *previous = frame;
+            *previous = Some(blend);
         }
     }
     /// Stage the batch's atlas patches, vertices and uniform: before the
@@ -1496,6 +1520,30 @@ mod tests {
             let r = atlas.sprites[name];
             assert_eq!(((r.w, r.h), r.texels(size)), (gui, texels), "{name}");
         }
+    }
+    #[test]
+    fn an_animated_block_texture_animates_in_the_gui() {
+        // The inventory draws a block item with the HUD atlas's copy of the
+        // block's texture, so the copy has to keep the animation, as vanilla's
+        // GUI draws the block model with the block atlas (#2488).
+        let temp =
+            std::env::temp_dir().join(format!("horizon-gui-animation-{}", std::process::id()));
+        let (defaults, pack) = (temp.join("defaults"), temp.join("pack"));
+        write_png(&defaults, "block/sculk", 16, 16);
+        // The sculk texture's strip: two frames, as vanilla's.
+        write_png(&pack, "block/sculk", 16, 32);
+        let mcmeta = pack.join("assets/minecraft/textures/block/sculk.png.mcmeta");
+        fs::write(&mcmeta, r#"{"animation":{"frametime":1}}"#).unwrap();
+        let atlas = HudAtlas::build_over(&pack, &defaults).unwrap();
+        let _ = fs::remove_dir_all(&temp);
+        let rect = atlas.sprites["block/sculk"];
+        let (_, animation) = atlas
+            .animations
+            .iter()
+            .find(|(r, _)| r.u0 == rect.u0 && r.v0 == rect.v0)
+            .expect("the animated block texture is in the atlas");
+        assert_eq!(animation.frame_count(), 2);
+        assert_ne!(animation.frame(0), animation.frame(1), "the frames differ");
     }
     #[test]
     fn the_default_textures_keep_a_4096_wide_atlas() {

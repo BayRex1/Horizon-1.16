@@ -48,6 +48,25 @@ impl SpriteAnimation {
             }
         }
     }
+    /// The frame the animation shows, mixed with the next one as
+    /// `SpriteContents.AnimationState` does when the animation interpolates:
+    /// `animate.wgsl`'s integer mix of the two frames.
+    pub fn blended_pixels(&self, blend: FrameBlend, width: u32, height: u32) -> Vec<u8> {
+        let current = self.resized_pixels(blend.frame, width, height);
+        if blend.millis == 0 || blend.next == blend.frame {
+            return current;
+        }
+        let next = self.resized_pixels(blend.next, width, height);
+        let millis = u32::from(blend.millis);
+        current
+            .iter()
+            .zip(next.iter())
+            .map(|(&a, &b)| {
+                ((u32::from(a) * (1000 - millis) + u32::from(b) * millis + 500) / 1000) as u8
+            })
+            .collect()
+    }
+
     pub fn resized_pixels(&self, frame: usize, width: u32, height: u32) -> Vec<u8> {
         let source = self.pixels(frame);
         let side = (source.len() / 4).isqrt() as u32;
