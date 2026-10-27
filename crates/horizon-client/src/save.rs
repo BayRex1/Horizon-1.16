@@ -2776,6 +2776,9 @@ pub struct Level {
     pub food_tick_timer: i32,
     /// Abilities.flying: whether creative/spectator flight is active.
     pub flying: bool,
+    /// The vehicle the player rides, by UUID (`ServerPlayer.saveParentVehicle`'s
+    /// "RootVehicle"), so the ride comes back on the next login.
+    pub root_vehicle: Option<[i32; 4]>,
     /// The player compound as loaded, for fields Horizon does not model
     /// (ender chest, effects, abilities, recipe book, attributes, ...).
     pub player_extra: Option<Tag>,
@@ -3028,6 +3031,12 @@ impl Level {
                 .collect(),
             _ => Vec::new(),
         };
+        // ServerPlayer.saveParentVehicle: the vehicle the player rides, by
+        // UUID. Horizon keeps the vehicle in the world, so the file names it
+        // instead of holding a second copy of it.
+        self.root_vehicle = p
+            .get("RootVehicle")
+            .and_then(|r| uuid_from_tag(r.get("Attach")));
     }
     /// The player compound: the loaded one with Horizon's state written over it.
     pub fn player_tag(&self) -> Tag {
@@ -3042,6 +3051,7 @@ impl Level {
                 "Pos",
                 "respawn",
                 "recipeBook",
+                "RootVehicle",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3220,6 +3230,16 @@ impl Level {
             ] {
                 map.entry(key.into()).or_insert(value);
             }
+        }
+        // ServerPlayer.saveParentVehicle: the vehicle the player rides, by
+        // UUID. Horizon keeps the vehicle in the world, so the file names it
+        // instead of holding a second copy of it.
+        if let Some(vehicle) = self.root_vehicle {
+            put(
+                &mut p,
+                "RootVehicle",
+                Tag::compound([("Attach", uuid_tag(vehicle))]),
+            );
         }
         p
     }
