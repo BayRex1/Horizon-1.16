@@ -30,6 +30,7 @@ members = [
     "crates/horizon-shader-api",
     "crates/horizon-release-sign",
     "crates/horizon-mod-sdk/examples/coords-hud",
+    "crates/horizon-mod-sdk/examples/coords-hud-lua",
     "crates/horizon-mod-sdk/examples/predator-missile",
     "crates/horizon-mod-sdk/examples/welcome",
     "crates/horizon-mod-sdk/examples/beacons",
@@ -40,6 +41,7 @@ members = [
     "mods/official/zoom",
     "xtask",
     "mods/official/recipes",
+    "crates/horizon-mod-lua",
 ]
 resolver = "2"
 
