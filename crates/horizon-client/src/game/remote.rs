@@ -4388,6 +4388,29 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // A kinetic weapon (a spear): `Item.use` starts using it here too,
+            // so the charge shows at once and lets go like a shield's.
+            _ if self
+                .res
+                .items()
+                .get(&held.item)
+                .is_some_and(|info| info.kinetic_weapon.is_some()) =>
+            {
+                if let Some(sound) = self
+                    .res
+                    .items()
+                    .get(&held.item)
+                    .and_then(|info| info.kinetic_weapon.as_ref())
+                    .and_then(|kinetic| kinetic.sound.clone())
+                {
+                    let at = self
+                        .player
+                        .as_ref()
+                        .map(|p| [p.position.x, p.position.y, p.position.z]);
+                    self.audio.play(&sound, at, 1.0, 1.0);
+                }
+                true
+            }
             // ShieldItem.use: anything that blocks attacks, off cooldown.
             _ => {
                 self.raise_shield(self.held_slot());
@@ -4405,6 +4428,11 @@ impl Game<'_> {
             &*stack.item,
             "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
         ) || self.blocks_attacks(stack).is_some()
+            || self
+                .res
+                .items()
+                .get(&stack.item)
+                .is_some_and(|info| info.kinetic_weapon.is_some())
     }
 
     /// The rest of Minecraft.startUseItem once the main hand's target passed:

@@ -74,6 +74,7 @@ mod integrated;
 mod item_draw;
 mod item_particles;
 mod jukebox;
+mod kinetic;
 mod lan;
 mod lan_actions;
 mod lan_attributes;
@@ -1296,6 +1297,14 @@ struct Game<'a> {
     destroying: HashMap<i32, ([i32; 3], u8, i64)>,
     destroy_delay: u32,
     use_delay: u32,
+    /// `LivingEntity.recentlyStabbedEntities`: mob id to the game time it was
+    /// last reached by a kinetic weapon, so one charge hits it once per
+    /// `contact_cooldown_ticks`.
+    kinetic_recent: HashMap<u32, i64>,
+    /// The charge's recent eye positions and tick counts: the owner's
+    /// `getKnownMovement`. The server copy of the player takes its movement
+    /// from batched position packets, so one tick's step understates it.
+    kinetic_trail: Vec<([f64; 3], i64)>,
     creative: bool,
     /// The game mode; `creative` mirrors `mode == Creative`.
     mode: horizon_client::command::args::GameMode,
@@ -3958,6 +3967,11 @@ impl Game<'_> {
             }
             return Ok(true);
         }
+        // `Item.use`'s kinetic branch, after the shield: a spear charges while
+        // use is held.
+        if !on_block && self.start_kinetic_use(&info) {
+            return Ok(true);
+        }
         // Block foods attempt placement before starting consumption.
         if !on_block && (info.block.is_none() || block_hit.is_none()) && self.start_eating(&info) {
             return Ok(true);
@@ -4191,6 +4205,13 @@ impl Game<'_> {
         };
         if info.blocks_attacks.is_some() {
             // ShieldItem: used for 72000 ticks, i.e. until released.
+            self.using = Some((slot, ticks + 1));
+            return;
+        }
+        if let Some(kinetic) = info.kinetic_weapon.clone() {
+            // `Item.getUseDuration`: a kinetic weapon is used until released;
+            // `ItemStack.onUseTick` runs the charge's damage each tick.
+            self.tick_kinetic_weapon(ticks + 1, &kinetic);
             self.using = Some((slot, ticks + 1));
             return;
         }
@@ -9980,6 +10001,31 @@ impl Game<'_> {
                     }
                 }
                 "minecraft:trident" if using => ItemPose::Trident { ticks_used },
+                // A charge held on a kinetic weapon: `ItemUseAnimation.SPEAR`.
+                _ if using
+                    && self
+                        .res
+                        .items()
+                        .get(&stack.item)
+                        .is_some_and(|info| info.kinetic_weapon.is_some()) =>
+                {
+                    let kinetic = self
+                        .res
+                        .items()
+                        .get(&stack.item)
+                        .and_then(|info| info.kinetic_weapon.clone())
+                        .expect("checked above");
+                    let stage = |condition: Option<horizon_client::items::KineticCondition>| {
+                        condition.map_or(0.0, |c| c.max_duration_ticks as f32)
+                    };
+                    ItemPose::Spear(horizon_client::first_person::SpearCharge {
+                        ticks_used,
+                        delay_ticks: kinetic.delay_ticks as f32,
+                        dismount_ticks: stage(kinetic.dismount),
+                        knockback_ticks: stage(kinetic.knockback),
+                        damage_ticks: stage(kinetic.damage),
+                    })
+                }
                 _ if using => {
                     let components = self
                         .pack
@@ -12861,6 +12907,8 @@ impl<'a> Game<'a> {
             destroying: HashMap::new(),
             destroy_delay: 0,
             use_delay: 0,
+            kinetic_recent: HashMap::new(),
+            kinetic_trail: Vec::new(),
             creative,
             mode: if creative {
                 horizon_client::command::args::GameMode::Creative

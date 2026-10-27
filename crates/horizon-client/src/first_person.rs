@@ -31,6 +31,100 @@ pub enum ItemPose {
         charge_duration: f32,
         charged: bool,
     },
+    /// A kinetic weapon (a spear) being charged: `SpearAnimations.`
+    /// `firstPersonUse` lowers it into the charge and sways it until each
+    /// stage of the charge runs out.
+    Spear(SpearCharge),
+}
+/// The `KineticWeapon` timings the spear's use pose runs on.
+#[derive(Clone, Copy, Debug)]
+pub struct SpearCharge {
+    pub ticks_used: f32,
+    pub delay_ticks: f32,
+    pub dismount_ticks: f32,
+    pub knockback_ticks: f32,
+    pub damage_ticks: f32,
+}
+/// `Ease`: the dozen curves `SpearAnimations` reads.
+mod ease {
+    fn square(x: f32) -> f32 {
+        x * x
+    }
+    fn cube(x: f32) -> f32 {
+        x * x * x
+    }
+    pub fn in_out_back(x: f32) -> f32 {
+        if x < 0.5 {
+            4.0 * x * x * (7.189819 * x - 2.5949094) / 2.0
+        } else {
+            let dt = 2.0 * x - 2.0;
+            (dt * dt * (3.5949094 * dt + 2.5949094) + 2.0) / 2.0
+        }
+    }
+    pub fn out_cubic(x: f32) -> f32 {
+        1.0 - cube(1.0 - x)
+    }
+    pub fn in_out_elastic(x: f32) -> f32 {
+        if x == 0.0 {
+            return 0.0;
+        }
+        if x == 1.0 {
+            return 1.0;
+        }
+        let sin = ((20.0 * x - 11.125) * std::f32::consts::PI * 4.0 / 9.0).sin();
+        if x < 0.5 {
+            -((2.0f32).powf(20.0 * x - 10.0) * sin) / 2.0
+        } else {
+            (2.0f32).powf(-20.0 * x + 10.0) * sin / 2.0 + 1.0
+        }
+    }
+    pub fn out_circ(x: f32) -> f32 {
+        (1.0 - square(x - 1.0)).sqrt()
+    }
+    pub fn in_circ(x: f32) -> f32 {
+        1.0 - (1.0 - square(x)).sqrt()
+    }
+}
+impl SpearCharge {
+    pub(crate) fn progress(time: f32, start: f32, end: f32) -> f32 {
+        if end <= start {
+            return if time >= end { 1.0 } else { 0.0 };
+        }
+        ((time - start) / (end - start)).clamp(0.0, 1.0)
+    }
+    /// `SpearAnimations.UseParams.fromKineticWeapon`.
+    fn params(self) -> [f32; 10] {
+        let time = self.ticks_used;
+        let finish_raising = self.delay_ticks;
+        let finish_swaying = self.dismount_ticks + finish_raising;
+        let start_swaying = finish_swaying - 20.0;
+        let finish_lowering = self.knockback_ticks + finish_raising;
+        let start_lowering = finish_lowering - 40.0;
+        let finish_raising_back = self.damage_ticks + finish_raising;
+        let raise = Self::progress(time, 0.0, finish_raising);
+        let sway = Self::progress(time, start_swaying, finish_swaying);
+        let lower = ease::out_cubic(ease::in_out_elastic(Self::progress(
+            time - 20.0,
+            start_lowering,
+            finish_lowering,
+        )));
+        let raise_back = Self::progress(time, finish_raising_back - 5.0, finish_raising_back);
+        let intensity = 2.0 * ease::out_circ(sway) - 2.0 * ease::in_circ(raise_back);
+        let slow = (time * 19.0f32).to_radians().sin() * intensity;
+        let fast = (time * 30.0f32).to_radians().sin() * intensity;
+        [
+            raise,
+            Self::progress(raise, 0.0, 0.5),
+            Self::progress(raise, 0.5, 0.8),
+            Self::progress(raise, 0.8, 1.0),
+            sway,
+            lower,
+            raise_back,
+            intensity,
+            slow,
+            fast,
+        ]
+    }
 }
 
 /// `submitArmWithItem`: the pose of an item in the hand on the `left` or
@@ -65,6 +159,38 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
         eat *= Mat4::from_rotation_x((jiggle * 10.0).to_radians());
         eat *= Mat4::from_rotation_z((invert * jiggle * 30.0).to_radians());
         return eat * m;
+    }
+    if let ItemPose::Spear(charge) = pose {
+        // `SpearAnimations.firstPersonUse`: the spear drops into the charge,
+        // sways while the charge can still knock back and dismount, then
+        // rises back out of it.
+        let [
+            raise,
+            raise_start,
+            raise_middle,
+            raise_end,
+            sway,
+            lower,
+            raise_back,
+            _intensity,
+            slow,
+            fast,
+        ] = charge.params();
+        m *= Mat4::from_translation(Vec3::new(
+            invert * (raise * 0.15 - raise_end * 0.05 - sway * 0.1 + slow * 0.005),
+            raise * -0.075 + raise_middle * 0.075 + fast * 0.01,
+            raise_start * 0.05 - raise_end * 0.05 + slow * 0.005,
+        ));
+        let x = -65.0 * ease::in_out_back(raise) - 35.0 * lower + 100.0 * raise_back - 0.5 * fast;
+        let y =
+            invert * (-90.0 * SpearCharge::progress(raise, 0.5, 0.55) + 90.0 * sway + 2.0 * slow);
+        m *= Mat4::from_translation(Vec3::new(0.0, 0.1, 0.0))
+            * Mat4::from_rotation_x(x.to_radians())
+            * Mat4::from_translation(Vec3::new(0.0, -0.1, 0.0));
+        m *= Mat4::from_translation(Vec3::new(invert * 0.15, 0.0, 0.0))
+            * Mat4::from_rotation_y((-y).to_radians())
+            * Mat4::from_translation(Vec3::new(invert * -0.15, 0.0, 0.0));
+        return m;
     }
     if matches!(pose, ItemPose::Using) {
         return m;

@@ -59,6 +59,78 @@ pub enum ConsumeEffect {
     PlaySound(String),
 }
 
+/// `KineticWeapon`: a spear's right-click charge. Each condition is a window
+/// of the charge (`ticks_used <= max_duration_ticks`) in which its effect
+/// applies, gated on how fast the attacker moves and how fast they close in.
+#[derive(Clone, Debug)]
+pub struct KineticWeapon {
+    pub contact_cooldown_ticks: u32,
+    pub delay_ticks: u32,
+    pub dismount: Option<KineticCondition>,
+    pub knockback: Option<KineticCondition>,
+    pub damage: Option<KineticCondition>,
+    pub damage_multiplier: f32,
+    pub sound: Option<String>,
+    pub hit_sound: Option<String>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct KineticCondition {
+    pub max_duration_ticks: u32,
+    pub min_speed: f32,
+    pub min_relative_speed: f32,
+}
+impl KineticCondition {
+    /// `KineticWeapon.Condition.test`: a mob's charge counts at the
+    /// `mob_factor` of a player's.
+    pub fn test(
+        self,
+        ticks_used: u32,
+        attacker_speed: f64,
+        relative_speed: f64,
+        factor: f64,
+    ) -> bool {
+        f64::from(ticks_used) <= f64::from(self.max_duration_ticks)
+            && attacker_speed >= f64::from(self.min_speed) * factor
+            && relative_speed >= f64::from(self.min_relative_speed) * factor
+    }
+    fn from_json(value: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            max_duration_ticks: u32::try_from(value["max_duration_ticks"].as_u64()?).ok()?,
+            min_speed: value["min_speed"].as_f64().unwrap_or(0.0) as f32,
+            min_relative_speed: value["min_relative_speed"].as_f64().unwrap_or(0.0) as f32,
+        })
+    }
+}
+/// `AttackRange`: the reach of an attack, in the four variants `AttackRange`
+/// keeps (a spear reaches further than a hand, and further yet in creative).
+#[derive(Clone, Copy, Debug)]
+pub struct AttackRange {
+    pub min_reach: f32,
+    pub max_reach: f32,
+    pub min_creative_reach: f32,
+    pub max_creative_reach: f32,
+    pub hitbox_margin: f32,
+}
+impl AttackRange {
+    /// `AttackRange.effectiveMinRange` / `effectiveMaxRange`.
+    pub fn effective(self, creative: bool) -> (f32, f32) {
+        if creative {
+            (self.min_creative_reach, self.max_creative_reach)
+        } else {
+            (self.min_reach, self.max_reach)
+        }
+    }
+    /// `AttackRange.CODEC`'s defaults.
+    pub fn from_json(value: &serde_json::Value) -> Self {
+        Self {
+            min_reach: value["min_reach"].as_f64().unwrap_or(0.0) as f32,
+            max_reach: value["max_reach"].as_f64().unwrap_or(3.0) as f32,
+            min_creative_reach: value["min_creative_reach"].as_f64().unwrap_or(0.0) as f32,
+            max_creative_reach: value["max_creative_reach"].as_f64().unwrap_or(5.0) as f32,
+            hitbox_margin: value["hitbox_margin"].as_f64().unwrap_or(0.3) as f32,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
     pub fire_resistant: bool,
@@ -107,6 +179,10 @@ pub struct ItemInfo {
     pub weapon_damage: Option<u32>,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
+    /// `kinetic_weapon`: a spear's right-click charge.
+    pub kinetic_weapon: Option<KineticWeapon>,
+    /// `attack_range`: the reach of this item's attacks.
+    pub attack_range: Option<AttackRange>,
     /// `glider` (elytra).
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
@@ -579,6 +655,21 @@ impl Items {
                     }
                 }
             }
+            let kinetic_weapon = c.get("minecraft:kinetic_weapon").map(|k| {
+                let condition = |key: &str| k.get(key).and_then(KineticCondition::from_json);
+                KineticWeapon {
+                    contact_cooldown_ticks: k["contact_cooldown_ticks"].as_u64().unwrap_or(10)
+                        as u32,
+                    delay_ticks: k["delay_ticks"].as_u64().unwrap_or(0) as u32,
+                    dismount: condition("dismount_conditions"),
+                    knockback: condition("knockback_conditions"),
+                    damage: condition("damage_conditions"),
+                    damage_multiplier: k["damage_multiplier"].as_f64().unwrap_or(1.0) as f32,
+                    sound: k["sound"].as_str().map(str::to_owned),
+                    hit_sound: k["hit_sound"].as_str().map(str::to_owned),
+                }
+            });
+            let attack_range = c.get("minecraft:attack_range").map(AttackRange::from_json);
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -663,6 +754,8 @@ impl Items {
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,
+                    kinetic_weapon,
+                    attack_range,
                     blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
@@ -1731,6 +1824,59 @@ mod bucket_use_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinetic_stages_run_out_in_order() {
+        // An iron spear's three windows, from `Properties.spear`.
+        let dismount = KineticCondition {
+            max_duration_ticks: 50,
+            min_speed: 11.0,
+            min_relative_speed: 0.0,
+        };
+        let knockback = KineticCondition {
+            max_duration_ticks: 135,
+            min_speed: 5.1,
+            min_relative_speed: 0.0,
+        };
+        let damage = KineticCondition {
+            max_duration_ticks: 225,
+            min_speed: 0.0,
+            min_relative_speed: 4.6,
+        };
+        // Charging at 6 m/s into a still target: dismounted early, then only
+        // knocked back, then only damaged, then nothing.
+        let (speed, relative) = (6.0, 6.0);
+        assert!(!dismount.test(10, speed, relative, 1.0));
+        assert!(knockback.test(10, speed, relative, 1.0));
+        assert!(damage.test(10, speed, relative, 1.0));
+        assert!(!knockback.test(200, speed, relative, 1.0));
+        assert!(damage.test(200, speed, relative, 1.0));
+        assert!(!damage.test(300, speed, relative, 1.0));
+        // A fast attacker dismounts; a slow one damages nothing.
+        assert!(dismount.test(20, 11.0, 11.0, 1.0));
+        assert!(!damage.test(20, 3.0, 3.0, 1.0));
+        // A mob's charge lowers the bar to its factor (`actionFactor` 0.2).
+        assert!(dismount.test(20, 2.5, 2.5, 0.2));
+        assert!(!dismount.test(20, 2.5, 2.5, 1.0));
+    }
+    #[test]
+    fn attack_range_reads_its_four_reaches() {
+        let range = AttackRange::from_json(&serde_json::json!({
+            "hitbox_margin": 0.125,
+            "max_creative_reach": 6.5,
+            "max_reach": 4.5,
+            "min_creative_reach": 2.0,
+            "min_reach": 2.0,
+            "mob_factor": 0.5
+        }));
+        assert_eq!(range.effective(false), (2.0, 4.5));
+        assert_eq!(range.effective(true), (2.0, 6.5));
+        assert!((range.hitbox_margin - 0.125).abs() < 1e-6);
+        // A hand's defaults.
+        let hand = AttackRange::from_json(&serde_json::json!({}));
+        assert_eq!(hand.effective(false), (0.0, 3.0));
+        assert_eq!(hand.effective(true), (0.0, 5.0));
+    }
     use horizon_core::random::LegacyRandom;
     use serde_json::json;
 
