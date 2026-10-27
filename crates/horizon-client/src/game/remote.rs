@@ -4947,7 +4947,8 @@ impl Game<'_> {
             match key {
                 KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
                 KeyCode::KeyQ if !self.spectator() => {
-                    let all = self.keys.contains(&KeyCode::ControlLeft);
+                    // Ctrl+Q uses the physical modifier, even when sprint is toggled on.
+                    let all = super::drop_whole_stack(&self.physical_keys);
                     self.remote_drop(all);
                 }
                 KeyCode::KeyE if self.riding_mount_with_menu() => {
