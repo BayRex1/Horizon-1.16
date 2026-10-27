@@ -2357,6 +2357,7 @@ impl Game<'_> {
             game.tick_mob_effects();
             // Soul Speed's effects (LivingEntity.baseTick's location_changed
             // and tick effects); its particle goes to the players around.
+            game.tick_frost_walker();
             soul = game.tick_soul_speed();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);

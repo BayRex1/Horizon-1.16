@@ -4877,6 +4877,7 @@ impl Game<'_> {
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         // `LivingEntity.baseTick` (Soul Speed) comes before `aiStep` (the
         // glide's wear): both draw from the level random.
+        self.tick_frost_walker();
         if let Some((at, velocity)) = self.tick_soul_speed() {
             self.particles.send_particles(
                 &horizon_client::particles::ParticleOptions::simple(

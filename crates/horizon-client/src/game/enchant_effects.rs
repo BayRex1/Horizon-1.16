@@ -604,6 +604,64 @@ impl Game<'_> {
         }
         particle
     }
+    /// Frost Walker (`data/minecraft/enchantment/frost_walker.json`), the
+    /// `location_changed` `replace_disk` effect: each tick the enchanted boots
+    /// are worn, water under the player's feet becomes `frosted_ice[age=0]`
+    /// in a disk of `level + 2` (clamped to 16) centred a block below. The disk
+    /// only freezes water that has `air` above it and water flowing through it
+    /// (`matching_block_tag` + `matching_blocks` + `matching_fluids`); the
+    /// `unobstructed` predicate is implied (a water source never occludes).
+    ///
+    /// Vanilla fires this from `runLocationChangedEffects`, so it runs every
+    /// tick the player is on the ground over water (the write is idempotent).
+    /// Runs for the window's own player and for each guest on the server
+    /// (`guest_server_tick`); a remote client leaves it to its server.
+    pub(super) fn tick_frost_walker(&mut self) {
+        const ID: &str = "minecraft:frost_walker";
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        if player.client_side {
+            return;
+        }
+        let level = self.armor[3]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level(ID));
+        let (position, on_ground, flying) =
+            (player.position, player.ground.on_ground, player.flying);
+        if level == 0 || flying || !on_ground {
+            return;
+        }
+        let Some(frosted_ice) = self
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:frosted_ice")
+        else {
+            return;
+        };
+        let feet = BlockPos::containing(position);
+        let radius = i32::try_from(level + 2).unwrap_or(16).min(16);
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let at = feet.offset(dx, -1, dz);
+                let state = self.world.block(at.x, at.y, at.z);
+                let facts = self.res.facts().get(state);
+                if &*facts.name != "minecraft:water" {
+                    continue;
+                }
+                let above = self.world.block(at.x, at.y + 1, at.z);
+                // `#minecraft:air` is air, cave_air and void_air.
+                if !matches!(
+                    &*self.res.facts().get(above).name,
+                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                ) {
+                    continue;
+                }
+                let _ = self.level_set([at.x, at.y, at.z], frosted_ice);
+            }
+        }
+    }
     /// `ItemStack.hurtAndBreak` on the worn boots (`change_item_damage`):
     /// Unbreaking applies, and they break when worn out.
     fn wear_boots(&mut self, amount: u32) {
