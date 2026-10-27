@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- The .dmg window's background (background.png 660x420, background@2x.png 1320x840).
+     Render: from the repository's root, node -e with Playwright at deviceScaleFactor 1 and 2 (see README). -->
+<meta charset="utf-8"><style>
+@font-face{font-family:Geist;src:url(../../crates/horizon-theme/fonts/Geist-Medium.ttf);font-weight:500}
+@font-face{font-family:"Geist Mono";src:url(../../crates/horizon-theme/fonts/GeistMono-Regular.ttf)}
+html,body{margin:0;width:660px;height:420px;overflow:hidden;background:#fafafc;font-family:Geist;color:#16181f}
+.arrow{position:absolute;left:262px;top:199px;width:136px;height:1px;background:#5b3fd6}
+.arrow::after{content:"";position:absolute;right:-1px;top:-4px;width:8px;height:8px;border-top:1px solid #5b3fd6;border-right:1px solid #5b3fd6;transform:rotate(45deg)}
+.cap{position:absolute;left:0;right:0;top:346px;text-align:center;font:11px "Geist Mono";letter-spacing:.06em;color:#646875}
+.word{position:absolute;left:24px;top:22px;display:flex;align-items:center;gap:8px;font-weight:500;font-size:13px}
+.word img{width:16px}
+</style><body>
+<div class="word"><img src="../../docs/media/brand/mark.svg" alt="">Horizon</div>
+<div class="arrow"></div>
+<div class="cap">DRAG HORIZON TO APPLICATIONS</div>
+</body>
+sha256:803b422b8a865b1fd76388f6c29804ac1873600c8d30ad20f6b79a88ea63a3c1Para encontrar agências bancárias, postos de atendimento e caixas eletrônicos por estado e cidade no Brasil, você pode utilizar as seguintes plataformas oficiais e ferramentas confiáveis:
+• Busca Banco (FEBRABAN) – Ferramenta oficial da Federação Brasileira de Bancos que permite filtrar instituições financeiras por Estado (UF) e Município: Busca Banco FEBRABAN.
+• Banco Central do Brasil (UNICAD) – Consulta oficial de agências, postos de atendimento e dados cadastrais de instituições autorizadas: Banco Central - Agências e Postos.
+• Banco Central - Meu BC – Para verificar instituições reguladas, canais de atendimento e estrutura: Encontre uma Instituição no BC.
+• Banco Central - Registrato – Para consultar todas as contas bancárias abertas em seu CPF utilizando o login Gov.br: Sistema Registrato do BC.
+• Lista de Agências Bancárias (Club Martech) – Ferramenta baseada em dados abertos do Banco Central para buscar agências por banco, número ou cidade: Club Martech Agências.
+Você está procurando uma agência específica de algum banco, um caixa eletrônico ou quer saber quais bancos estão disponíveis em uma cidade?
+Busca Banco
+Busca Banco: FEBRABAN
+Busca Banco. Home Estatísticas Feriados Bancários · Home Estatísticas Feriados Bancários. Em qual região do Brasil você deseja encontrar uma Instituição Finance...
+Banco Central do Brasil
+Encontre uma instituição regulada/supervisionada pelo BC
+21 de out. de 2026 — Consulta do BC: Lista de instituições autorizadas, reguladas ou supervisionadas pelo Banco Central do Brasil para verificação de cadastro e prevenção de golpes.
+Banco Central do Brasil
+Agências e postos de atendimento - Banco Central do Brasil
+Os arquivos apresentam as informações das agências, postos de atendimento e postos de atendimento eletrônico das instituições financeiras e as filiais das admin...
+Club Martech
+Lista de Agências Bancárias: Endereço, Telefone e CNPJ - Club Martech
+Lista de Agências Bancárias: busque por banco, agência ou cidade e veja número, endereço com mapa, telefone e CNPJ, com dados abertos do Banco Central.
+UFFS
+Como emitir o Relatório de Contas Bancárias – Registrato?
+15 de mai. de 2025 — O objetivo principal é a listagem das contas bancárias que estão abertas e podem ter movimentação financeira. Para emitir o Registrato, é necessário logar no si...
+    Para encontrar agências bancárias, postos de atendimento e caixas eletrônicos por estado e cidade no Brasil, você pode utilizar as seguintes plataformas oficiais e ferramentas confiáveis:
+• Busca Banco (FEBRABAN) – Ferramenta oficial da Federação Brasileira de Bancos que permite filtrar instituições financeiras por Estado (UF) e Município: Busca Banco FEBRABAN.
+• Banco Central do Brasil (UNICAD) – Consulta oficial de agências, postos de atendimento e dados cadastrais de instituições autorizadas: Banco Central - Agências e Postos.
+• Banco Central - Meu BC – Para verificar instituições reguladas, canais de atendimento e estrutura: Encontre uma Instituição no BC.
+• Banco Central - Registrato – Para consultar todas as contas bancárias abertas em seu CPF utilizando o login Gov.br: Sistema Registrato do BC.
+• Lista de Agências Bancárias (Club Martech) – Ferramenta baseada em dados abertos do Banco Central para buscar agências por banco, número ou cidade: Club Martech Agências.
+Você está procurando uma agência específica de algum banco, um caixa eletrônico ou quer saber quais bancos estão disponíveis em uma cidade?
+Busca Banco
+Busca Banco: FEBRABAN
+Busca Banco. Home Estatísticas Feriados Bancários · Home Estatísticas Feriados Bancários. Em qual região do Brasil você deseja encontrar uma Instituição Finance...
+Banco Central do Brasil
+Encontre uma instituição regulada/supervisionada pelo BC
+21 de out. de 2026 — Consulta do BC: Lista de instituições autorizadas, reguladas ou supervisionadas pelo Banco Central do Brasil para verificação de cadastro e prevenção de golpes.
+Banco Central do Brasil
+Agências e postos de atendimento - Banco Central do Brasil
+Os arquivos apresentam as informações das agências, postos de atendimento e postos de atendimento eletrônico das instituições financeiras e as filiais das admin...
+Club Martech
+Lista de Agências Bancárias: Endereço, Telefone e CNPJ - Club Martech
+Lista de Agências Bancárias: busque por banco, agência ou cidade e veja número, endereço com mapa, telefone e CNPJ, com dados abertos do Banco Central.
+UFFS
+Como emitir o Relatório de Contas Bancárias – Registrato?
+15 de mai. de 2025 — O objetivo principal é a listagem das contas bancárias que estão abertas e podem ter movimentação financeira. Para emitir o Registrato, é necessário logar no si...
+    Para encontrar agências bancárias, postos de atendimento e caixas eletrônicos por estado e cidade no Brasil, você pode utilizar as seguintes plataformas oficiais e ferramentas confiáveis:
+• Busca Banco (FEBRABAN) – Ferramenta oficial da Federação Brasileira de Bancos que permite filtrar instituições financeiras por Estado (UF) e Município: Busca Banco FEBRABAN.
+• Banco Central do Brasil (UNICAD) – Consulta oficial de agências, postos de atendimento e dados cadastrais de instituições autorizadas: Banco Central - Agências e Postos.
+• Banco Central - Meu BC – Para verificar instituições reguladas, canais de atendimento e estrutura: Encontre uma Instituição no BC.
+• Banco Central - Registrato – Para consultar todas as contas bancárias abertas em seu CPF utilizando o login Gov.br: Sistema Registrato do BC.
+• Lista de Agências Bancárias (Club Martech) – Ferramenta baseada em dados abertos do Banco Central para buscar agências por banco, número ou cidade: Club Martech Agências.
+Você está procurando uma agência específica de algum banco, um caixa eletrônico ou quer saber quais bancos estão disponíveis em uma cidade?
+Busca Banco
+Busca Banco: FEBRABAN
+Busca Banco. Home Estatísticas Feriados Bancários · Home Estatísticas Feriados Bancários. Em qual região do Brasil você deseja encontrar uma Instituição Finance...
+Banco Central do Brasil
+Encontre uma instituição regulada/supervisionada pelo BC
+21 de out. de 2026 — Consulta do BC: Lista de instituições autorizadas, reguladas ou supervisionadas pelo Banco Central do Brasil para verificação de cadastro e prevenção de golpes.
+Banco Central do Brasil
+Agências e postos de atendimento - Banco Central do Brasil
+Os arquivos apresentam as informações das agências, postos de atendimento e postos de atendimento eletrônico das instituições financeiras e as filiais das admin...
+Club Martech
+Lista de Agências Bancárias: Endereço, Telefone e CNPJ - Club Martech
+Lista de Agências Bancárias: busque por banco, agência ou cidade e veja número, endereço com mapa, telefone e CNPJ, com dados abertos do Banco Central.
+UFFS
+Como emitir o Relatório de Contas Bancárias – Registrato?
+15 de mai. de 2025 — O objetivo principal é a listagem das contas bancárias que estão abertas e podem ter movimentação financeira. Para emitir o Registrato, é necessário logar no si...
+    milhões de livros 📚 📚 📚 📚 
