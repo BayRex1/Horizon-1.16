@@ -410,7 +410,12 @@ impl HandWorld for GameHands<'_, '_> {
         false
     }
     fn piercing_weapon(&mut self) -> bool {
-        false
+        // `Player.attack` hands a `piercing_weapon` to `PiercingWeapon.attack`
+        // whether the crosshair holds an entity, a block or nothing.
+        self.game
+            .held()
+            .and_then(|stack| self.game.res.items().get(&stack.item))
+            .is_some_and(|info| info.piercing_weapon.is_some())
     }
     fn attack_animation(&mut self) -> SwingAnimation {
         SwingAnimation::DEFAULT
@@ -418,7 +423,9 @@ impl HandWorld for GameHands<'_, '_> {
     fn interact_animation(&mut self, _: Hand) -> SwingAnimation {
         SwingAnimation::DEFAULT
     }
-    fn piercing_attack(&mut self, _: SwingAnimation) {}
+    fn piercing_attack(&mut self, _: SwingAnimation) {
+        self.game.piercing_attack();
+    }
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }

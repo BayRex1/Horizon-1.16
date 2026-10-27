@@ -8025,16 +8025,6 @@ impl Game<'_> {
         if self.spectator() {
             return false;
         }
-        // `Player.attack` on a `piercing_weapon` (a spear): the jab reaches
-        // along the look line instead of the one entity under the crosshair.
-        if self
-            .held()
-            .and_then(|stack| self.res.items().get(&stack.item))
-            .is_some_and(|info| info.piercing_weapon.is_some())
-        {
-            self.piercing_attack();
-            return true;
-        }
         // A painting nearer than the targeted block and mob breaks instead.
         if let Some((i, d)) = self.painting_hit()
             && self.mob_hit().is_none_or(|m| d < m.1)
