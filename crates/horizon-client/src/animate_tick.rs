@@ -75,6 +75,8 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// `FireflyBushBlock.animateTick`.
+    FireflyBush,
     /// `WetSpongeBlock.animateTick`.
     WetSponge,
 }
@@ -172,6 +174,7 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "firefly_bush" => Animate::FireflyBush,
         "wet_sponge" => Animate::WetSponge,
         // BrushableBlock has no dust colour of its own, so the dust is the map colour.
         "suspicious_sand" => Animate::Falling(0xF7E9A3, false),
@@ -983,6 +986,33 @@ fn block_animate_tick(
                     let name = "minecraft:block.potent_sulfur.noxious_gas";
                     sound(engine, name, [fx, fy, fz], 1.0, 1.0);
                 }
+            }
+        }
+        Animate::FireflyBush => {
+            // `FireflyBushBlock.animateTick`: at night
+            // (`getMaxLocalRawBrightness <= 13`), a 0.7 chance of a firefly in a
+            // 10x5x10 box around the bush; one ambient idle sound in 30.
+            let r = engine.random();
+            if next_int(r, 30) == 0 {
+                sound(
+                    engine,
+                    "minecraft:block.firefly_bush.idle",
+                    [fx, fy, fz],
+                    1.0,
+                    1.0,
+                );
+            }
+            let r = engine.random();
+            let light = ctx.world.light(pos[0], pos[1], pos[2]);
+            let brightness = (light >> 4).max(light & 15);
+            if brightness <= 13 && r.next_double() <= 0.7 {
+                let r = engine.random();
+                let p = [
+                    fx + r.next_double() * 10.0 - 5.0,
+                    fy + r.next_double() * 5.0,
+                    fz + r.next_double() * 10.0 - 5.0,
+                ];
+                add(engine, T::Firefly, p, [0.0; 3]);
             }
         }
         Animate::WetSponge => {
