@@ -74,6 +74,7 @@ pub mod flatgen;
 pub mod fog;
 pub mod font;
 pub mod friends_screen;
+pub mod frost;
 pub mod game_mode_switcher;
 pub mod game_rules_screen;
 pub mod gamepad;

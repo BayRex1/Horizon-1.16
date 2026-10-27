@@ -42,6 +42,7 @@ mod fire_starter_sound_probe;
 mod firework_tooltip_fixture;
 mod first_person_probe;
 mod frame_limiter_probe;
+mod frost_walker_fixture;
 mod game_loop_probe;
 mod ghost_recipe_fixture;
 mod held_drop_fixture;
@@ -131,6 +132,7 @@ probes! {
     firework_tooltip_fixture,
     first_person_probe,
     frame_limiter_probe,
+    frost_walker_fixture,
     game_loop_probe,
     ghost_recipe_fixture,
     held_drop_fixture,

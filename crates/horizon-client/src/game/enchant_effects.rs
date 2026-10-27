@@ -9,16 +9,52 @@ use super::Game;
 use horizon_client::mobs::Who;
 use horizon_client::{
     enchant::{EffectContext, Enchantments, level_value},
+    frost,
     items::ItemStack,
 };
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_world::{
     fluid::FluidKind,
-    level::{LevelAccess, flags as level_flags},
+    level::{Behaviours, LevelAccess, Ticks, flags as level_flags},
+    registry::BlockStateId,
 };
 
 /// Frost Walker, read from the boots like Soul Speed.
 const FROST_WALKER: &str = "minecraft:frost_walker";
+
+/// The level as Frost Walker's disk sees it: `matching_fluids` names the
+/// source fluid only (flowing water stays), and `unobstructed` is the full
+/// block against the entities that block building (`UnobstructedPredicate`).
+struct FrostWalk<'a, L: LevelAccess + ?Sized> {
+    b: &'a Behaviours,
+    level: &'a mut L,
+    ticks: &'a mut Ticks,
+    ice: BlockStateId,
+}
+
+impl<L: LevelAccess + ?Sized> frost::FrostLevel for FrostWalk<'_, L> {
+    fn is_water_source(&self, at: [i32; 3]) -> bool {
+        let state = self.level.block_state(BlockPos::new(at[0], at[1], at[2]));
+        self.b.block(state) == self.b.named.water && self.b.fluid_kind(state) == FluidKind::Water
+    }
+    fn is_air(&self, at: [i32; 3]) -> bool {
+        self.b
+            .is_air(self.level.block_state(BlockPos::new(at[0], at[1], at[2])))
+    }
+    fn is_unobstructed(&self, at: [i32; 3]) -> bool {
+        self.level
+            .is_unobstructed(BlockPos::new(at[0], at[1], at[2]), self.ice)
+    }
+    fn set_frosted_ice(&mut self, at: [i32; 3]) -> bool {
+        self.b.set_block(
+            self.level,
+            self.ticks,
+            BlockPos::new(at[0], at[1], at[2]),
+            self.ice,
+            level_flags::UPDATE_ALL,
+        )
+    }
+}
 
 /// Where Mending found a damaged item (`EnchantedItemInUse.inSlot`).
 #[derive(Clone, Copy)]
@@ -518,18 +554,11 @@ impl Game<'_> {
     }
     /// Frost Walker (`data/minecraft/enchantment/frost_walker.json`), the
     /// `replace_disk` of its `location_changed` effect, run on the ground and
-    /// not riding. The disk is one block high, under the feet, with radius 3 at
-    /// level 1 and one more per level. Water with air above it and no entity in
-    /// the way becomes frosted ice of age 0; its melt tick is scheduled by the
-    /// block's own placement, as in vanilla.
+    /// not riding. The disk, its order and its predicate are `horizon_client::frost`
+    /// (checked against vanilla by tools/test_frost_walker_parity.py); the game
+    /// supplies the level. Its melt tick is scheduled by the block's placement.
     fn frost_walk(&mut self, position: Vec3, level: u32) {
-        let radius = (3 + level.saturating_sub(1) as i32).clamp(0, 16);
-        let feet = BlockPos::containing(position);
-        let cells = frost_disk(
-            [feet.x, feet.y - 1, feet.z],
-            radius,
-            [position.x, position.y, position.z],
-        );
+        let radius = frost::radius(level);
         // Frosted ice's default state is age 0, as the effect's block_state says.
         let Some(ice) = self
             .pack
@@ -539,28 +568,20 @@ impl Game<'_> {
         else {
             return;
         };
-        // `matching_fluids` names the source fluid only: flowing water stays.
         let placed = self.with_level(|b, level, ticks| {
-            let mut placed = Vec::new();
-            for [x, y, z] in cells {
-                let at = BlockPos::new(x, y, z);
-                let state = level.block_state(at);
-                let water =
-                    b.block(state) == b.named.water && b.fluid_kind(state) == FluidKind::Water;
-                if !water
-                    || !b.is_air(level.block_state(BlockPos::new(x, y + 1, z)))
-                    || !level.is_unobstructed(at, ice)
-                {
-                    continue;
-                }
-                if b.set_block(level, ticks, at, ice, level_flags::UPDATE_ALL) {
-                    placed.push([x, y, z]);
-                }
-            }
-            placed
+            frost::replace_disk(
+                &mut FrostWalk {
+                    b,
+                    level,
+                    ticks,
+                    ice,
+                },
+                position,
+                radius,
+            )
         });
         for at in placed {
-            self.post_block_game_event("minecraft:block_place", at, Some(Who::Player), Some(ice));
+            self.post_block_game_event(frost::TRIGGER, at, Some(Who::Player), Some(ice));
         }
         let _ = self.process_level_events();
     }
@@ -748,39 +769,4 @@ fn soul_speed_modifiers(
             )
         })
         .collect()
-}
-
-/// `ReplaceDisk`'s cells: the one-block-high disk of `radius` around `center`
-/// whose block centres lie inside `radius` of `position` in the plane
-/// (`distToCenterSqr`, with no height difference), in `BlockPos.betweenClosed`'s
-/// order: x fastest, then z.
-fn frost_disk(center: [i32; 3], radius: i32, position: [f64; 3]) -> Vec<[i32; 3]> {
-    let limit = f64::from(radius * radius);
-    let mut cells = Vec::new();
-    for z in center[2] - radius..=center[2] + radius {
-        for x in center[0] - radius..=center[0] + radius {
-            let dx = f64::from(x) + 0.5 - position[0];
-            let dz = f64::from(z) + 0.5 - position[2];
-            if dx * dx + dz * dz < limit {
-                cells.push([x, center[1], z]);
-            }
-        }
-    }
-    cells
-}
-
-#[cfg(test)]
-mod tests {
-    use super::frost_disk;
-
-    #[test]
-    fn frost_disk_is_radius_three_at_level_one() {
-        // Standing on a block centre: the disk is every cell whose centre is
-        // closer than 3, which is 25 cells in a 7x7 square.
-        let cells = frost_disk([0, 64, 0], 3, [0.5, 65.0, 0.5]);
-        assert_eq!(cells.len(), 25);
-        assert_eq!(cells.first(), Some(&[-2, 64, -2]));
-        assert_eq!(cells.last(), Some(&[2, 64, 2]));
-        assert!(!cells.contains(&[3, 64, 0]));
-    }
 }
