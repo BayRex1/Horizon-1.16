@@ -26,6 +26,7 @@ pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
 pub mod data;
+pub mod dolphin;
 pub mod doors;
 pub mod drops;
 pub mod enderman;
@@ -1011,6 +1012,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
+    /// A melee hit whose effect comes only if the hit lands (husk hunger,
+    /// cave spider poison, wither skeleton wither, bee and pufferfish
+    /// poison): a shield-blocked hit gives nothing.
+    AttackPlayerWithEffect {
+        amount: f32,
+        from: [f64; 3],
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+    },
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
         amount: f32,
@@ -1148,6 +1159,12 @@ pub enum MobEvent {
     },
     /// Regeneration support after an axolotl-assisted kill.
     AxolotlSupportPlayer,
+    /// A dolphin that was given a fish asks the game for the nearest
+    /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
+    /// sets the dolphin's `extra.home` to it, or leaves it empty.
+    DolphinTreasure {
+        mob: u32,
+    },
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
     EffectPlayer {
         effect: &'static str,
@@ -1399,6 +1416,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
+    /// `Attributes.KNOCKBACK_RESISTANCE`.
+    pub knockback_resistance: f64,
     /// The active effects, without namespace (`slowness`, `poison`...).
     pub effects: Vec<&'static str>,
 }
@@ -1487,6 +1506,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
+            knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra
                 .effects
@@ -1621,6 +1641,8 @@ pub struct PlayerView {
     pub alive: bool,
     pub creative: bool,
     pub sneaking: bool,
+    /// `Entity.isSwimming`.
+    pub swimming: bool,
     pub look: [f64; 3],
     pub main_hand: Option<Arc<str>>,
     pub off_hand: Option<Arc<str>>,
@@ -1703,7 +1725,8 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// The `mob_drops` game rule (`shouldDropLoot`).
     pub mob_drops: bool,
-    /// `getCurrentDifficultyAt` near the player.
+    /// `getCurrentDifficultyAt` at the mob being ticked (near the player
+    /// outside the mob tick).
     pub difficulty: spawning::LocalDifficulty,
     /// The End (its dimension type's monster spawn light rules).
     pub end: bool,
@@ -1884,8 +1907,14 @@ impl Mob {
     /// the last-hurt-by bookkeeping goals read.
     /// The `armor` and `armor_toughness` modifiers of worn humanoid armour.
     pub fn worn_armor(&self) -> (f32, f32) {
+        // An equine keeps its horse armor in `extra.head`: the item's `armor`
+        // and `armor_toughness` modifiers of the body slot.
         if equine::is_equine(self.species()) {
-            return (0.0, 0.0);
+            return self
+                .extra
+                .head
+                .as_deref()
+                .map_or((0.0, 0.0), spawning::horse_armor_stats);
         }
         [
             &self.extra.head,
@@ -1945,9 +1974,15 @@ impl Mob {
             amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
-        if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
+        // Shulker.setRawPeekAmount: a closed shell adds the covered armor modifier.
+        let covered = if self.species() == Species::Shulker && self.extra.counter == 0 {
+            20.0
+        } else {
+            0.0
+        };
+        if !source.bypasses_armor() && self.kind.armor + worn + covered > 0.0 {
             // CombatRules.getDamageAfterAbsorb
-            let armor = self.kind.armor + worn;
+            let armor = self.kind.armor + worn + covered;
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             let mut fraction = effective / 25.0;
