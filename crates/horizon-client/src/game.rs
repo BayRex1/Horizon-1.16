@@ -10052,6 +10052,14 @@ impl Game<'_> {
                     }
                 }
                 _ if spinning => ItemPose::SpinAttack,
+                // `SwingAnimationType.STAB` (a spear): `firstPersonAttack`.
+                _ if self
+                    .swing
+                    .current
+                    .is_some_and(|swing| swing.animation.kind == 2) =>
+                {
+                    ItemPose::SwingingStab
+                }
                 _ => ItemPose::Swing,
             };
             let m = to_world

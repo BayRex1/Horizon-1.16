@@ -183,6 +183,9 @@ pub struct ItemInfo {
     pub kinetic_weapon: Option<KineticWeapon>,
     /// `attack_range`: the reach of this item's attacks.
     pub attack_range: Option<AttackRange>,
+    /// `attack_animation` (SwingAnimation): the swing type and duration a
+    /// spear's stab uses.
+    pub attack_animation: Option<crate::first_person::SwingAnimation>,
     /// `glider` (elytra).
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
@@ -670,6 +673,18 @@ impl Items {
                 }
             });
             let attack_range = c.get("minecraft:attack_range").map(AttackRange::from_json);
+            let attack_animation = c.get("minecraft:attack_animation").map(|a| {
+                // `SwingAnimationType`: none 0, whack 1, stab 2.
+                let kind = match a["type"].as_str() {
+                    Some("stab") => 2,
+                    Some("none") => 0,
+                    _ => 1,
+                };
+                crate::first_person::SwingAnimation {
+                    kind,
+                    duration: a["duration"].as_u64().unwrap_or(6) as i32,
+                }
+            });
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -756,6 +771,7 @@ impl Items {
                         .unwrap_or(0.2) as f32,
                     kinetic_weapon,
                     attack_range,
+                    attack_animation,
                     blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()

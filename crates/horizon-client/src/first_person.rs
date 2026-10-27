@@ -35,6 +35,8 @@ pub enum ItemPose {
     /// `firstPersonUse` lowers it into the charge and sways it until each
     /// stage of the charge runs out.
     Spear(SpearCharge),
+    /// `SwingAnimationType.STAB`: the spear's thrust, `firstPersonAttack`.
+    SwingingStab,
 }
 /// The `KineticWeapon` timings the spear's use pose runs on.
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +85,25 @@ mod ease {
     }
     pub fn in_circ(x: f32) -> f32 {
         1.0 - (1.0 - square(x)).sqrt()
+    }
+    pub fn in_out_sine(x: f32) -> f32 {
+        -((std::f32::consts::PI * x).cos() - 1.0) / 2.0
+    }
+    pub fn out_back(x: f32) -> f32 {
+        1.0 + 2.70158 * cube(x - 1.0) + 1.70158 * square(x - 1.0)
+    }
+    pub fn in_out_expo(x: f32) -> f32 {
+        if x < 0.5 {
+            if x == 0.0 {
+                0.0
+            } else {
+                (2.0f32).powf(20.0 * x - 10.0) / 2.0
+            }
+        } else if x == 1.0 {
+            1.0
+        } else {
+            (2.0 - (2.0f32).powf(-20.0 * x + 10.0)) / 2.0
+        }
     }
 }
 impl SpearCharge {
@@ -242,6 +263,18 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
         ));
         m *= Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0 + power * 0.2));
         m *= Mat4::from_rotation_y((invert * -45.0f32).to_radians());
+    } else if matches!(pose, ItemPose::SwingingStab) {
+        // `SpearAnimations.firstPersonAttack`.
+        let start = ease::in_out_sine(SpearCharge::progress(attack, 0.0, 0.05));
+        let middle = ease::out_back(SpearCharge::progress(attack, 0.05, 0.2));
+        let end = ease::in_out_expo(SpearCharge::progress(attack, 0.4, 1.0));
+        m *= Mat4::from_translation(Vec3::new(
+            invert * 0.1 * (start - middle),
+            -0.075 * (start - end),
+            0.65 * (start - middle),
+        ));
+        m *= Mat4::from_rotation_x((-70.0 * (start - end)).to_radians());
+        m *= Mat4::from_translation(Vec3::new(0.0, 0.0, -0.25 * (end - middle)));
     } else {
         let root = attack.sqrt();
         m *= Mat4::from_translation(Vec3::new(

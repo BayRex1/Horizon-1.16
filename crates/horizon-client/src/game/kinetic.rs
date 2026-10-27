@@ -77,10 +77,14 @@ impl Game<'_> {
             .player
             .as_ref()
             .map(|p| [p.velocity.x, p.velocity.y, p.velocity.z]);
-        let movement = velocity
+        // `getKnownMovement` is the per-tick step; the conditions read it at
+        // `getMotion`'s twenty ticks a second.
+        let step = velocity
             .map_or(0.0, projection)
-            .max(travelled.map_or(0.0, projection));
-        let attacker_speed = movement;
+            .max(travelled.map_or(0.0, projection))
+            / MOTION_SCALE;
+        let attacker_speed = step * MOTION_SCALE;
+        let movement = step;
         let range = self.charge_range();
         let (min, max) = range.effective(self.creative);
         let from: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * f64::from(min));
