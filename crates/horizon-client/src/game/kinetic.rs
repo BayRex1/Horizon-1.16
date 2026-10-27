@@ -10,8 +10,10 @@
 //! divides a charge into its stages.
 use super::{Game, view_vector};
 use horizon_client::collisions::SceneCollisions;
+use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::items::{AttackRange, ItemInfo, KineticWeapon};
 use horizon_core::geometry::Vec3;
+use horizon_core::random::RandomSource;
 
 /// `KineticWeapon.getMotion`: speed in blocks a second.
 const MOTION_SCALE: f64 = 20.0;
@@ -176,6 +178,150 @@ impl Game<'_> {
             // that only knocked the target back.
             self.mobs[index].hurt_time = HIT_FEEDBACK_TICKS;
         }
+    }
+    /// `PiercingWeapon.attack`: the spear's left-click jab sweeps the look
+    /// line and stabs every mob along it, then `postPiercingAttack` runs the
+    /// weapon's enchantments (Lunge).
+    pub(super) fn piercing_attack(&mut self) {
+        let Some(info) = self
+            .held()
+            .and_then(|stack| self.res.items().get(&stack.item))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(weapon) = info.piercing_weapon.clone() else {
+            return;
+        };
+        // `getAttributeValue(ATTACK_DAMAGE)`: the hand plus the weapon's
+        // modifiers (a jab deals the item's attack damage, unlike a charge).
+        let damage = 1.0 + info.attack_damage;
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        let look = view_vector(self.yaw, self.pitch);
+        let range = self.charge_range();
+        let (min, max) = range.effective(self.creative);
+        let step = self.player.as_ref().map_or(0.0, |p| {
+            (p.velocity.x * look[0] + p.velocity.y * look[1] + p.velocity.z * look[2]).max(0.0)
+        });
+        let from: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * f64::from(min));
+        let to: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * (f64::from(max) + step));
+        let end = self.clip_collider(eye, to).unwrap_or(to);
+        let distance = |p: [f64; 3]| {
+            ((p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)).sqrt()
+        };
+        if distance(end) < distance(from) {
+            return;
+        }
+        let margin = f64::from(range.hitbox_margin);
+        let (from_v, end_v) = (
+            Vec3::new(from[0], from[1], from[2]),
+            Vec3::new(end[0], end[1], end[2]),
+        );
+        let mut hit_something = false;
+        for index in 0..self.mobs.len() {
+            let mob = &self.mobs[index];
+            // `PiercingWeapon.canHitEntity`.
+            if !mob.alive() || mob.removed || mob.death_time > 0 {
+                continue;
+            }
+            if mob
+                .bounds()
+                .inflate(Vec3::new(margin, margin, margin))
+                .clip(from_v, end_v)
+                .is_none()
+            {
+                continue;
+            }
+            let kind = mob.kind.id.clone();
+            hit_something = true;
+            let source = match self.player.as_ref() {
+                Some(p) => self.attack_source([p.position.x, p.position.y, p.position.z]),
+                None => return,
+            };
+            // `stabAttack`: damage first, then the two shoves.
+            let _ = self.hurt_by_player(index, damage, source);
+            if weapon.deals_knockback {
+                let (enchanted, _) = self.extra_knockback(&kind, 0.0);
+                let (xd, zd) = self.extra_knockback_direction();
+                self.mobs[index].knockback(f64::from(STAB_KNOCKBACK), xd, zd);
+                if enchanted > 0.0 {
+                    self.mobs[index].knockback(f64::from(enchanted), xd, zd);
+                }
+            }
+            if weapon.dismounts && self.mobs[index].extra.passenger {
+                let id = self.mobs[index].id;
+                self.dismount_mob(id);
+            }
+            self.mobs[index].hurt_time = HIT_FEEDBACK_TICKS;
+        }
+        // `postPiercingAttack`.
+        self.post_piercing_attack();
+        if hit_something && let Some(sound) = &weapon.hit_sound {
+            let at = self.player_feet();
+            self.audio.play(sound, at, 1.0, 1.0);
+        }
+        // `swingAndResetAttackStrength` with the weapon's own animation.
+        let animation = info.attack_animation.unwrap_or(SwingAnimation::DEFAULT);
+        self.swing_hand(Hand::Main, animation);
+        self.reset_attack_strength();
+    }
+    /// `LivingEntity.postPiercingAttack`: the held weapon's
+    /// `post_piercing_attack` effects. 26.3's Lunge moves the attacker ahead,
+    /// costs hunger and durability, and sounds.
+    fn post_piercing_attack(&mut self) {
+        let Some(stack) = self.held().cloned() else {
+            return;
+        };
+        let level = stack.enchantment_level("minecraft:lunge");
+        if level == 0 {
+            return;
+        }
+        let level = i32::try_from(level).unwrap_or(i32::MAX);
+        // Lunge's requirements: not riding, not gliding, not in water, and
+        // not a hungry survival player.
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let in_water = self
+            .res
+            .facts()
+            .get(self.world.block(
+                p.position.x.floor() as i32,
+                p.position.y.floor() as i32,
+                p.position.z.floor() as i32,
+            ))
+            .fluid
+            == horizon_client::blocks::Fluid::Water;
+        if self.riding.is_some() || p.fall_flying || in_water {
+            return;
+        }
+        if !self.creative && p.health.food.food < 7 {
+            return;
+        }
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        let look = view_vector(yaw, pitch);
+        // `apply_impulse`: the local +Z axis, horizontally, `0.458` a level.
+        let magnitude = 0.458 * f64::from(level);
+        if let Some(p) = self.player.as_mut() {
+            p.velocity.x += look[0] * magnitude;
+            p.velocity.z += look[2] * magnitude;
+            // `apply_exhaustion`: 4 a level.
+            p.cause_food_exhaustion(4.0 * level as f32);
+        }
+        // `change_item_damage`: one durability point.
+        self.damage_held(1);
+        // `play_sound`: one of the three lunge sounds.
+        // `play_sound` with a list picks one: `RandomSource.nextInt`.
+        let pick = (RandomSource::next_float(&mut self.world.random) * 3.0) as usize;
+        let sound = [
+            "minecraft:item.spear.lunge_1",
+            "minecraft:item.spear.lunge_2",
+            "minecraft:item.spear.lunge_3",
+        ][pick.min(2)];
+        let at = self.player_feet();
+        self.audio.play(sound, at, 1.0, 1.0);
     }
     fn player_feet(&self) -> Option<[f64; 3]> {
         self.player

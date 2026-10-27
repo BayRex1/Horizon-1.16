@@ -101,6 +101,15 @@ impl KineticCondition {
         })
     }
 }
+/// `PiercingWeapon`: a spear's jab reaches along the look line and can
+/// knock the target back or dismount it.
+#[derive(Clone, Debug)]
+pub struct PiercingWeapon {
+    pub deals_knockback: bool,
+    pub dismounts: bool,
+    pub sound: Option<String>,
+    pub hit_sound: Option<String>,
+}
 /// `AttackRange`: the reach of an attack, in the four variants `AttackRange`
 /// keeps (a spear reaches further than a hand, and further yet in creative).
 #[derive(Clone, Copy, Debug)]
@@ -186,6 +195,8 @@ pub struct ItemInfo {
     /// `attack_animation` (SwingAnimation): the swing type and duration a
     /// spear's stab uses.
     pub attack_animation: Option<crate::first_person::SwingAnimation>,
+    /// `piercing_weapon`: the left-click jab of a spear.
+    pub piercing_weapon: Option<PiercingWeapon>,
     /// `glider` (elytra).
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
@@ -673,6 +684,12 @@ impl Items {
                 }
             });
             let attack_range = c.get("minecraft:attack_range").map(AttackRange::from_json);
+            let piercing_weapon = c.get("minecraft:piercing_weapon").map(|p| PiercingWeapon {
+                deals_knockback: p["deals_knockback"].as_bool().unwrap_or(true),
+                dismounts: p["dismounts"].as_bool().unwrap_or(false),
+                sound: p["sound"].as_str().map(str::to_owned),
+                hit_sound: p["hit_sound"].as_str().map(str::to_owned),
+            });
             let attack_animation = c.get("minecraft:attack_animation").map(|a| {
                 // `SwingAnimationType`: none 0, whack 1, stab 2.
                 let kind = match a["type"].as_str() {
@@ -772,6 +789,7 @@ impl Items {
                     kinetic_weapon,
                     attack_range,
                     attack_animation,
+                    piercing_weapon,
                     blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
