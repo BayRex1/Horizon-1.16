@@ -54,9 +54,18 @@ impl Game<'_> {
             self.swings_started += 1;
         }
     }
-    /// `swing(hand)` for the hand that acts, with the default animation.
+    /// `swing(hand)` for the hand that acts, with the item's own swing
+    /// (`ItemStack.getAttackAnimation`: a spear stabs).
     pub(super) fn swing_arm(&mut self) {
-        self.swing_hand(self.hand, SwingAnimation::DEFAULT);
+        let hand = self.hand;
+        let animation = self
+            .with_hand(hand, |g| {
+                g.held()
+                    .and_then(|stack| g.res.items().get(&stack.item))
+                    .and_then(|info| info.attack_animation)
+            })
+            .unwrap_or(SwingAnimation::DEFAULT);
+        self.swing_hand(self.hand, animation);
     }
     /// `Player.resetAttackStrengthTicker`.
     pub(super) fn reset_attack_strength(&mut self) {
