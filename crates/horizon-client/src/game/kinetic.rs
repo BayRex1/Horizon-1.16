@@ -300,13 +300,18 @@ impl Game<'_> {
         if !self.creative && p.health.food.food < 7 {
             return;
         }
-        let (yaw, pitch) = (self.yaw, self.pitch);
-        let look = view_vector(yaw, pitch);
-        // `apply_impulse`: the local +Z axis, horizontally, `0.458` a level.
+        // `apply_impulse`: the local +Z axis (`calculateRotationVector`, so the
+        // horizontal look), `0.458` a level.
+        use horizon_core::geometry::trig;
+        let yaw = f64::from(self.yaw * trig::DEG_TO_RAD);
+        let (sin, cos) = (f64::from(trig::sin(yaw)), f64::from(trig::cos(yaw)));
         let magnitude = 0.458 * f64::from(level);
         if let Some(p) = self.player.as_mut() {
-            p.velocity.x += look[0] * magnitude;
-            p.velocity.z += look[2] * magnitude;
+            p.velocity.x += -sin * magnitude;
+            p.velocity.z += cos * magnitude;
+            // The server copy carries the push; its travel sends the velocity
+            // to the player's own client when it is marked (`markHurt`'s path).
+            p.health.sync_velocity = true;
             // `apply_exhaustion`: 4 a level.
             p.cause_food_exhaustion(4.0 * level as f32);
         }
