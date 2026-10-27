@@ -142,6 +142,32 @@ impl Game<'_> {
         if m.is_baby() {
             return false;
         }
+        // Horse and AbstractChestedHorse.mobInteract: an untamed one shown an
+        // item that is not its food rears and calls out (`makeMad`) instead of
+        // taking a rider.
+        const HORSE_FOOD: [&str; 8] = [
+            "minecraft:wheat",
+            "minecraft:sugar",
+            "minecraft:hay_block",
+            "minecraft:apple",
+            "minecraft:carrot",
+            "minecraft:golden_carrot",
+            "minecraft:golden_apple",
+            "minecraft:enchanted_golden_apple",
+        ];
+        if !item.is_empty()
+            && !m.extra.tame
+            && matches!(species, Species::Horse | Species::Donkey | Species::Mule)
+        {
+            if HORSE_FOOD.contains(&item) {
+                // fedFood: nothing eaten, so the click does nothing.
+                return false;
+            }
+            let mut events = Vec::new();
+            equine::make_mad(&mut self.mobs[index], &mut events);
+            let _ = self.handle_mob_events(events);
+            return true;
+        }
         let at = m.center();
         let tamed = m.extra.tame;
         let sound = if item == "minecraft:saddle" && tamed && !m.extra.saddled {
@@ -460,6 +486,23 @@ impl Game<'_> {
                 }
             }
             MobEvent::Buck { mob } if self.riding == Some(mob) => self.dismount_mount(),
+            // RunAroundLikeCrazyGoal.tick: `ejectPassengers` throws a server
+            // player off too.
+            MobEvent::Buck { mob } => {
+                let conn = self.lan.as_ref().and_then(|h| {
+                    h.hub
+                        .guests
+                        .iter()
+                        .find(|g| g.vehicle == Some(mob))
+                        .map(|g| g.conn)
+                });
+                if let Some(conn) = conn
+                    && let Some(mut host) = self.lan.take()
+                {
+                    let _ = self.as_guest(&mut host, conn, |game| game.dismount_mount());
+                    self.lan = Some(host);
+                }
+            }
             _ => {}
         }
     }
