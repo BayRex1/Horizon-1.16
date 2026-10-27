@@ -10,7 +10,7 @@
 //! divides a charge into its stages.
 use super::{Game, view_vector};
 use horizon_client::collisions::SceneCollisions;
-use horizon_client::first_person::{Hand, SwingAnimation};
+
 use horizon_client::items::{AttackRange, ItemInfo, KineticWeapon};
 use horizon_core::geometry::Vec3;
 use horizon_core::random::RandomSource;
@@ -262,10 +262,10 @@ impl Game<'_> {
             let at = self.player_feet();
             self.audio.play(sound, at, 1.0, 1.0);
         }
-        // `swingAndResetAttackStrength` with the weapon's own animation.
-        let animation = info.attack_animation.unwrap_or(SwingAnimation::DEFAULT);
-        self.swing_hand(Hand::Main, animation);
-        self.reset_attack_strength();
+        // `swingAndResetAttackStrength` is the caller's: `first_person::attack`
+        // swings with `attack_animation` and resets the strength once the hit
+        // lands. Swinging here too starts two swings in one tick, one of them
+        // the other animation, and the two poses overlay.
     }
     /// `LivingEntity.postPiercingAttack`: the held weapon's
     /// `post_piercing_attack` effects. 26.3's Lunge moves the attacker ahead,
