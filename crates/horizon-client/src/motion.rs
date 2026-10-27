@@ -137,6 +137,8 @@ pub struct LocationEffects {
     pub boots_level: u32,
     /// The Soul Speed level whose attribute modifiers are on the player (0: none).
     pub applied_level: u32,
+    /// The Frost Walker level of the boots seen last tick (0: none).
+    pub frost_level: u32,
 }
 
 /// Ordered requests and phase records for world/audio/network consumers. Landing
