@@ -3094,6 +3094,7 @@ mod tests {
         );
         for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
             s.mods.installed.push(crate::mod_list::Installed {
+                permissions: Vec::new(),
                 id: id.into(),
                 title: id.into(),
                 description: "May show HUD panels.".into(),

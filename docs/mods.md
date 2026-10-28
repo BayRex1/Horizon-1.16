@@ -689,3 +689,9 @@ Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
 API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
 textures), then server hooks (0.3) and block entities, menus, capabilities and
 `net` (0.4), in the order the ATM10 inventory needs them.
+
+## Real-time audio and networking
+
+Experimental API level 8 adds microphone PCM, live positional playback, external
+UDP and authenticated client/server binary channels. See
+[real-time mod APIs](api/realtime-mods.md) for permissions, limits and usage.

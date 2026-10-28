@@ -15,6 +15,8 @@ pub const DIR: &str = "horizon-mods";
 pub struct ModList {
     /// Ids of the mods the player turned on.
     pub enabled: BTreeSet<String>,
+    /// Sensitive permissions explicitly accepted when enabling a mod.
+    pub grants: BTreeMap<String, BTreeSet<String>>,
     /// The keys the player chose for mods' keys, mod id → key name → key
     /// (`key.<id>.<name>:key.keyboard.x` lines).
     pub keys: BTreeMap<String, BTreeMap<String, String>>,
@@ -26,6 +28,7 @@ pub struct ModList {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Installed {
     pub id: String,
+    pub permissions: Vec<String>,
     /// `Name 1.0` (the file name when the manifest is unreadable).
     pub title: String,
     pub description: String,
@@ -64,8 +67,23 @@ impl ModList {
                 entry.insert(name.to_owned(), v.trim().to_owned());
             }
         }
+        let mut grants: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (key, value) in text.lines().filter_map(|l| l.split_once(':')) {
+            if value.trim() == "true"
+                && let Some((id, permission)) = key
+                    .trim()
+                    .strip_prefix("permission.")
+                    .and_then(|s| s.split_once('.'))
+            {
+                grants
+                    .entry(id.into())
+                    .or_default()
+                    .insert(permission.into());
+            }
+        }
         Self {
             enabled,
+            grants,
             keys,
             installed: Vec::new(),
         }
@@ -76,7 +94,12 @@ impl ModList {
             keys.iter()
                 .map(move |(name, key)| format!("key.{id}.{name}:{key}\n"))
         });
-        on.chain(keys).collect()
+        let grants = self.grants.iter().flat_map(|(id, permissions)| {
+            permissions
+                .iter()
+                .map(move |p| format!("permission.{id}.{p}:true\n"))
+        });
+        on.chain(keys).chain(grants).collect()
     }
     /// Mod `id`'s chosen keys, for `Mods::set_bindings`.
     pub fn keys_of(&self, id: &str) -> Vec<(&str, &str)> {
@@ -103,6 +126,12 @@ impl ModList {
         };
         if !self.enabled.remove(&m.id) {
             self.enabled.insert(m.id.clone());
+            if !m.permissions.is_empty() {
+                self.grants
+                    .insert(m.id.clone(), m.permissions.iter().cloned().collect());
+            }
+        } else {
+            self.grants.remove(&m.id);
         }
     }
 }
@@ -132,9 +161,32 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_permissions_require_enabling_and_round_trip() {
+        let mut list = ModList::default();
+        list.installed.push(Installed {
+            id: "voice".into(),
+            permissions: vec!["microphone.capture".into(), "network.custom".into()],
+            title: "Voice".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            has_settings: false,
+        });
+        assert!(list.grants.is_empty());
+        list.toggle(0);
+        assert!(list.grants["voice"].contains("microphone.capture"));
+        let parsed = ModList::parse(&list.serialize());
+        assert_eq!(parsed.grants, list.grants);
+        assert_eq!(parsed.enabled, list.enabled);
+        list.toggle(0);
+        assert!(list.grants.is_empty());
+    }
+
+    #[test]
     fn toggles_installed_mods_but_not_dev_ones() {
         let installed = |id: &str, dev| Installed {
             id: id.into(),
+            permissions: Vec::new(),
             title: id.into(),
             description: String::new(),
             problem: None,
