@@ -532,12 +532,29 @@ pub fn tick(
     }
     true
 }
+/// `WebBlock.entityInside` for a mob: whether the mob gets stuck, and the
+/// resulting multiplier. Spiders and cave spiders are immune.
+pub(super) fn web_stuck_multiplier(species: Species, effects: &[(&str, i32, i32)]) -> Option<Vec3> {
+    if matches!(species, Species::Spider | Species::CaveSpider) {
+        return None;
+    }
+    let weaving = effects
+        .iter()
+        .any(|e| matches!(e.0, "minecraft:weaving" | "weaving"));
+    Some(if weaving {
+        Vec3::new(0.5, 0.25, 0.5)
+    } else {
+        Vec3::new(0.25, f64::from(0.05_f32), 0.25)
+    })
+}
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1) and the
+/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), the
 /// sweet berry bush (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75,
 /// 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
-/// or Z this tick). The blocks are those the mob's box touches anywhere along
-/// its move this tick, from where it started to where it ended.
+/// or Z this tick), and the cobweb (`WebBlock.entityInside`: stuck at 0.25,
+/// 0.05, 0.25, half with Weaving; spiders and cave spiders are immune).
+/// The blocks are those the mob's box touches anywhere along its move this
+/// tick, from where it started to where it ended.
 fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
@@ -575,6 +592,14 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                                     || moved.z.abs() >= f64::from(0.003_f32))
                             {
                                 m.damage(1.0, Damage::of(DamageKind::SweetBerryBush));
+                            }
+                        }
+                        "minecraft:cobweb" => {
+                            if let Some(multiplier) =
+                                web_stuck_multiplier(m.species(), &m.extra.effects)
+                            {
+                                m.fall_distance = 0.0;
+                                m.stuck_multiplier = multiplier;
                             }
                         }
                         _ => continue,
@@ -2172,6 +2197,45 @@ mod frog_tests {
                 outside: 0.1,
                 gravity: true,
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod cobweb_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_mobs_get_stuck_in_cobwebs() {
+        let stuck = web_stuck_multiplier(Species::Zombie, &[]);
+        assert_eq!(stuck, Some(Vec3::new(0.25, f64::from(0.05_f32), 0.25)));
+
+        let stuck_skeleton = web_stuck_multiplier(Species::Skeleton, &[]);
+        assert_eq!(
+            stuck_skeleton,
+            Some(Vec3::new(0.25, f64::from(0.05_f32), 0.25))
+        );
+    }
+
+    #[test]
+    fn spiders_and_cave_spiders_are_immune_to_cobwebs() {
+        assert_eq!(web_stuck_multiplier(Species::Spider, &[]), None);
+        assert_eq!(web_stuck_multiplier(Species::CaveSpider, &[]), None);
+    }
+
+    #[test]
+    fn weaving_effect_halves_cobweb_slowdown() {
+        let with_mc_prefix =
+            web_stuck_multiplier(Species::Creeper, &[("minecraft:weaving", 200, 0)]);
+        assert_eq!(with_mc_prefix, Some(Vec3::new(0.5, 0.25, 0.5)));
+
+        let without_prefix = web_stuck_multiplier(Species::Creeper, &[("weaving", 200, 0)]);
+        assert_eq!(without_prefix, Some(Vec3::new(0.5, 0.25, 0.5)));
+
+        // Spiders remain immune even with weaving effect.
+        assert_eq!(
+            web_stuck_multiplier(Species::Spider, &[("minecraft:weaving", 200, 0)]),
+            None
         );
     }
 }
