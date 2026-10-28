@@ -532,8 +532,8 @@ mod tests {
             let x = random.next_int_bound(16).unwrap();
             let z = random.next_int_bound(16).unwrap();
             let y = MIN_Y + random.next_int_bound(HEIGHT - 1).unwrap();
-            let v = [air, cave_air, grass, water, stone]
-                [random.next_int_bound(5).unwrap() as usize];
+            let v =
+                [air, cave_air, grass, water, stone][random.next_int_bound(5).unwrap() as usize];
             chunk.set(x, y, z, v);
             if step % 11 == 0 {
                 for i in 0..256 {

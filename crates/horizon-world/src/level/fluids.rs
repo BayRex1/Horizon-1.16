@@ -472,8 +472,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if !self.can_hold_specific_fluid(test_state, new_fluid.kind()) {
                 continue;
             }
-            let context =
-                context.get_or_insert_with(|| SpreadContext::new(pos));
+            let context = context.get_or_insert_with(|| SpreadContext::new(pos));
             let distance = if self.context_is_hole(kind, context, test_pos) {
                 0
             } else {
@@ -782,8 +781,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// The sides a water tick at `pos` would spread to, in order.
     pub(crate) fn spread_target_directions(&self, pos: BlockPos) -> Vec<Direction> {
         let state = self.state(pos);
-        let (targets, len) =
-            self.spread_targets(FluidKind::Water, pos, state, self.b.fluid(state));
+        let (targets, len) = self.spread_targets(FluidKind::Water, pos, state, self.b.fluid(state));
         targets[..len].iter().map(|&(d, _)| d).collect()
     }
 }
