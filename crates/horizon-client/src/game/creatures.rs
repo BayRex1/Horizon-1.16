@@ -40,10 +40,28 @@ fn arrow_damage(arrow: &mut Projectile, fallback: &mut impl RandomSource) -> f32
     damage
 }
 
+/// The entity phase's per-tick buffers: they grow with the mobs and their
+/// events, so clearing and reusing them beats allocating each tick.
+#[derive(Default)]
+pub(super) struct TickScratch {
+    /// Where every mob was at the start of the tick (`Seen`).
+    seen: Vec<Seen>,
+    events: Vec<MobEvent>,
+    keep: Vec<bool>,
+    dead: Vec<Mob>,
+    corpses: Vec<Mob>,
+    /// (id, feet, width, height) of the bodies that go this tick.
+    gone: Vec<(u32, Vec3, f64, f64)>,
+    /// Chunks that were generated since the last tick.
+    fresh: Vec<(i32, i32)>,
+}
+
 /// Mob-system state owned by the game.
 #[derive(Default)]
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
+    /// The entity phase's reused buffers.
+    pub(super) tick: TickScratch,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
     /// The players a fishing hook can catch, taken as the hooks tick, and
@@ -500,19 +518,22 @@ impl Game<'_> {
     /// Advance every mob one tick, then apply their events.
     pub(super) fn tick_creatures(&mut self) -> Result<()> {
         self.attack_ticks = self.attack_ticks.saturating_add(1);
-        let fresh: Vec<(i32, i32)> = self
-            .world
-            .chunks
-            .iter()
-            .filter(|(_, c)| c.fresh && c.lit)
-            .map(|(k, _)| *k)
-            .collect();
-        for key in fresh {
+        let mut fresh = std::mem::take(&mut self.creatures.tick.fresh);
+        fresh.clear();
+        fresh.extend(
+            self.world
+                .chunks
+                .iter()
+                .filter(|(_, c)| c.fresh && c.lit)
+                .map(|(k, _)| *k),
+        );
+        for &key in &fresh {
             if let Some(c) = self.world.chunks.get_mut(&key) {
                 Arc::make_mut(c).fresh = false;
             }
             self.spawn_generation_creatures(key.0, key.1);
         }
+        self.creatures.tick.fresh = fresh;
         self.tick_leads();
         self.spawn_natural();
         // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
@@ -549,11 +570,16 @@ impl Game<'_> {
         // Their victims have been looted: no charged creeper is waiting any more.
         self.combat.charged_exploders.clear();
         let uuid = self.level.player_uuid;
-        let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
-        let mut events = Vec::new();
+        let mut snapshot = std::mem::take(&mut self.creatures.tick.seen);
+        snapshot.clear();
+        snapshot.extend(self.mobs.iter().map(|m| seen(m, uuid)));
+        let mut events = std::mem::take(&mut self.creatures.tick.events);
+        events.clear();
         let mut mobs = std::mem::take(&mut self.mobs);
-        let mut dead = Vec::new();
-        let mut corpses = Vec::new();
+        let mut dead = std::mem::take(&mut self.creatures.tick.dead);
+        dead.clear();
+        let mut corpses = std::mem::take(&mut self.creatures.tick.corpses);
+        corpses.clear();
         let mut died = std::mem::take(&mut self.died);
         let ticking = self.entity_ticking_area();
         // With guests on, each mob sees its nearest player (game/lan_mobs.rs).
@@ -576,14 +602,16 @@ impl Game<'_> {
         };
         let mut guest_events = Vec::new();
         // The mobs whose bodies go this tick: (id, feet, width, height).
-        let mut gone = Vec::new();
+        let mut gone = std::mem::take(&mut self.creatures.tick.gone);
+        gone.clear();
         let level_random;
         {
             // The level random, lent to the mobs (brain behaviours draw from
             // it) and taken back after their ticks.
             let mut scratch = self.world.random.clone();
             let mut pushes = horizon_client::mobs::PendingPushes::default();
-            let mut keep = Vec::with_capacity(mobs.len());
+            let mut keep = std::mem::take(&mut self.creatures.tick.keep);
+            keep.clear();
             let mut grid =
                 horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
             // All but the snapshot is the same for every mob of the tick, so
@@ -700,14 +728,18 @@ impl Game<'_> {
                 grid.update(i, snapshot[i].bounds);
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
             }
-            let mut flags = keep.into_iter();
-            mobs.retain(|_| flags.next().unwrap_or(true));
+            {
+                let mut flags = keep.drain(..);
+                mobs.retain(|_| flags.next().unwrap_or(true));
+            }
+            self.creatures.tick.keep = keep;
             for m in &mut mobs {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
             level_random = scratch;
         }
         self.world.random = level_random;
+        self.creatures.tick.seen = snapshot;
         if let Some(host) = self.lan.as_mut()
             && !guests.is_empty()
         {
@@ -721,11 +753,12 @@ impl Game<'_> {
         self.mobs.append(&mut mobs);
         self.died = died;
         // ... and entity event 60 goes out as it is: the poof.
-        for (id, at, width, height) in gone {
+        for (id, at, width, height) in gone.drain(..) {
             let at = [at.x, at.y, at.z];
             self.lan_entity_event(id as i32, 60, at);
             self.death_poof(at, width, height);
         }
+        self.creatures.tick.gone = gone;
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();
@@ -733,10 +766,11 @@ impl Game<'_> {
         self.villager_reputation_tick();
         self.merchant_tick();
         self.villager_pickups();
-        for m in dead {
+        for m in dead.drain(..) {
             self.mob_died(&m);
         }
-        for mut m in corpses {
+        self.creatures.tick.dead = dead;
+        for mut m in corpses.drain(..) {
             let names: Vec<&'static str> = m
                 .extra
                 .effects
@@ -746,7 +780,7 @@ impl Game<'_> {
             let bounds = m.bounds();
             self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
         }
-        self.handle_mob_events(events)?;
+        self.handle_mob_events_in(&mut events)?;
         self.lan_guest_mob_events(guest_events);
         self.tick_projectiles()?;
         self.tick_fangs();
@@ -756,12 +790,13 @@ impl Game<'_> {
         self.tick_sniffer_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
+        self.creatures.tick.corpses = corpses;
         // Hurt and death sounds of damage dealt outside the mob ticks.
-        let mut queued = Vec::new();
         for m in &mut self.mobs {
-            queued.append(&mut m.outbox);
+            events.append(&mut m.outbox);
         }
-        self.handle_mob_events(queued)?;
+        self.handle_mob_events_in(&mut events)?;
+        self.creatures.tick.events = events;
         Ok(())
     }
     /// `LivingEntity.makePoofParticles` (entity event 60) about a mob's box.
@@ -1062,17 +1097,33 @@ impl Game<'_> {
         }
         self.creatures.projectiles.push(p);
     }
-    pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
-        for e in events {
+    /// The game's mob with `id`. Spawns append rising ids and removals keep
+    /// the order, so a binary search finds it; a linear fallback keeps a
+    /// reordered list correct.
+    pub(super) fn mob(&self, id: u32) -> Option<&Mob> {
+        match self.mobs.binary_search_by_key(&id, |m| m.id) {
+            Ok(i) => Some(&self.mobs[i]),
+            Err(_) => self.mobs.iter().find(|m| m.id == id),
+        }
+    }
+    pub(super) fn mob_mut(&mut self, id: u32) -> Option<&mut Mob> {
+        match self.mobs.binary_search_by_key(&id, |m| m.id) {
+            Ok(i) => Some(&mut self.mobs[i]),
+            Err(_) => self.mobs.iter_mut().find(|m| m.id == id),
+        }
+    }
+    pub(super) fn handle_mob_events(&mut self, mut events: Vec<MobEvent>) -> Result<()> {
+        self.handle_mob_events_in(&mut events)
+    }
+    /// The same over a buffer the caller keeps (the entity phase's events).
+    pub(super) fn handle_mob_events_in(&mut self, events: &mut Vec<MobEvent>) -> Result<()> {
+        for e in events.drain(..) {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Drown { mob, at } => {
                     self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
-                    let v = self
-                        .mobs
-                        .iter()
-                        .find(|m| m.id == mob)
+                    let v = self.mob(mob)
                         .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
                     self.drown_particles(at, v);
                 }
@@ -1146,7 +1197,7 @@ impl Game<'_> {
                             }
                         }
                         Who::Mob(id) => {
-                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            if let Some(m) = self.mob_mut(id) {
                                 m.velocity = m.velocity.add_vector(v);
                             }
                         }
@@ -1160,7 +1211,7 @@ impl Game<'_> {
                 } => match target {
                     Who::Player => self.knock_back_player(power, x, z),
                     Who::Mob(id) => {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(m) = self.mob_mut(id) {
                             m.knockback(power, x, z);
                         }
                     }
@@ -1174,14 +1225,14 @@ impl Game<'_> {
                             }
                         }
                         Who::Mob(id) => {
-                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            if let Some(m) = self.mob_mut(id) {
                                 m.position = m.position.add_vector(d);
                             }
                         }
                     }
                 }
                 MobEvent::Wololo { mob } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         // DyeColor.RED.
                         m.extra.color = 14;
                     }
@@ -1256,10 +1307,7 @@ impl Game<'_> {
                                 from: Some(from),
                             };
                             let hurt = self.mob_hits_mob(id, 10.0, source);
-                            let resistance = self
-                                .mobs
-                                .iter()
-                                .find(|m| m.id == id)
+                            let resistance = self.mob(id)
                                 .map_or(0.0, |m| self.mob_knockback_resistance(m));
                             (hurt, resistance)
                         }
@@ -1277,7 +1325,7 @@ impl Game<'_> {
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
                 MobEvent::Hiss { mob } => {
-                    if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob(mob) {
                         let at = m.center();
                         self.audio
                             .play("minecraft:entity.cat.hiss", Some(at), 1.0, 1.0);
@@ -1291,7 +1339,7 @@ impl Game<'_> {
                         }
                     }
                     Who::Mob(id) => {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(m) = self.mob_mut(id) {
                             m.velocity.y += up;
                         }
                     }
@@ -1305,24 +1353,24 @@ impl Game<'_> {
                 MobEvent::ParrotToShoulder { mob } => self.parrot_to_shoulder(mob),
                 MobEvent::Infested { mob } => self.mob_infested(mob),
                 MobEvent::Gift { target, item } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
+                    if let Some(m) = self.mob_mut(target)
                         && m.saddle_item().is_none()
                     {
                         m.set_saddle(Some(ItemStack::new(item, 1)));
                     }
                 }
                 MobEvent::HurtSelf { mob, kind, amount } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         m.damage(amount, horizon_client::mobs::Damage::of(kind));
                     }
                 }
                 MobEvent::SetTarget { mob, target } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         m.ai.target = Some(target);
                     }
                 }
                 MobEvent::HuntHoglin { mob, target, ticks } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         m.extra.ints[0] = ticks;
                         if m.ai.target.is_none() {
                             m.ai.target = Some(Who::Mob(target));
@@ -1573,7 +1621,7 @@ impl Game<'_> {
                 }
                 MobEvent::DolphinTreasure { mob } => {
                     // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
-                    let Some(at) = self.mobs.iter().find(|m| m.id == mob).map(|m| {
+                    let Some(at) = self.mob(mob).map(|m| {
                         [
                             m.position.x.floor() as i32,
                             m.position.y.floor() as i32,
@@ -1588,7 +1636,7 @@ impl Game<'_> {
                         .locator()
                         .filter(|_| !names.is_empty())
                         .and_then(|t| t.locate(&names, at, 50));
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         m.extra.home = found.map(|(_, p)| p);
                     }
                 }
@@ -1608,7 +1656,7 @@ impl Game<'_> {
                         }
                     }
                     Who::Mob(id) => {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(m) = self.mob_mut(id) {
                             m.ignite_for_ticks(seconds * 20);
                         }
                     }
@@ -1619,12 +1667,12 @@ impl Game<'_> {
                     llama,
                 } => self.breed(parent, partner, llama),
                 MobEvent::LockGaze { mob, partner } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         horizon_client::mobs::animal_brain::lock_gaze(m, partner);
                     }
                 }
                 MobEvent::BreedTarget { mob, partner } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
@@ -1661,7 +1709,7 @@ impl Game<'_> {
                 }
                 MobEvent::ThrowGift { table, from, to } => self.throw_gift(&table, from, to),
                 MobEvent::PatrolTarget { mob, target } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         horizon_client::mobs::raider::set_patrol_target(m, target);
                     }
                 }
@@ -1670,7 +1718,7 @@ impl Game<'_> {
                     target,
                     aggressive,
                 } => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                    if let Some(m) = self.mob_mut(mob) {
                         m.ai.target = Some(target);
                         m.ai.aggressive |= aggressive;
                     }
