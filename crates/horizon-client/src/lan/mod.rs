@@ -149,6 +149,9 @@ pub struct NetConfig {
     /// The shapes of the world's levels: their dimension types go to
     /// clients when the world's data packs changed them.
     pub levels: crate::chunk::LevelShapes,
+    /// The world's biomes, when its data packs add or change some: clients
+    /// get its biome registry.
+    pub biomes: Option<Arc<crate::biome::Biomes>>,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -177,6 +180,7 @@ impl NetConfig {
             resource_pack: None,
             server_links: Vec::new(),
             levels: crate::chunk::LevelShapes::VANILLA,
+            biomes: None,
         }
     }
 }

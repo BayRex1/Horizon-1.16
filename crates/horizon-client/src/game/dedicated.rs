@@ -634,6 +634,7 @@ impl Game<'_> {
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.level_shapes,
+            biomes: Some(self.res.biomes()).filter(|b| b.has_packs()),
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
             } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {

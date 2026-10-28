@@ -379,6 +379,7 @@ impl Game<'_> {
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
             levels: self.level_shapes,
+            biomes: Some(self.res.biomes()).filter(|b| b.has_packs()),
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,

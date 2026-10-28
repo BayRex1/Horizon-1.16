@@ -844,10 +844,11 @@ fn login_and_configure(
             }),
         )?;
     }
-    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
+    let world = shared.config.biomes.as_deref();
+    for packet in sync.registry_packets(known_pack, &shared.config.levels, world) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
-    send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    send(c, cfg::Clientbound::UpdateTags(sync.tags_packet(world)))?;
     if let Some(pack) = &shared.config.resource_pack
         && let Some(rejected) = offer_pack(c, pack, &mut info)?
     {

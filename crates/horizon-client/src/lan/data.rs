@@ -2,7 +2,7 @@
 //! network order, with their data for clients that do not know the vanilla
 //! pack) and the tags of every registry, loaded from the prepared resources
 //! (`data/minecraft/...`) and the registries report.
-use crate::chunk::LevelShapes;
+use crate::{biome::Biomes, chunk::LevelShapes};
 use horizon_protocol::{
     packets::configuration::{RegistryData, RegistryEntry, RegistryTags, TagEntry, UpdateTags},
     registry::{Builtin, Dynamic},
@@ -177,32 +177,116 @@ impl SyncData {
     /// client rebuilds the entries from its own data, so none is sent.
     /// The registries for a client, with the data of a dimension type the
     /// world's data packs changed (`levels`) even when it knows the vanilla
-    /// pack.
-    pub fn registry_packets(&self, known_pack: bool, levels: &LevelShapes) -> Vec<RegistryData> {
+    /// pack, and the world's biomes (`world`, when its packs add or change
+    /// some).
+    pub fn registry_packets(
+        &self,
+        known_pack: bool,
+        levels: &LevelShapes,
+        world: Option<&Biomes>,
+    ) -> Vec<RegistryData> {
         self.registries
             .iter()
             .map(|(key, e)| RegistryData {
                 registry: key.clone(),
-                entries: e
-                    .names
-                    .iter()
-                    .zip(&e.json)
-                    .map(|(name, json)| {
-                        let changed = (key == "minecraft:dimension_type")
-                            .then(|| changed_dimension_type(name, json, levels))
-                            .flatten();
-                        RegistryEntry {
-                            id: name.clone(),
-                            data: match changed {
-                                Some(json) => Some(json_to_nbt(&json)),
-                                None if known_pack => None,
-                                None => Some(json_to_nbt(json)),
-                            },
-                        }
-                    })
-                    .collect(),
+                entries: match world {
+                    Some(world) if key == BIOME => self.biome_entries(known_pack, world),
+                    _ => e
+                        .names
+                        .iter()
+                        .zip(&e.json)
+                        .map(|(name, json)| {
+                            let changed = (key == "minecraft:dimension_type")
+                                .then(|| changed_dimension_type(name, json, levels))
+                                .flatten();
+                            RegistryEntry {
+                                id: name.clone(),
+                                data: match changed {
+                                    Some(json) => Some(json_to_nbt(&json)),
+                                    None if known_pack => None,
+                                    None => Some(json_to_nbt(json)),
+                                },
+                            }
+                        })
+                        .collect(),
+                },
             })
             .collect()
+    }
+
+    /// The biome registry's names in network order: the world's (its data
+    /// packs' biomes among the built-in ones, in `Identifier` order) when
+    /// `world` is given, else vanilla's.
+    pub fn biome_registry(&self, world: Option<&Biomes>) -> Vec<String> {
+        match world {
+            Some(world) => world
+                .registry_order()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            None => self
+                .dynamic
+                .registries
+                .get(BIOME)
+                .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The biome registry entries of a world with pack biomes: the built-in
+    /// pack's (no data for a client that knows it) and the packs' files,
+    /// which no client knows, so their data is always sent.
+    fn biome_entries(&self, known_pack: bool, world: &Biomes) -> Vec<RegistryEntry> {
+        let builtin = self
+            .registries
+            .iter()
+            .find(|(k, _)| k == BIOME)
+            .map(|(_, e)| e);
+        world
+            .registry_order()
+            .into_iter()
+            .map(|name| {
+                let data = match world.pack_file(name) {
+                    Some(file) => Some(json_to_nbt(file)),
+                    None if known_pack => None,
+                    None => builtin
+                        .and_then(|e| e.names.iter().position(|n| n == name).map(|i| &e.json[i]))
+                        .map(json_to_nbt),
+                };
+                RegistryEntry {
+                    id: name.to_owned(),
+                    data,
+                }
+            })
+            .collect()
+    }
+
+    /// ClientboundUpdateTagsPacket: the biome tags' ids follow the world's
+    /// biome registry when its packs change it.
+    pub fn tags_packet(&self, world: Option<&Biomes>) -> UpdateTags {
+        let mut tags = self.tags.clone();
+        let Some(world) = world else {
+            return tags;
+        };
+        let Some(vanilla) = self.dynamic.registries.get(BIOME) else {
+            return tags;
+        };
+        let ids: HashMap<String, i32> = self
+            .biome_registry(Some(world))
+            .into_iter()
+            .enumerate()
+            .map(|(i, n)| (n, i as i32))
+            .collect();
+        for registry in tags.registries.iter_mut().filter(|r| r.registry == BIOME) {
+            for tag in &mut registry.tags {
+                tag.ids = tag
+                    .ids
+                    .iter()
+                    .filter_map(|&id| ids.get(&vanilla.get(id as usize)?.0).copied())
+                    .collect();
+            }
+        }
+        tags
     }
 
     fn registry_names<'a>(
@@ -299,6 +383,9 @@ impl SyncData {
     }
 }
 
+/// The biome registry key.
+const BIOME: &str = "minecraft:worldgen/biome";
+
 /// The vanilla dimension type `name` (its JSON `json`) with the shape the
 /// world gives the level of that name, if its data packs changed it.
 fn changed_dimension_type(name: &str, json: &Value, levels: &LevelShapes) -> Option<Value> {
@@ -331,6 +418,61 @@ mod tests {
         assert!(matches!(t.get("a"), Some(Tag::Int(1))));
         assert!(matches!(t.get("c"), Some(Tag::String(_))));
         assert!(matches!(t.get("b"), Some(Tag::List(l)) if l.len() == 2));
+    }
+
+    #[test]
+    fn a_world_with_pack_biomes_sends_them_in_registry_order() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let sync = SyncData::load(&root).expect("sync data");
+        let builtin = Biomes::load(&root).expect("biomes");
+        let file: Value = serde_json::from_str(
+            r#"{"temperature":0.8,"downfall":0.4,"has_precipitation":true,
+                "effects":{"water_color":4159204},"attributes":{}}"#,
+        )
+        .unwrap();
+        let world = builtin.with_packs([("horizon_test:ember_fields", &file)]);
+        let vanilla = sync.biome_registry(None);
+        let names = sync.biome_registry(Some(&world));
+        assert_eq!(names.len(), vanilla.len() + 1);
+        // Identifier order: the path first, so the new biome sits among e's.
+        let at = names
+            .iter()
+            .position(|n| n == "horizon_test:ember_fields")
+            .unwrap();
+        assert!(
+            names[at - 1].as_str() < "minecraft:ember"
+                && names[at + 1].as_str() > "minecraft:ember"
+        );
+        let biome = |known| {
+            sync.registry_packets(known, &LevelShapes::VANILLA, Some(&world))
+                .into_iter()
+                .find(|r| r.registry == BIOME)
+                .unwrap()
+        };
+        // A client that knows the vanilla pack gets data only for the new biome.
+        let known = biome(true);
+        assert_eq!(known.entries.len(), names.len());
+        let with_data: Vec<_> = known
+            .entries
+            .iter()
+            .filter(|e| e.data.is_some())
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(with_data, ["horizon_test:ember_fields"]);
+        assert!(biome(false).entries.iter().all(|e| e.data.is_some()));
+        // Biome tags name the world's ids.
+        let tags = sync.tags_packet(Some(&world));
+        let plains = names.iter().position(|n| n == "minecraft:plains").unwrap() as i32;
+        let biome_tags = tags
+            .registries
+            .iter()
+            .find(|r| r.registry == BIOME)
+            .unwrap();
+        assert!(biome_tags.tags.iter().any(|t| t.ids.contains(&plains)));
+        assert_eq!(sync.tags_packet(None), sync.tags);
     }
 
     #[test]
