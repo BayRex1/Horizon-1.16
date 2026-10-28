@@ -182,7 +182,7 @@ const RELOAD_CHECK: Duration = Duration::from_secs(1);
 
 /// A vanilla command name: mods may not take it.
 #[cfg(feature = "mods")]
-fn vanilla_command(name: &str) -> bool {
+pub(super) fn vanilla_command(name: &str) -> bool {
     let d = vanilla::game_dispatcher();
     d.nodes[0]
         .children
@@ -643,6 +643,9 @@ impl Game<'_> {
     }
     /// `/command` typed in chat: true when a mod owns it.
     pub(super) fn mod_command(&mut self, command: &str) -> bool {
+        if let Some(hmod) = horizon_mods::hmod_command::parse(command) {
+            return self.hmod_command(hmod);
+        }
         if !self.mods.mods.is_running() {
             return false;
         }
@@ -906,6 +909,57 @@ impl Game<'_> {
     }
     /// A mod pushes its screen (`ui.open-screen`), or Options > Mods opens
     /// its settings page (`settings`, the mod's `installed` index).
+    /// `/hmod` in the window: lists or restarts its mods (in-frame, every
+    /// mod; with a server thread or a server, the client mods, and the
+    /// command goes on to the server for its own: false).
+    fn hmod_command(&mut self, command: horizon_mods::hmod_command::HmodCommand) -> bool {
+        use horizon_mods::hmod_command::{HmodCommand, USAGE};
+        let all_here = self.mod_runs() == Runs::Both;
+        let side = if all_here { "" } else { " (client)" };
+        let lines: Vec<String> = match &command {
+            HmodCommand::Help => vec![USAGE.to_owned()],
+            HmodCommand::List => {
+                let rows: Vec<String> = self
+                    .mods
+                    .mods
+                    .entries()
+                    .iter()
+                    .map(|e| {
+                        let id = e.manifest.as_ref().map_or("?", |m| m.id.as_str());
+                        format!("{id}: {:?}", e.status)
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    vec![format!("No mods{side}")]
+                } else {
+                    std::iter::once(format!("Mods{side}:")).chain(rows).collect()
+                }
+            }
+            HmodCommand::Reload(only) => {
+                let done = self.mods.mods.reload(only.as_deref(), vanilla_command);
+                let chosen = &self.settings.mods;
+                self.mods.mods.set_bindings(|id| chosen.keys_of(id));
+                self.list_mods();
+                self.sync_mod_commands();
+                if done.is_empty() {
+                    vec![format!("No mod to reload{side}")]
+                } else {
+                    done.into_iter()
+                        .map(|(id, r)| match r {
+                            Ok(()) => format!("Reloaded {id}{side}"),
+                            Err(e) => format!("{id} did not reload{side}: {e}"),
+                        })
+                        .collect()
+                }
+            }
+        };
+        for line in lines {
+            self.system_message(Text::literal(line).with_color(text::GRAY));
+        }
+        self.show_mod_output();
+        // The server runs the command for its mods; in-frame the window did it all.
+        all_here || command == HmodCommand::Help
+    }
     /// Opens the screen a mod put in place of the vanilla screen `vanilla`
     /// (`ui.replace-screen`); false when no running mod replaced it, and the
     /// game opens its own.

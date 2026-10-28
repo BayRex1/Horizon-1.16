@@ -526,6 +526,27 @@ fn ui_screens_settings_and_events() {
     assert!(mods.screen(0).is_none());
 }
 
+// `/hmod reload`: the mods that are on start again from their files, all of them or one by id
+#[test]
+fn hmod_reload_restarts_mods() {
+    let mut mods = Mods::load(
+        &[mods_dir().join("horizon_mods_test_ui_guest.hmod"), mods_dir().join("block_guard.hmod")],
+        |id| id == "test_ui_guest",
+        |_| false,
+    );
+    assert!(mods.command("ui_replace on"));
+    assert_eq!(mods.replacement_owner("minecraft:inventory"), Some(0));
+    // Only the mods that are on: block_guard stays off and isn't listed.
+    let done = mods.reload(None, |_| false);
+    assert_eq!(done, vec![("test_ui_guest".to_string(), Ok(()))]);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert_eq!(mods.entries()[1].status, Status::Off);
+    // It started from init again: what it held in memory is gone.
+    assert_eq!(mods.replacement_owner("minecraft:inventory"), None);
+    assert_eq!(mods.reload(Some("test_ui_guest"), |_| false).len(), 1);
+    assert!(mods.reload(Some("no_such_mod"), |_| false).is_empty());
+}
+
 // `block-events`: the server asks a mod before it breaks or uses a block, and the mod's answer decides it
 #[test]
 fn block_events_refuse_and_take() {

@@ -23,6 +23,23 @@ The project has a working WASM mod system in `crates/horizon-mods/` with:
 
 ## Changelog
 
+### 2025-10-28 - Hot reload in the game (`/hmod`)
+
+#### Added
+- **`/hmod reload [id]`** - restarts the mods that are on (all, or one) from their files, in the game, without leaving
+  the world: between two calls into them, so nothing needs to freeze or save (mods are sandboxed; the world is the
+  game's). A reloaded mod starts from `init` again; what it keeps across restarts belongs in `storage`
+- **`/hmod list`** - the mods and their status
+- The window runs it for its mods; with a server thread / LAN / dedicated server the command goes on to the server for
+  the server mods (owner of an integrated server or an operator). In-frame the window does both
+- **`crates/horizon-mods/src/hmod_command.rs`** - parsing; **`runtime.rs`** - `Mods::reload`, `restart` (shared with
+  the dev mods' automatic reload on rebuild, `reload_changed`)
+- **Game** - `game/mods.rs` `hmod_command`; `game/server_mods.rs` `guest_hmod_command`
+- **Tests** - `hmod_reload_restarts_mods`, `hmod_command::tests`
+
+Dev mods (`--dev-mod`) were already reloaded automatically about once a second after a rebuild; `/hmod reload` does it
+on demand, for installed mods too.
+
 ### 2025-10-28 - Block hooks (`block-events`)
 
 #### Added

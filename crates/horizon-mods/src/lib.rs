@@ -17,6 +17,7 @@ pub mod event_bus;
 #[cfg(feature = "index")]
 pub mod index;
 pub mod lifecycle;
+pub mod hmod_command;
 pub mod manifest;
 pub mod modpack;
 #[cfg(feature = "runtime")]

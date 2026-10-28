@@ -524,6 +524,72 @@ mod run {
             owned
         }
 
+        /// `/hmod` typed by a connection's player: the server's own mods,
+        /// for the owner of an integrated server or an operator.
+        fn guest_hmod_command(
+            &mut self,
+            host: &mut LanHost,
+            conn: u32,
+            command: horizon_mods::hmod_command::HmodCommand,
+        ) {
+            use horizon_mods::hmod_command::{HmodCommand, USAGE};
+            let Some(g) = host.hub.guest(conn) else {
+                return;
+            };
+            let allowed = host.hub.config.integrated || g.permission >= 2;
+            let lines: Vec<String> = if !allowed {
+                vec!["/hmod needs an operator".to_owned()]
+            } else {
+                match command {
+                    HmodCommand::Help => vec![USAGE.to_owned()],
+                    HmodCommand::List => {
+                        let rows: Vec<String> = self
+                            .mods
+                            .mods
+                            .entries()
+                            .iter()
+                            .map(|e| {
+                                let id = e.manifest.as_ref().map_or("?", |m| m.id.as_str());
+                                format!("{id}: {:?}", e.status)
+                            })
+                            .collect();
+                        if rows.is_empty() {
+                            vec!["No mods (server)".to_owned()]
+                        } else {
+                            std::iter::once("Mods (server):".to_owned()).chain(rows).collect()
+                        }
+                    }
+                    HmodCommand::Reload(only) => {
+                        let done = self.mods.mods.reload(only.as_deref(), |c| {
+                            super::super::mods::vanilla_command(c)
+                        });
+                        self.mods.server = self.mods.mods.runs_server();
+                        self.mods.world = self.mods.mods.wants_world();
+                        if done.is_empty() {
+                            vec!["No mod to reload (server)".to_owned()]
+                        } else {
+                            done.into_iter()
+                                .map(|(id, r)| match r {
+                                    Ok(()) => format!("Reloaded {id} (server)"),
+                                    Err(e) => format!("{id} did not reload (server): {e}"),
+                                })
+                                .collect()
+                        }
+                    }
+                }
+            };
+            for line in lines {
+                host.hub.send_to(
+                    conn,
+                    &C::SystemChat(play::SystemChat {
+                        content: component_nbt(&Text::literal(line).with_color(text::GRAY).component()),
+                        overlay: false,
+                    }),
+                );
+            }
+            self.route_mod_output(Some(host));
+        }
+
         /// `/line` typed by a connection's player: true when a server mod
         /// owns it, whatever the player's permission level.
         pub(in crate::game) fn guest_server_mod_command(
@@ -532,6 +598,10 @@ mod run {
             conn: u32,
             line: &str,
         ) -> bool {
+            if let Some(hmod) = horizon_mods::hmod_command::parse(line) {
+                self.guest_hmod_command(host, conn, hmod);
+                return true;
+            }
             if !self.hears_players() {
                 return false;
             }

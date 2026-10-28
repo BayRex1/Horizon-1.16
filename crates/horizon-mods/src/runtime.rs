@@ -1408,35 +1408,69 @@ impl Mods {
         let mut any = false;
         for i in 0..self.entries.len() {
             let entry = &self.entries[i];
-            let now = modified(&entry.path);
             let was_on = !matches!(entry.status, Status::Off | Status::Elsewhere);
-            if now == entry.modified || !was_on {
+            if modified(&entry.path) == entry.modified || !was_on {
                 continue;
             }
             any = true;
-            self.generation += 1;
-            self.entries[i].modified = now;
-            self.entries[i].run = None;
-            let path = self.entries[i].path.clone();
-            let started = Package::read(&path).and_then(|p| {
-                self.entries[i].manifest = Some(p.manifest.clone());
-                self.start(&path, &p, &reserved)
-            });
-            let entry = &mut self.entries[i];
-            let id = entry.manifest.as_ref().map_or("?", |m| m.id.as_str());
-            match started {
-                Ok(run) => {
-                    log::info!("Horizon: mod {id} reloaded");
-                    entry.run = run;
-                    entry.status = Status::Running;
-                }
-                Err(e) => {
-                    log::warn!("Horizon: mod {id} did not reload: {e}");
-                    entry.status = Status::Failed(e);
-                }
-            }
+            let _ = self.restart(i, &reserved);
         }
         any
+    }
+
+    /// `/hmod reload`: restarts the mods that are on (every one, or only the
+    /// one with id `only`) from their files, changed or not, between two
+    /// calls into them: the world goes on, the mods start from `init` again
+    /// (what they keep is in `storage`). Each one's id and whether it runs
+    /// again (why not).
+    pub fn reload(
+        &mut self,
+        only: Option<&str>,
+        reserved: impl Fn(&str) -> bool,
+    ) -> Vec<(String, Result<(), String>)> {
+        let mut done = Vec::new();
+        for i in 0..self.entries.len() {
+            let entry = &self.entries[i];
+            let id = entry.manifest.as_ref().map(|m| m.id.clone());
+            let was_on = !matches!(entry.status, Status::Off | Status::Elsewhere);
+            if !was_on || only.is_some_and(|o| id.as_deref() != Some(o)) {
+                continue;
+            }
+            let result = self.restart(i, &reserved);
+            let id = self.entries[i]
+                .manifest
+                .as_ref()
+                .map_or_else(|| id.unwrap_or_else(|| "?".into()), |m| m.id.clone());
+            done.push((id, result));
+        }
+        done
+    }
+
+    /// Starts mod `i` again from its file: Err (why) when it doesn't run.
+    fn restart(&mut self, i: usize, reserved: &impl Fn(&str) -> bool) -> Result<(), String> {
+        self.generation += 1;
+        self.entries[i].modified = modified(&self.entries[i].path);
+        self.entries[i].run = None;
+        let path = self.entries[i].path.clone();
+        let started = Package::read(&path).and_then(|p| {
+            self.entries[i].manifest = Some(p.manifest.clone());
+            self.start(&path, &p, reserved)
+        });
+        let entry = &mut self.entries[i];
+        let id = entry.manifest.as_ref().map_or("?", |m| m.id.as_str());
+        match started {
+            Ok(run) => {
+                log::info!("Horizon: mod {id} reloaded");
+                entry.run = run;
+                entry.status = Status::Running;
+                Ok(())
+            }
+            Err(e) => {
+                log::warn!("Horizon: mod {id} did not reload: {e}");
+                entry.status = Status::Failed(e.clone());
+                Err(e)
+            }
+        }
     }
 }
 
