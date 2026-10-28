@@ -255,6 +255,15 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
     mods.player_left(&steve);
     for out in mods.drain() {
         report.output.push(match out {
+            Output::ModPacket {
+                peer,
+                channel,
+                data,
+            } => format!(
+                "queued {} byte(s) on {channel} to {}",
+                data.len(),
+                if peer.is_empty() { "server" } else { &peer }
+            ),
             Output::Chat { text, .. } => format!("chat: {text}"),
             Output::Tell { text, .. } => format!("tell: {text}"),
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),

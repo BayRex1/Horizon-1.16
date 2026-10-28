@@ -69,17 +69,16 @@ impl ModList {
         }
         let mut grants: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (key, value) in text.lines().filter_map(|l| l.split_once(':')) {
-            if value.trim() == "true" {
-                if let Some((id, permission)) = key
+            if value.trim() == "true"
+                && let Some((id, permission)) = key
                     .trim()
                     .strip_prefix("permission.")
                     .and_then(|s| s.split_once('.'))
-                {
-                    grants
-                        .entry(id.into())
-                        .or_default()
-                        .insert(permission.into());
-                }
+            {
+                grants
+                    .entry(id.into())
+                    .or_default()
+                    .insert(permission.into());
             }
         }
         Self {
