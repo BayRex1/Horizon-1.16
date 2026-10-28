@@ -83,6 +83,9 @@ pub(super) struct GameLevel<'g, 'a> {
     /// holds the game); the first ones scan, as the build costs a few scans.
     pub(super) boxes: std::cell::OnceCell<MobBoxes>,
     pub(super) box_queries: std::cell::Cell<u32>,
+    /// The trial spawners' player snapshot, built on their first ask.
+    pub(super) trial_players:
+        std::cell::OnceCell<Vec<horizon_client::mobs::trial_spawner::TrialPlayer>>,
 }
 const SCANNED_QUERIES: u32 = 8;
 /// A mob not removed: its index in `Game::mobs`, box, alive, and whether
@@ -371,6 +374,7 @@ impl<'a> Game<'a> {
             pending_ids: Default::default(),
             boxes: Default::default(),
             box_queries: Default::default(),
+            trial_players: Default::default(),
         }
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the

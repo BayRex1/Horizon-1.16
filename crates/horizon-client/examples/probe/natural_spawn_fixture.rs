@@ -124,6 +124,7 @@ struct World<'a> {
     placed: RefCell<Vec<([i32; 3], BlockStateId)>>,
     /// The game time (trial cases advance it).
     time: Cell<i64>,
+    trial_players: std::cell::OnceCell<Vec<TrialPlayer>>,
     /// The mobs a trial spawner added: UUID, position, height and box.
     trial_mobs: RefCell<Vec<([i32; 4], [f64; 3], f32, Aabb)>>,
     /// How many mobs a trial spawner added (their UUIDs count up).
@@ -377,8 +378,9 @@ impl TrialSpawnerLevel for World<'_> {
     fn mob_spawning(&self) -> bool {
         self.spawn_mobs
     }
-    fn players(&self) -> Vec<TrialPlayer> {
-        self.players
+    fn players(&self) -> &[TrialPlayer] {
+        self.trial_players.get_or_init(|| {
+            self.players
             .iter()
             .enumerate()
             .map(|(i, (p, mode))| TrialPlayer {
@@ -399,6 +401,7 @@ impl TrialSpawnerLevel for World<'_> {
                     .map(|(o, _)| o),
             })
             .collect()
+        })
     }
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {
         let lookup = |x: i32, y: i32, z: i32| self.state(x, y, z);
@@ -735,6 +738,7 @@ pub fn main() -> horizon_client::Result<()> {
             trial_mobs: RefCell::new(Vec::new()),
             trial_count: Cell::new(0),
             omens: RefCell::new(omens),
+            trial_players: std::cell::OnceCell::new(),
             loot: loot.clone(),
             entities: RefCell::new(
                 case_entities
