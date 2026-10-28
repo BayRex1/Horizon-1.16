@@ -137,6 +137,8 @@ mod pandas;
 mod passengers;
 mod persist;
 mod perspective;
+#[cfg(feature = "physics-unleashed")]
+mod physics;
 mod pick_entity;
 mod pickups;
 mod piglins;
@@ -5520,6 +5522,8 @@ impl Game<'_> {
             self.use_with_hand()?;
             self.use_delay = 4;
         }
+        #[cfg(feature = "physics-unleashed")]
+        self.tick_physics(running);
         Ok(())
     }
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.

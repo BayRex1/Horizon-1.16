@@ -49,6 +49,9 @@ impl DirtySections {
     }
 }
 pub struct World {
+    /// Owned by this dimension, including while parked on the server thread.
+    #[cfg(feature = "physics-unleashed")]
+    pub physics: Option<crate::physics::PhysicsDimension>,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
@@ -167,6 +170,8 @@ impl Weather {
 impl World {
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
+            #[cfg(feature = "physics-unleashed")]
+            physics: Some(Default::default()),
             chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,

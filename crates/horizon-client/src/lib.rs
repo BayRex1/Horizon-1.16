@@ -127,6 +127,8 @@ pub mod par;
 pub mod particles;
 pub mod patrol;
 pub mod perf_overlay;
+#[cfg(feature = "physics-unleashed")]
+pub mod physics;
 pub mod pick_item;
 pub mod player_sync;
 pub mod poi_sections;

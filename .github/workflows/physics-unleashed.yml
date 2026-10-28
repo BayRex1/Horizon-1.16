@@ -1,0 +1,87 @@
+name: PHYSICS UNLEASHED
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'physics-unleashed/**']
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/physics-core/**'
+      - 'crates/horizon-client/**'
+      - 'crates/horizon-core/**'
+      - 'crates/horizon-world/**'
+      - '.github/workflows/physics-unleashed.yml'
+      - 'docs/physics-unleashed.md'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/physics-core/**'
+      - 'crates/horizon-client/**'
+      - 'crates/horizon-core/**'
+      - 'crates/horizon-world/**'
+      - '.github/workflows/physics-unleashed.yml'
+      - 'docs/physics-unleashed.md'
+permissions:
+  contents: read
+concurrency:
+  group: physics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: physics-unleashed
+      - name: Format and public tree
+        run: |
+          cargo +stable fmt --all -- --check
+          python3 tools/check_public_tree.py
+      - name: Physics core
+        run: |
+          cargo +stable clippy --locked -p physics-core --all-targets -- -D warnings
+          cargo +stable test --locked -p physics-core
+      - name: Horizon integration and feature-disabled compilation
+        run: |
+          cargo +stable check --locked -p horizon-client --no-default-features --lib --bins
+          cargo +stable clippy --locked -p horizon-client --no-default-features --features physics-unleashed --lib --bins --test physics_dimension -- -D warnings
+          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension
+      - name: Build CPU-testable artifacts
+        run: |
+          cargo +stable build --locked -p horizon-client --no-default-features --features physics-unleashed --bin horizon-client
+          cargo +stable run --locked -p physics-core --example falling_cube > falling-cube.csv
+          mkdir -p physics-artifacts
+          cp target/debug/horizon-client target/debug/examples/falling_cube falling-cube.csv physics-artifacts/
+          cp docs/physics-unleashed.md physics-artifacts/README.md
+          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension --no-run --message-format=json > physics-test-build.json
+          python3 - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          executables = {row['executable'] for line in Path('physics-test-build.json').read_text().splitlines()
+                         if (row := json.loads(line)).get('reason') == 'compiler-artifact'
+                         and row['target']['name'] == 'physics_dimension' and row.get('executable')}
+          assert len(executables) == 1, executables
+          shutil.copy2(executables.pop(), 'physics-artifacts/physics_dimension')
+          PY
+          git rev-parse HEAD > physics-artifacts/COMMIT
+          cd physics-artifacts
+          sha256sum horizon-client falling_cube physics_dimension falling-cube.csv README.md COMMIT > SHA256SUMS
+          tar -czf ../physics-unleashed-linux.tar.gz .
+      - name: Upload verified Linux development binaries (no Minecraft assets)
+        uses: actions/upload-artifact@v4
+        with:
+          name: physics-unleashed-linux-${{ github.sha }}
+          path: physics-unleashed-linux.tar.gz
+          if-no-files-found: error
+          retention-days: 7

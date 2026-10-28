@@ -1503,6 +1503,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.8.9",
  "naga",
+ "physics-core",
  "png",
  "pollster",
  "rustix 1.1.5",

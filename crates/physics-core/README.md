@@ -1,7 +1,9 @@
 # PHYSICS UNLEASHED: physics-core
 
-Headless, opt-in rigid-body simulation in Horizon's root Rust workspace. Existing
-game crates do not depend on it yet; vanilla player/mob movement is unchanged.
+Headless, opt-in rigid-body simulation in Horizon's root Rust workspace. The
+`horizon-client/physics-unleashed` feature connects it to resident dimensions;
+vanilla player/mob movement is unchanged. See the
+[stage 2 integration guide](../../docs/physics-unleashed.md) for commands and limits.
 No Minecraft files, Java, GPU, renderer or background service are needed here.
 
 ## Run
@@ -56,12 +58,12 @@ removal and invalid inputs. These are simulation checks, not a rendered game dem
   test bounds it by per-step travel, requires rebound/rising motion, and rejects
   crossing the platform. The separate high-speed test exercises CCD itself.
 
-## Real Horizon integration points and next step
+## Real Horizon integration points
 
 1. `crates/horizon-client/src/game/levels.rs`: `Parked` stores per-dimension state,
-   and `Game::tick_server` swaps/ticks levels. Keep a separate `PhysicsWorld` in
-   this lifecycle, behind an off-by-default PHYSICS UNLEASHED option. In
-   `game.rs::tick_world(running)`, advance only an authoritative running world;
+   and `Game::tick_server` swaps/ticks levels. `World.physics` now keeps a separate
+   engine in this lifecycle behind an off-by-default feature. In
+   `game.rs::tick_world(running)`, only an authoritative running world advances;
    at the normal 20Hz tick rate, 50ms means three physics steps. Respect freeze,
    step, sprint and changed tick rates in `clock.rs`; do not also simulate on a
    remote client's render loop or share a world between dimensions.
@@ -72,14 +74,13 @@ removal and invalid inputs. These are simulation checks, not a rendered game dem
    Preserve contextual/uncached shapes, chunk availability and errors. A
    `BlockCollisionScan` hit is already world-translated: do not translate it twice
    or treat an unavailable shape/chunk as a solid cube or as air.
-3. Build fixed colliders only for loaded terrain near active bodies; update them
-   on edits/unload. Move opted-in blocks from terrain into dynamic constructions
-   atomically so a block never exists in both collision worlds. Retain state IDs
-   and block-to-body ownership outside this geometry layer. Then publish
-   `BodyState` snapshots and interpolate transforms for rendering.
+3. The stage 2 adapter builds fixed colliders for loaded terrain near active
+   bodies and updates them on edits/unload without consuming the network block
+   log. Existing blocks are preserved. Publishing `BodyState` snapshots and
+   interpolating transforms for rendering remain future work.
 
-This step supplies the CPU foundation and shape adapter, not live terrain sync,
-player/body interaction, rendering, save/load, network replication, fracture,
+The core supplies the CPU foundation and shape adapter. Live terrain sync lives
+in `horizon-client::physics`; player/body interaction, rendering, save/load, network replication, fracture,
 joints, Physics Gun or force anomalies. Game/LAN/parity validation still needs
 the user's own prepared Minecraft 26.3 resources. Before enabling gameplay,
 test server-thread, dedicated and in-frame paths and keep vanilla movement

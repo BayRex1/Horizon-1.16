@@ -91,6 +91,10 @@ fn format_double(v: f64) -> String {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
+        #[cfg(feature = "physics-unleashed")]
+        if let Some(result) = self.physics_command(command) {
+            return result;
+        }
         if self.mod_command(command) {
             return true;
         }

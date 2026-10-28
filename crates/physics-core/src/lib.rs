@@ -306,6 +306,22 @@ impl PhysicsWorld {
         })
     }
 
+    /// World-space bounds of every collider attached to this body.
+    pub fn bounds(&self, handle: BodyHandle) -> Result<Aabb> {
+        let body = self.bodies.get(handle).ok_or(PhysicsError::MissingBody)?;
+        let mut bounds = None;
+        for handle in body.colliders() {
+            let collider = &self.colliders[*handle];
+            // Compute from the body's current transform, including before the
+            // first pipeline step or immediately after insertion.
+            let pose = body.position() * collider.position_wrt_parent().unwrap();
+            let aabb = collider.shape().compute_aabb(&pose);
+            let next = Aabb::new(vec3(&aabb.mins.coords), vec3(&aabb.maxs.coords));
+            bounds = Some(bounds.map_or(next, |b: Aabb| b.union_bounds(next)));
+        }
+        bounds.ok_or(PhysicsError::MissingBody)
+    }
+
     fn dynamic(&mut self, handle: BodyHandle) -> Result<&mut RigidBody> {
         let body = self
             .bodies
