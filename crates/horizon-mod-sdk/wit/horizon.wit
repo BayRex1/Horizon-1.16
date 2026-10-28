@@ -783,6 +783,78 @@ interface server-events {
     block-placed: func(player: player, pos: block-pos, state: string);
 }
 
+/// Capability `microphone.capture` (experimental). Enabling the mod grants
+/// capture permission; the operating system may additionally refuse access.
+interface microphone {
+    record device { id: string, name: string }
+    /// Does not open a device; permission is granted when the user enables the mod.
+    request-permission: func() -> bool;
+    /// Enumerates up to 64 input devices without starting capture. Returns
+    /// an error containing "pending" during setup; retry next frame.
+    devices: func() -> result<list<device>, string>;
+    /// Selected device (none: default). Returns native sample rate and channels.
+    /// On a "pending" error retry with the same device next frame.
+    start: func(device: option<string>) -> result<tuple<u32, u16>, string>;
+    /// Interleaved normalized PCM, up to 8192 samples. Oldest samples are
+    /// discarded after 200 ms. Empty when stopped or no samples are ready.
+    read: func() -> list<f32>;
+    /// Releases the microphone and discards queued PCM (use on PTT key-up).
+    stop: func();
+}
+
+/// Capability `audio.playback` (experimental): bounded live PCM sources.
+interface audio {
+    record position { x: f64, y: f64, z: f64 }
+    /// 8–96 kHz, mono or stereo. At most 16 sources per mod. During output
+    /// device setup returns a "pending" error; retry next frame.
+    create: func(rate: u32, channels: u16) -> result<u32, string>;
+    /// Interleaved normalized PCM, at most 8192 samples per call; fails
+    /// if the 200 ms source queue is full. Empty queues play silence.
+    push: func(source: u32, pcm: list<f32>) -> result<_, string>;
+    /// Gain 0–2, optional world position and radius (1–256 blocks).
+    /// Positioned stereo is downmixed to mono. None is listener-relative.
+    configure: func(source: u32, gain: f32, at: option<position>, radius: f32) -> result<_, string>;
+    /// Stops and deletes the source. Handles are never reused.
+    remove: func(source: u32);
+}
+
+/// Capabilities `network.custom` and `network.udp` (experimental): connected
+/// nonblocking UDP sockets, at most four per mod. No WASI network access.
+interface network {
+    /// Numeric IP:port, including [IPv6]:port. No blocking DNS lookup.
+    connect: func(address: string) -> result<u32, string>;
+    /// At most 1200 bytes. Delivery and ordering are not guaranteed.
+    send: func(socket: u32, data: list<u8>) -> result<_, string>;
+    /// Up to 32 datagrams from the connected peer. Oversize packets discarded.
+    poll: func(socket: u32) -> result<list<list<u8>>, string>;
+    /// Releases the socket; unknown handles are ignored.
+    close: func(socket: u32);
+}
+
+/// Capability `network.custom` (experimental): channels over the game's
+/// authenticated reliable connection. Unreliable voice uses `network` and
+/// an external UDP server; this interface does not imply a UDP game transport.
+interface messaging {
+    record packet { peer: string, channel: string, data: list<u8> }
+    /// This mod's id, ':', then 1–64 lowercase letters, digits, '_' or '-'.
+    /// At most 16 registrations per mod.
+    register: func(channel: string) -> result<_, string>;
+    /// Client peer is empty (server); server peer is an online player's
+    /// UUID. Up to 8192 bytes; success queues reliable delivery.
+    send: func(peer: string, channel: string, data: list<u8>) -> result<_, string>;
+    /// Up to 32 packets. Server peer is the authenticated player's UUID,
+    /// never a value supplied by the sender; client peer is empty.
+    poll: func() -> list<packet>;
+}
+
+/// Linked independently to preserve compatibility with older components.
+world realtime-host {
+    import microphone;
+    import audio;
+    import network;
+    import messaging;
+}
+
 /// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
@@ -802,6 +874,8 @@ world horizon-server-mod {
     import storage;
     import players;
     import %world;
+    import network;
+    import messaging;
     export server-events;
 }
 
@@ -815,6 +889,10 @@ world horizon-ui-mod {
     import input;
     import recipes;
     import browser;
+    import microphone;
+    import audio;
+    import network;
+    import messaging;
     export ui-events;
 }
 

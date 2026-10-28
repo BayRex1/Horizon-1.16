@@ -103,9 +103,17 @@ pub enum Capability {
     /// The recipes and items the game knows, for recipe viewers
     /// (interface `recipes`).
     Recipes,
+    #[serde(rename = "microphone.capture")]
+    Microphone,
+    #[serde(rename = "audio.playback")]
+    Audio,
+    #[serde(rename = "network.custom")]
+    Network,
+    #[serde(rename = "network.udp")]
+    Udp,
 }
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 16] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -118,12 +126,27 @@ impl Capability {
         Capability::Players,
         Capability::World,
         Capability::Recipes,
+        Capability::Microphone,
+        Capability::Audio,
+        Capability::Network,
+        Capability::Udp,
     ];
+    /// Requires explicit renewed consent when added to an already enabled mod.
+    pub fn needs_consent(self) -> bool {
+        matches!(
+            self,
+            Self::Microphone | Self::Audio | Self::Network | Self::Udp
+        )
+    }
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
         matches!(
             self,
-            Capability::Storage | Capability::Players | Capability::World
+            Capability::Storage
+                | Capability::Players
+                | Capability::World
+                | Capability::Network
+                | Capability::Udp
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -141,6 +164,10 @@ impl Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Microphone => "microphone",
+            Capability::Audio => "audio",
+            Capability::Network => "messaging",
+            Capability::Udp => "network",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -148,12 +175,23 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input | Capability::Recipes
+            Capability::Ui
+                | Capability::Render
+                | Capability::Input
+                | Capability::Recipes
+                | Capability::Microphone
+                | Capability::Audio
+                | Capability::Network
+                | Capability::Udp
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
         match self {
+            Capability::Microphone => "capture sound from your microphone",
+            Capability::Audio => "play live audio, including positional sound",
+            Capability::Network => "exchange binary data with servers and players",
+            Capability::Udp => "connect to external UDP servers",
             Capability::GameRead => "see your position, health and the time",
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
@@ -211,6 +249,10 @@ impl fmt::Display for Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Microphone => "microphone.capture",
+            Capability::Audio => "audio.playback",
+            Capability::Network => "network.custom",
+            Capability::Udp => "network.udp",
         };
         f.write_str(name)
     }
@@ -247,11 +289,13 @@ impl Manifest {
                 "{MANIFEST}: a server mod is side = \"server\" with api = \"{SERVER_API}\", and only it"
             ));
         }
-        if let Some(c) = m
-            .capabilities
-            .iter()
-            .find(|c| c.on_server() != server && **c != Capability::Storage)
-        {
+        if let Some(c) = m.capabilities.iter().find(|c| {
+            c.on_server() != server
+                && !matches!(
+                    **c,
+                    Capability::Storage | Capability::Network | Capability::Udp
+                )
+        }) {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
         }
@@ -302,6 +346,11 @@ impl Manifest {
         imports: impl IntoIterator<Item = &'a str>,
     ) -> Result<(), String> {
         for name in imports {
+            if name.starts_with("horizon:mods/network@")
+                && !self.capabilities.contains(&Capability::Network)
+            {
+                return Err("UDP also requires capability network.custom".into());
+            }
             if let Some(c) = Capability::of_import(name)?
                 && !self.capabilities.contains(&c)
             {
@@ -448,6 +497,41 @@ version = "0.1.0"
 api = "0.1"
 capabilities = ["game-read", "hud"]
 "#;
+
+    #[test]
+    fn realtime_imports_require_declared_permissions() {
+        let text = r#"
+            id = "voice"
+            name = "Voice"
+            version = "1"
+            api = "0.1"
+            capabilities = ["microphone.capture", "audio.playback", "network.custom", "network.udp"]
+            experimental = ["microphone.capture", "audio.playback", "network.custom", "network.udp"]
+        "#;
+        let mut manifest = Manifest::parse(text).unwrap();
+        let imports = ["microphone", "audio", "network", "messaging"]
+            .map(|i| format!("horizon:mods/{i}@0.1.0"));
+        assert!(
+            manifest
+                .check_imports(imports.iter().map(String::as_str))
+                .is_ok()
+        );
+        manifest.capabilities.retain(|c| *c != Capability::Network);
+        assert!(
+            manifest
+                .check_imports(["horizon:mods/network@0.1.0"])
+                .is_err()
+        );
+        manifest
+            .capabilities
+            .retain(|c| *c != Capability::Microphone);
+        assert!(
+            manifest
+                .check_imports(["horizon:mods/microphone@0.1.0"])
+                .is_err()
+        );
+        assert!(Manifest::parse(&text.replace("experimental =", "unused =")).is_err());
+    }
 
     #[test]
     fn parses_and_checks_imports() {

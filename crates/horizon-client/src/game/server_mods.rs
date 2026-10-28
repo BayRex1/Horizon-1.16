@@ -526,6 +526,26 @@ mod run {
                 line
             };
             match output {
+                Output::ModPacket {
+                    peer,
+                    channel,
+                    data,
+                } => {
+                    let hub = host.as_deref().or(self.lan.as_ref());
+                    if let Some(host) = hub {
+                        for guest in &host.hub.guests {
+                            if uuid_string(guest.uuid) == peer {
+                                guest.send(&C::CustomPayload(
+                                    horizon_protocol::packets::configuration::CustomPayload {
+                                        channel,
+                                        data,
+                                    },
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
                 Output::Tell { name, player, text } => {
                     self.tell_server_player(host, &player, named(&name, text));
                 }

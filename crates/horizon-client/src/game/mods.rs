@@ -300,10 +300,27 @@ impl Game<'_> {
         let dev_ids: Vec<String> = dev
             .iter()
             .filter_map(|p| horizon_mods::Package::read(p).ok())
+            .filter(|p| !p.manifest.capabilities.iter().any(|c| c.needs_consent()))
             .map(|p| p.manifest.id)
             .collect();
         let enabled = &self.settings.mods.enabled;
-        let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
+        let requirements: Vec<_> = paths
+            .iter()
+            .filter_map(|p| horizon_mods::Package::read(p).ok())
+            .map(|p| (p.manifest.id, p.manifest.capabilities))
+            .collect();
+        let grants = &self.settings.mods.grants;
+        let on = |id: &str| {
+            (enabled.contains(id) || dev_ids.iter().any(|d| d == id))
+                && requirements
+                    .iter()
+                    .filter(|(mid, _)| mid == id)
+                    .all(|(_, caps)| {
+                        caps.iter()
+                            .filter(|c| c.needs_consent())
+                            .all(|c| grants.get(id).is_some_and(|g| g.contains(&c.to_string())))
+                    })
+        };
         let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
@@ -344,6 +361,7 @@ impl Game<'_> {
                 let Some(m) = &e.manifest else {
                     return Installed {
                         id: String::new(),
+                        permissions: Vec::new(),
                         title: file.into_owned(),
                         description: String::new(),
                         problem,
@@ -351,6 +369,21 @@ impl Game<'_> {
                         has_settings: false,
                     };
                 };
+                let problem = problem.or_else(|| {
+                    (self.settings.mods.enabled.contains(&m.id)
+                        && m.capabilities
+                            .iter()
+                            .filter(|c| c.needs_consent())
+                            .any(|c| {
+                                !self
+                                    .settings
+                                    .mods
+                                    .grants
+                                    .get(&m.id)
+                                    .is_some_and(|g| g.contains(&c.to_string()))
+                            }))
+                    .then(|| "New permissions: disable and enable this mod to approve".into())
+                });
                 // What it may do first: the row cuts long descriptions.
                 let may: Vec<&str> = m.capabilities.iter().map(|c| c.describe()).collect();
                 let may = if may.is_empty() {
@@ -360,10 +393,16 @@ impl Game<'_> {
                 };
                 Installed {
                     id: m.id.clone(),
+                    permissions: m
+                        .capabilities
+                        .iter()
+                        .filter(|c| c.needs_consent())
+                        .map(ToString::to_string)
+                        .collect(),
                     title: format!("{} {}", m.name, m.version),
                     description: format!("{may} {}", m.description).trim().to_owned(),
                     problem,
-                    dev: dev.contains(&e.path),
+                    dev: dev.contains(&e.path) && !m.capabilities.iter().any(|c| c.needs_consent()),
                     has_settings: e.has_ui_settings(),
                 }
             })
@@ -429,6 +468,7 @@ impl Game<'_> {
     }
     /// What mods read, with these players on the server.
     pub(super) fn mod_snapshot_with(&mut self, players: Vec<ServerPlayer>) -> Snapshot {
+        self.mods.mods.set_audio_gain(self.settings.master_volume);
         let player = self.player.as_ref().map(|p| Player {
             x: p.position.x,
             y: p.position.y,
@@ -666,6 +706,30 @@ impl Game<'_> {
     pub(super) fn route_mod_output(&mut self, mut host: Option<&mut LanHost>) {
         for output in self.mods.mods.drain() {
             let line = match output {
+                Output::ModPacket {
+                    peer,
+                    channel,
+                    data,
+                } => {
+                    if peer.is_empty() {
+                        self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
+                            horizon_protocol::packets::configuration::CustomPayload {
+                                channel,
+                                data,
+                            },
+                        ));
+                    } else {
+                        self.route_server_output(
+                            host.as_deref_mut(),
+                            Output::ModPacket {
+                                peer,
+                                channel,
+                                data,
+                            },
+                        );
+                    }
+                    continue;
+                }
                 Output::Chat { name, text } => {
                     let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
                     line.push(Text::literal(text));

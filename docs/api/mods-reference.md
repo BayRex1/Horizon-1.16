@@ -19,6 +19,17 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
+| `microphone.capture` | [`microphone`](#microphone) | capture sound from your microphone |
+| `audio.playback` | [`audio`](#audio) | play live audio, including positional sound |
+| `network.custom` | [`messaging`](#messaging) | exchange binary data with servers and players |
+| `network.udp` | [`network`](#network) | connect to external UDP servers |
+
+## World `realtime-host`
+
+Linked independently to preserve compatibility with older components.
+
+- Imports (what the game offers): `microphone`, `audio`, `network`, `messaging`
+- Exports (what the mod provides): none
 
 ## World `horizon-mod`
 
@@ -31,14 +42,14 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `network`, `messaging`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `microphone`, `audio`, `network`, `messaging`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -53,14 +64,14 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 The game's side of capability `render` (imports only).
 
 - Imports (what the game offers): `render`, `input`
-- Exports (what the mod provides): 
+- Exports (what the mod provides): none
 
 ## World `recipes-host`
 
 The game's side of capability `recipes` (imports only).
 
 - Imports (what the game offers): `recipes`, `browser`
-- Exports (what the mod provides): 
+- Exports (what the mod provides): none
 
 ## `log`
 
@@ -768,3 +779,78 @@ An argument's value, parsed as its kind says.
 | `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |
+
+## `microphone`
+
+Access: capability `microphone.capture`.
+
+Capability `microphone.capture` (experimental). Enabling the mod grants capture permission; the operating system may additionally refuse access.
+
+### record `device`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `name` | `string` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `request-permission` | `func() -> bool` | Does not open a device; permission is granted when the user enables the mod. |
+| `devices` | `func() -> result<list<device>, string>` | Enumerates up to 64 input devices without starting capture. Returns an error containing "pending" during setup; retry next frame. |
+| `start` | `func(device: option<string>) -> result<tuple<u32, u16>, string>` | Selected device (none: default). Returns native sample rate and channels. On a "pending" error retry with the same device next frame. |
+| `read` | `func() -> list<f32>` | Interleaved normalized PCM, up to 8192 samples. Oldest samples are discarded after 200 ms. Empty when stopped or no samples are ready. |
+| `stop` | `func()` | Releases the microphone and discards queued PCM (use on PTT key-up). |
+
+## `audio`
+
+Access: capability `audio.playback`.
+
+Capability `audio.playback` (experimental): bounded live PCM sources.
+
+### record `position`
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `f64` |  |
+| `y` | `f64` |  |
+| `z` | `f64` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `create` | `func(rate: u32, channels: u16) -> result<u32, string>` | 8–96 kHz, mono or stereo. At most 16 sources per mod. During output device setup returns a "pending" error; retry next frame. |
+| `push` | `func(source: u32, pcm: list<f32>) -> result<_, string>` | Interleaved normalized PCM, at most 8192 samples per call; fails if the 200 ms source queue is full. Empty queues play silence. |
+| `configure` | `func(source: u32, gain: f32, at: option<position>, radius: f32) -> result<_, string>` | Gain 0–2, optional world position and radius (1–256 blocks). Positioned stereo is downmixed to mono. None is listener-relative. |
+| `remove` | `func(source: u32)` | Stops and deletes the source. Handles are never reused. |
+
+## `network`
+
+Access: capability `network.udp`.
+
+Capabilities `network.custom` and `network.udp` (experimental): connected nonblocking UDP sockets, at most four per mod. No WASI network access.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `connect` | `func(address: string) -> result<u32, string>` | Numeric IP:port, including [IPv6]:port. No blocking DNS lookup. |
+| `send` | `func(socket: u32, data: list<u8>) -> result<_, string>` | At most 1200 bytes. Delivery and ordering are not guaranteed. |
+| `poll` | `func(socket: u32) -> result<list<list<u8>>, string>` | Up to 32 datagrams from the connected peer. Oversize packets discarded. |
+| `close` | `func(socket: u32)` | Releases the socket; unknown handles are ignored. |
+
+## `messaging`
+
+Access: capability `network.custom`.
+
+Capability `network.custom` (experimental): channels over the game's authenticated reliable connection. Unreliable voice uses `network` and an external UDP server; this interface does not imply a UDP game transport.
+
+### record `packet`
+
+| Field | Type | |
+| --- | --- | --- |
+| `peer` | `string` |  |
+| `channel` | `string` |  |
+| `data` | `list<u8>` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `register` | `func(channel: string) -> result<_, string>` | This mod's id, ':', then 1–64 lowercase letters, digits, '_' or '-'. At most 16 registrations per mod. |
+| `send` | `func(peer: string, channel: string, data: list<u8>) -> result<_, string>` | Client peer is empty (server); server peer is an online player's UUID. Up to 8192 bytes; success queues reliable delivery. |
+| `poll` | `func() -> list<packet>` | Up to 32 packets. Server peer is the authenticated player's UUID, never a value supplied by the sender; client peer is empty. |

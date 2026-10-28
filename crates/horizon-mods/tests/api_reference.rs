@@ -145,14 +145,20 @@ fn markdown() -> String {
         let world = &resolve.worlds[world];
         let prefix = format!("{}:{}/", name.namespace, name.name);
         let names = |keys: Vec<&wit_parser::WorldKey>| {
-            keys.into_iter()
+            let joined = keys
+                .into_iter()
                 .map(|key| {
                     let full = resolve.name_world_key(key);
                     let short = full.trim_start_matches(&prefix);
                     format!("`{}`", short.split('@').next().unwrap_or(short))
                 })
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", ");
+            if joined.is_empty() {
+                "none".into()
+            } else {
+                joined
+            }
         };
         writeln!(w, "\n## World `{world_name}`\n").unwrap();
         if world.docs.contents.is_some() {

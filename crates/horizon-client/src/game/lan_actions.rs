@@ -1376,6 +1376,21 @@ impl Game<'_> {
             S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
                 self.guest_quiet_commands(host, conn, &p.data)
             }
+            #[cfg(feature = "mods")]
+            S::CustomPayload(p) => {
+                let u = format!("{:032x}", host.hub.guests[gi].uuid);
+                let peer = format!(
+                    "{}-{}-{}-{}-{}",
+                    &u[..8],
+                    &u[8..12],
+                    &u[12..16],
+                    &u[16..20],
+                    &u[20..]
+                );
+                self.mods
+                    .mods
+                    .receive_mod_packet(&peer, &p.channel, &p.data);
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {

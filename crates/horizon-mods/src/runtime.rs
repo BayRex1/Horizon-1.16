@@ -15,6 +15,8 @@ use wasmtime::{
     component::{Component, HasSelf, Linker},
 };
 
+mod realtime;
+
 mod bindings {
     wasmtime::component::bindgen!({
         path: "../horizon-mod-sdk/wit",
@@ -30,6 +32,8 @@ mod server_bindings {
         with: {
             "horizon:mods/log": super::bindings::horizon::mods::log,
             "horizon:mods/storage": super::bindings::horizon::mods::storage,
+            "horizon:mods/network": super::realtime::bindings::horizon::mods::network,
+            "horizon:mods/messaging": super::realtime::bindings::horizon::mods::messaging,
         },
     });
 }
@@ -198,6 +202,12 @@ impl Runs {
 /// What mods asked the game to show since the last [`Mods::drain`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Output {
+    /// A reliable binary packet for a registered mod channel.
+    ModPacket {
+        peer: String,
+        channel: String,
+        data: Vec<u8>,
+    },
     /// `chat.show`: a line after the mod's name.
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
@@ -427,6 +437,7 @@ struct State {
     storage_budget: u64,
     limits: StoreLimits,
     world: WorldSlot,
+    realtime: realtime::Realtime,
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -548,6 +559,7 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RecipesHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            realtime::link(&mut linker)?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -628,6 +640,7 @@ impl Mods {
                 .instances(16)
                 .build(),
             world,
+            realtime: realtime::Realtime::new(m.capabilities.clone(), server),
         };
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
@@ -702,6 +715,9 @@ impl Mods {
     }
     /// What mods read until the next snapshot.
     pub fn set_snapshot(&mut self, snapshot: Snapshot) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            run.store.data_mut().realtime.prune(&snapshot);
+        }
         self.snapshot = Arc::new(snapshot);
     }
 
@@ -766,6 +782,7 @@ impl Mods {
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
+        run.store.data_mut().update_listener();
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
@@ -1276,6 +1293,22 @@ impl Mods {
             self.entries[i].run = None;
             let path = self.entries[i].path.clone();
             let started = Package::read(&path).and_then(|p| {
+                if p.manifest
+                    .capabilities
+                    .iter()
+                    .filter(|c| c.needs_consent())
+                    .any(|c| {
+                        !self.entries[i]
+                            .manifest
+                            .as_ref()
+                            .is_some_and(|m| m.capabilities.contains(c))
+                    })
+                {
+                    return Err(
+                        "new sensitive permissions: disable and re-enable the mod to consent"
+                            .into(),
+                    );
+                }
                 self.entries[i].manifest = Some(p.manifest.clone());
                 self.start(&path, &p, &reserved)
             });
