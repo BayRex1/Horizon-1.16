@@ -1,7 +1,7 @@
 //! Blocks mobs carry: block items in a hand (`ItemInHandLayer`) and the
-//! block an enderman holds (`CarriedBlockLayer`), drawn as shaded cubes like
-//! dropped block items. Also the block models mobs wear (`SnowGolemHeadLayer`,
-//! `MushroomCowMushroomLayer`).
+//! block an enderman holds (`CarriedBlockLayer`), drawn through the same
+//! item model pipeline as inventory and dropped block items. Also the block
+//! models mobs wear (`SnowGolemHeadLayer`, `MushroomCowMushroomLayer`).
 use super::Game;
 use horizon_client::{
     items::ItemStack,
@@ -9,44 +9,17 @@ use horizon_client::{
     mobs::{Mob, Species, render},
 };
 
-/// The six faces of the unit cube with their shade: top, bottom, the two
-/// z faces, the two x faces.
-const FACES: [([[f32; 3]; 4], f32, u8); 6] = [
-    (
-        [[0., 1., 1.], [1., 1., 1.], [1., 1., 0.], [0., 1., 0.]],
-        1.0,
-        0,
-    ),
-    (
-        [[0., 0., 0.], [1., 0., 0.], [1., 0., 1.], [0., 0., 1.]],
-        0.5,
-        0,
-    ),
-    (
-        [[1., 0., 0.], [0., 0., 0.], [0., 1., 0.], [1., 1., 0.]],
-        0.8,
-        1,
-    ),
-    (
-        [[0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]],
-        0.8,
-        1,
-    ),
-    (
-        [[0., 0., 0.], [0., 0., 1.], [0., 1., 1.], [0., 1., 0.]],
-        0.6,
-        2,
-    ),
-    (
-        [[1., 0., 1.], [1., 0., 0.], [1., 1., 0.], [1., 1., 1.]],
-        0.6,
-        2,
-    ),
-];
-/// The sprites of a cube's top, z sides and x sides, and the top's tint.
-struct Cube<'a> {
-    sprites: [&'a str; 3],
-    tint: u32,
+/// `CarriedBlockLayer.submit`, adapted from unit-cube block coordinates to
+/// the item pipeline, which centers the model by translating (-0.5, -0.5, -0.5).
+fn carried_block_matrix(base: glam::Mat4) -> glam::Mat4 {
+    base * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
+        * glam::Mat4::from_rotation_x(20.0f32.to_radians())
+        * glam::Mat4::from_rotation_y(45.0f32.to_radians())
+        * glam::Mat4::from_translation(glam::Vec3::new(0.25, 0.1875, 0.25))
+        * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5))
+        * glam::Mat4::from_rotation_y(90.0f32.to_radians())
+        // Cancel item centering: vanilla submits the block in [0, 1], not [-0.5, 0.5].
+        * glam::Mat4::from_translation(glam::Vec3::splat(0.5))
 }
 
 /// `CustomHeadLayer.translateToHead` and the banner's `head` display.
@@ -178,38 +151,6 @@ impl Game<'_> {
             render::draw(flag, m, &flag_poses, r, color, light, 0, out);
         }
     }
-    fn push_cube(
-        &self,
-        t: glam::Mat4,
-        cube: &Cube,
-        light: u32,
-        overlay: u32,
-        out: &mut Vec<Vertex>,
-    ) {
-        for (corners, shade, side) in FACES {
-            let name = cube.sprites[usize::from(side)];
-            let Some(r) = self.gui.atlas.sprites.get(name).copied() else {
-                continue;
-            };
-            let tint = if side == 0 { cube.tint } else { 0xFF_FFFF };
-            let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
-            let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-            let uvs = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
-            for (corner, uv) in corners.iter().zip(uvs) {
-                let p = t.transform_point3(glam::Vec3::from(*corner));
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: p.to_array(),
-                    uv,
-                    layer: overlay,
-                    color,
-                    light,
-
-                    glint_uv: [0.0, 0.0],
-                });
-            }
-        }
-    }
     /// The blocks one mob holds or carries.
     pub(super) fn mob_block_geometry(
         &self,
@@ -224,28 +165,19 @@ impl Game<'_> {
         self.worn_block_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
-            && let Some((sprite, tint)) = self.block_face_sprite(state)
         {
             // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint.
             let base = render::base_transform(mob, alpha as f32, camera);
-            let t = base
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
-                * glam::Mat4::from_rotation_x(20.0f32.to_radians())
-                * glam::Mat4::from_rotation_y(45.0f32.to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.25, 0.1875, 0.25))
-                * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5))
-                * glam::Mat4::from_rotation_y(90.0f32.to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-            self.push_cube(
-                t,
-                &Cube {
-                    sprites: [&sprite, &sprite, &sprite],
-                    tint,
-                },
-                light,
+            let t = carried_block_matrix(base);
+            // Resolve the inventory model's textures and per-quad tints.
+            let stack = ItemStack::new(&self.res.facts().get(state).name, 1);
+            let item = self.resolve_item(
+                &stack,
+                horizon_assets::item_model::DisplayContext::None,
+                None,
                 0,
-                out,
             );
+            self.submit_item_world(&item, t, light, out);
         }
     }
     /// `SnowGolemHeadLayer` and `MushroomCowMushroomLayer`: the carved pumpkin
@@ -400,6 +332,45 @@ impl Game<'_> {
                 self.submit_item_world(&state, t, light, out);
             } else {
                 self.submit_item_unlit(&state, t, light, out);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{Mat4, Vec3};
+
+    #[test]
+    fn carried_item_vertices_match_vanilla_block_coordinates() {
+        // Captured from 26.3 CarriedBlockLayer.submit with an identity PoseStack:
+        // origin, three unit axes, opposite corner, and the block's center.
+        let samples = [
+            (Vec3::ZERO, Vec3::new(0.3535534, 0.8636924, -0.68587124)),
+            (Vec3::X, Vec3::new(0.0, 0.9846148, -1.0181028)),
+            (Vec3::Y, Vec3::new(0.3535534, 0.3938461, -0.8568813)),
+            (Vec3::Z, Vec3::new(0.0, 0.74277, -0.35363975)),
+            (Vec3::ONE, Vec3::new(-0.3535534, 0.3938461, -0.85688126)),
+            (Vec3::splat(0.5), Vec3::new(0.0, 0.6287693, -0.77137625)),
+        ];
+        let item_center = horizon_client::item_render::glam_matrix(
+            &horizon_assets::item_bake::item_transform_matrix(None, false),
+        );
+        for base in [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(3.0, 2.0, -7.0))
+                * Mat4::from_rotation_y(1.2)
+                * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0)),
+        ] {
+            let item = carried_block_matrix(base) * item_center;
+            for (point, expected) in samples {
+                let actual = item.transform_point3(point);
+                let expected = base.transform_point3(expected);
+                assert!(
+                    actual.abs_diff_eq(expected, 1e-6),
+                    "{actual:?} != {expected:?}"
+                );
             }
         }
     }
