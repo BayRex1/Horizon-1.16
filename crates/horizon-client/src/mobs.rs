@@ -937,6 +937,8 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// `PlayerSkin.model` is `SLIM`: the player model with 3-pixel arms.
+    pub slim: bool,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
@@ -978,6 +980,17 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `UseBonemeal`: the villager's bone meal grows the crop at `pos`
+    /// (`BoneMealItem.growCrop`, then level event 1505).
+    Bonemeal {
+        pos: [i32; 3],
+    },
+    /// `RingBell`: the villager rings the meeting-point bell
+    /// (`BellBlock.attemptToRing`: the bell shakes, the sound and the game
+    /// event follow).
+    RingBell {
+        bell: [i32; 3],
+    },
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
     ChestOpen {
@@ -1908,6 +1921,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            slim: false,
             profile: None,
             attrs: Attrs {
                 speed: kind.speed,
@@ -2085,6 +2099,18 @@ impl Mob {
         if epf > 0.0 {
             amount *= 1.0 - epf / 25.0;
         }
+        // Witch.getDamageAfterMagicAbsorb: none from its own doing, else
+        // 85% less from `#witch_resistant_to`.
+        if self.species() == Species::Witch {
+            if source.attacker == Some(Who::Mob(self.id)) {
+                amount = 0.0;
+            } else if matches!(
+                source.kind,
+                DamageKind::Magic | DamageKind::SonicBoom | DamageKind::Thorns
+            ) {
+                amount *= 0.15;
+            }
+        }
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
@@ -2166,6 +2192,15 @@ impl Mob {
             aquatic::spawn_ink(self);
         }
         true
+    }
+    /// A splash or cloud's harming effect on this mob: the potion's
+    /// `indirect_magic` is in `#witch_resistant_to`, so a witch takes 15%.
+    pub fn potion_harm(&self, amount: f32) -> f32 {
+        if self.species() == Species::Witch {
+            amount * 0.15
+        } else {
+            amount
+        }
     }
     /// `Wolf.canArmorAbsorb`: it wears wolf armor and the damage type is not
     /// in `#bypasses_wolf_armor` (drowning, magic, thorns, in a wall, out of

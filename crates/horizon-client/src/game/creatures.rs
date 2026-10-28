@@ -277,6 +277,19 @@ impl Game<'_> {
     pub(super) fn spawn_mob(&mut self, kind: &str, at: [f64; 3], persistent: bool) -> Option<u32> {
         self.spawn_mob_for(kind, at, persistent, false)
     }
+    /// `SummonCommand` and `SpawnEggItem`: vanilla spawns the mob, but it
+    /// never calls `Mob.setPersistenceRequired` for it, so the mob is not
+    /// persistent: the despawn rule holds it like any other mob, and only
+    /// its NBT can make it persistent.
+    pub(super) fn spawn_mob_spawned(&mut self, kind: &str, at: [f64; 3]) -> Option<u32> {
+        // The spawn is not a natural one (no jockeys, the patrol leader roll
+        // stays), but the mob is not persistent.
+        let id = self.spawn_mob_for(kind, at, true, false)?;
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            m.persistent = false;
+        }
+        Some(id)
+    }
     /// `spawn_mob` for a patrol or raid (`EntitySpawnReason.PATROL` / `EVENT`),
     /// which never rolls a patrol leader.
     pub(super) fn spawn_mob_for(
@@ -334,7 +347,7 @@ impl Game<'_> {
             }
         };
         let id = self
-            .spawn_mob(kind, at, true)
+            .spawn_mob_spawned(kind, at)
             .ok_or_else(|| format!("unknown or unsupported mob {kind}"))?;
         if baby && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.extra.age = if m.species() == Species::Sniffer {
@@ -732,6 +745,7 @@ impl Game<'_> {
         self.guardian_bubbles();
         self.villager_reputation_tick();
         self.merchant_tick();
+        self.villager_item_sense();
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);
@@ -789,14 +803,30 @@ impl Game<'_> {
         // takes the experience (before the loot is dropped). It takes what
         // would drop, whoever killed the mob.
         self.sculk_mob_died(m);
+        let mut catalyst_xp = 0;
         let consumed =
             self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
-                if horizon_client::mobs::drops::drops_experience(&dying) {
+                catalyst_xp = if horizon_client::mobs::drops::drops_experience(&dying) {
                     horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
-                }
+                };
+                catalyst_xp
             });
+        // CatalystListener: with experience to take, the player who last hurt
+        // the mob gets KILL_MOB_NEAR_SCULK_CATALYST.
+        if consumed && catalyst_xp > 0 {
+            let who = match killer {
+                Some(Some(conn)) => Some(super::commands::Target::Guest(conn)),
+                Some(None) if self.lan_acting.is_none() => Some(super::commands::Target::Player),
+                _ => None,
+            };
+            if let Some(who) = who {
+                self.for_player(who, |g| {
+                    g.trigger_player("minecraft:kill_mob_near_sculk_catalyst")
+                });
+            }
+        }
         if by_player {
             // A guest's kill is theirs: their statistics, scores and
             // advancements (LivingEntity.die credits lastHurtByPlayer).
@@ -856,7 +886,42 @@ impl Game<'_> {
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(m.id));
         let view = self.mob_entity(m);
-        self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
+        let blow = m.last_damage.map(|(d, _)| self.damage_view(d));
+        self.trigger_killed(&view, blow.as_ref());
+    }
+    /// A mob's damage source as advancement predicates see it: its type, the
+    /// causing entity, and the projectile when one dealt it.
+    fn damage_view(&self, d: Damage) -> horizon_client::advancements::DamageView {
+        let source = match d.attacker {
+            Some(Who::Player) => Some(self.player_entity()),
+            Some(Who::Mob(id)) => self
+                .mobs
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| self.mob_entity(o)),
+            None => None,
+        };
+        let projectile = match d.kind {
+            DamageKind::Arrow => Some("minecraft:arrow"),
+            DamageKind::Fireball => Some("minecraft:fireball"),
+            _ => None,
+        };
+        let direct = match projectile {
+            Some(kind) => Some(horizon_client::advancements::EntityView {
+                kind: kind.into(),
+                position: d.from.unwrap_or_default(),
+                ..Default::default()
+            }),
+            None => source.clone(),
+        };
+        horizon_client::advancements::DamageView {
+            kind: damage_type(d.kind, matches!(d.attacker, Some(Who::Player))).to_owned(),
+            // DamageSource.isDirect: the causing entity is the direct one.
+            is_direct: projectile.is_none(),
+            direct,
+            source,
+            ..Default::default()
+        }
     }
     /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
     /// world's random sequence, equipment by drop chance, species extras and
@@ -1279,8 +1344,10 @@ impl Game<'_> {
                 MobEvent::Hiss { mob } => {
                     if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
                         let at = m.center();
+                        let sound = horizon_client::mobs::finalize::variant_sound(m, "hiss")
+                            .unwrap_or("entity.cat.hiss");
                         self.audio
-                            .play("minecraft:entity.cat.hiss", Some(at), 1.0, 1.0);
+                            .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
                     }
                 }
                 MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
@@ -1296,6 +1363,26 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::Bonemeal { pos } => {
+                    let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                    if self.with_level(|b, level, ticks| b.grow_crop(level, ticks, at)) {
+                        self.level_events
+                            .push(horizon_world::level::LevelEvent::LevelEvent {
+                                id: 1505,
+                                pos: at,
+                                data: 15,
+                            });
+                        let _ = self.process_level_events();
+                    }
+                }
+                MobEvent::RingBell { bell } => {
+                    let pos = BlockPos::new(bell[0], bell[1], bell[2]);
+                    let rang = self
+                        .with_level(|b, level, ticks| b.bell_attempt_to_ring(level, ticks, pos));
+                    if rang {
+                        let _ = self.process_level_events();
+                    }
+                }
                 MobEvent::ChestOpen { chest, open } => self.golem_chest_open(chest, open),
                 MobEvent::ChestSlot { chest, slot, stack } => {
                     self.golem_chest_slot(chest, slot, stack)
@@ -1857,6 +1944,9 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // getBreedOffspring creates the baby without finalizeSpawn: it keeps
+            // the default (`classic`) sound variant.
+            child.extra.sound_variant = None;
             // A llama's baby was drawn in the parent's tick, with the
             // experience.
             if let Some(o) = llama {
@@ -1952,8 +2042,12 @@ impl Game<'_> {
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
-            // Fox.getBreedOffspring: either parent's variant.
-            if p.species() == Species::Fox && !coin {
+            // Fox, Pig, Cow and Chicken.getBreedOffspring: either parent's variant.
+            if matches!(
+                p.species(),
+                Species::Fox | Species::Pig | Species::Cow | Species::Chicken
+            ) && !coin
+            {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
             if p.species() == Species::Sheep {
@@ -2082,6 +2176,10 @@ impl Game<'_> {
         let owner = self.combat.projectile_owner.take();
         if let Some(a) = attacker.or(owner) {
             self.note_attacker(damage_type, a);
+        }
+        // The projectile is the direct entity: named when it has no owner.
+        if let Some(name) = self.combat.projectile_direct.take() {
+            self.note_direct_entity(damage_type, name);
         }
         // DamageSource.scalesWithDifficulty: a mob (or its projectile's
         // owner) caused the hit, not a player.
@@ -2559,6 +2657,7 @@ impl Game<'_> {
                 let name = match sound {
                     ArrowSound::Splash => "minecraft:entity.generic.splash",
                     ArrowSound::HitGround => "minecraft:entity.arrow.hit",
+                    ArrowSound::CrossbowHit => "minecraft:item.crossbow.hit",
                     ArrowSound::Extinguish => "minecraft:entity.generic.extinguish_fire",
                     ArrowSound::TridentHitGround => "minecraft:item.trident.hit_ground",
                     ArrowSound::TridentHit => "minecraft:item.trident.hit",
@@ -2666,10 +2765,25 @@ impl Game<'_> {
         let hit = self.with_level(|b, level, ticks| {
             b.target_projectile_hit(level, ticks, block, location, face, arrow)
         });
-        if hit.is_some() {
+        if let Some(strength) = hit {
             let _ = self.process_level_events();
-            if p.owner == Some(Who::Player) {
+            if p.owner == Some(Who::Player) && (p.guest.is_none() || p.guest == self.lan_acting) {
                 self.stats.custom("target_hit", 1);
+                let kind = if p
+                    .arrow
+                    .as_ref()
+                    .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+                {
+                    "minecraft:spectral_arrow"
+                } else {
+                    p.kind.id()
+                };
+                let projectile = horizon_client::advancements::EntityView {
+                    kind: kind.to_owned(),
+                    position: [p.position.x, p.position.y, p.position.z],
+                    ..Default::default()
+                };
+                self.trigger_target_hit(&projectile, strength);
             }
         }
     }
@@ -2683,6 +2797,26 @@ impl Game<'_> {
         }
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
+            _ => None,
+        };
+        self.combat.projectile_direct = match hit {
+            Hit::Entity {
+                who: Who::Player, ..
+            } => {
+                let spectral = p
+                    .arrow
+                    .as_ref()
+                    .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow");
+                let id = if spectral {
+                    "minecraft:spectral_arrow"
+                } else {
+                    p.kind.id()
+                };
+                Some(Text::translate(
+                    &format!("entity.{}", id.replace(':', ".")),
+                    &[],
+                ))
+            }
             _ => None,
         };
         let at = match hit {
@@ -3254,7 +3388,16 @@ impl Game<'_> {
         }
         {
             let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
+            let used = self.held().cloned();
             if self.interact_leash(index, &item) {
+                if let Some(stack) = &used {
+                    let target = self.mob_entity(&self.mobs[index]);
+                    self.trigger_item_entity(
+                        "minecraft:player_interacted_with_entity",
+                        stack,
+                        &target,
+                    );
+                }
                 self.swing_arm();
                 return Ok(true);
             }
@@ -3828,6 +3971,11 @@ impl Game<'_> {
         if !handled {
             return Ok(false);
         }
+        // PlayerInteractTrigger: the item used on the mob, once the interaction took.
+        if let Some(stack) = &held {
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
+        }
         // Turtle.ageBoundaryReached: food that finishes a baby's growth.
         if baby_turtle && !self.mobs[index].is_baby() {
             self.handle_mob_events(vec![MobEvent::GiftLoot {
@@ -3871,6 +4019,9 @@ impl Game<'_> {
             }
         }
         if let Some(stack) = armor_drop {
+            // Mob.shearItem: PLAYER_SHEARED_EQUIPMENT with the armor and the wolf.
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_sheared_equipment", &stack, &target);
             self.spawn_item(stack, [center[0], center[1] + 0.5, center[2]], [0.0; 3], 10);
         }
         for (item, count) in drops {
@@ -4060,7 +4211,7 @@ impl Game<'_> {
         let (species, variant, color) =
             (parent.species(), parent.extra.variant, parent.extra.color);
         let target = self.mob_entity(&self.mobs[index]);
-        let Some(id) = self.spawn_mob(&kind, at, true) else {
+        let Some(id) = self.spawn_mob_spawned(&kind, at) else {
             return false;
         };
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
@@ -4106,7 +4257,7 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob(&kind, at, true).is_none() {
+        if self.spawn_mob_spawned(&kind, at).is_none() {
             return Ok(false);
         }
         self.swing_arm();
