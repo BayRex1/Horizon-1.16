@@ -56,7 +56,10 @@ samply record target/profiling/horizon-client --benchmark standard
 ```
 
 The binary is larger and slower to link; do not ship it. `HORIZON_SPIKES=MS`
-still prints the coarse per-frame spans from any build.
+still prints the coarse per-frame spans from any build. `HORIZON_LOG` raises
+the game's log level for a run: `HORIZON_LOG=debug`, or per target (matched by
+prefix, longest wins), `HORIZON_LOG=info,horizon_client::game=trace`. It is for
+diagnosis, not production: per-tick lines cost tick time.
 
 ## Reproduce it
 
