@@ -225,7 +225,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
             t.species,
             t.width as f32,
             t.height as f32,
-            Category::from_name(&t.category),
+            t.spawn_category,
         ))
     }
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
@@ -494,7 +494,7 @@ impl<'a> Game<'a> {
                 .iter()
                 .map(|m| Counted {
                     entity: &m.kind.id,
-                    category: Category::from_name(&m.kind.category),
+                    category: m.kind.spawn_category,
                     block: [
                         m.position.x.floor() as i32,
                         m.position.y.floor() as i32,

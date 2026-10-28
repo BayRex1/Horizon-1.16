@@ -133,6 +133,7 @@ pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
             height: 1.8,
             eye_height: 1.62,
             category: "misc".into(),
+            spawn_category: horizon_client::mobs::spawn_selection::Category::Misc,
             max_health: 20.0,
             speed: 0.1,
             flying_speed: 0.02,

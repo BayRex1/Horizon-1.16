@@ -246,6 +246,7 @@ mod tests {
             height: 0.5,
             eye_height: 0.4,
             category: "creature".into(),
+            spawn_category: crate::mobs::spawn_selection::Category::Creature,
             max_health: 3.0,
             speed: 0.3,
             flying_speed: 0.4,
