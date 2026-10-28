@@ -106,6 +106,13 @@ enum Received {
     Chunk(Arc<ChunkFormat>),
 }
 
+/// Where the signed-in account's own skin fetch stands.
+enum OwnTextures {
+    Idle,
+    Fetching(std::sync::mpsc::Receiver<Option<horizon_client::skins::Textures>>),
+    Done,
+}
+
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
@@ -182,6 +189,10 @@ pub(super) struct Remote {
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
+    /// The signed-in account's own textures, fetched once after joining:
+    /// servers that don't send the local player's profile (single player,
+    /// LAN) leave it on the default skin otherwise.
+    own_textures: OwnTextures,
     /// The skin texture each profile's players show, once its download is ready.
     skins: HashMap<u128, String>,
     listed: std::collections::HashSet<u128>,
@@ -493,6 +504,7 @@ impl Game<'_> {
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
+            own_textures: OwnTextures::Idle,
             skins: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
@@ -3108,6 +3120,11 @@ impl Game<'_> {
             return;
         };
         let local = r.profile;
+        self.poll_own_textures();
+        let Some(r) = self.remote.as_ref() else {
+            return;
+        };
+        let entries: Vec<(u128, horizon_client::skins::Textures)> = r
         let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()
