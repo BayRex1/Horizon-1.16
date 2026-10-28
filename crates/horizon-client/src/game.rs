@@ -1821,6 +1821,8 @@ struct Game<'a> {
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
+    /// The item indices a hopper's column holds, reused across hoppers.
+    item_candidates: Vec<u32>,
     /// `tick_items`'s removed mask and cell grid, reused across ticks.
     item_removed: Vec<bool>,
     item_cells: horizon_client::entities::ItemCells,
@@ -13980,6 +13982,7 @@ impl<'a> Game<'a> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             item_columns: None,
+            item_candidates: Vec::new(),
             item_removed: Vec::new(),
             item_cells: Default::default(),
             creative_screen: prepared.creative_screen,
