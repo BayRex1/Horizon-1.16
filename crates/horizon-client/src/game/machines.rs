@@ -1343,12 +1343,7 @@ mod item_column_tests {
             match round % 3 {
                 0 => {
                     next_id += 1;
-                    items.push(item(
-                        next_id,
-                        next(8.0) - 4.0,
-                        64.0,
-                        next(8.0) - 4.0,
-                    ));
+                    items.push(item(next_id, next(8.0) - 4.0, 64.0, next(8.0) - 4.0));
                 }
                 1 if !items.is_empty() => {
                     let i = next(items.len() as f64) as usize;
