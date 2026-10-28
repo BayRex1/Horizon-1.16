@@ -848,6 +848,7 @@ mod tests {
             height: 1.95,
             eye_height: 1.62,
             category: "misc".into(),
+            spawn_category: crate::mobs::spawn_selection::Category::Misc,
             max_health: 20.0,
             speed: 0.5,
             flying_speed: 0.02,

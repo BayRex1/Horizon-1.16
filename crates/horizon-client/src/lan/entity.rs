@@ -16,6 +16,7 @@ use horizon_protocol::{
         SetEntityMotion, SetEquipment, SetPassengers, UpdateAttributes, VecDelta,
     },
 };
+use std::sync::Arc;
 
 /// The attribute instances of `now` that differ from what `sent` held (an
 /// instance is never removed: one that disappears is left as it was sent).
@@ -607,7 +608,7 @@ pub struct Viewer<'a> {
     pub chunks: &'a crate::fast_hash::FxHashSet<(i32, i32)>,
     pub tracker: &'a mut Tracker,
     /// What the tick sends it, in order.
-    pub out: &'a mut Vec<Vec<u8>>,
+    pub out: &'a mut Vec<Arc<[u8]>>,
 }
 
 /// One entity as this tick's range checks read it: where it is
@@ -666,16 +667,16 @@ pub struct Entities {
     is_moved: Vec<bool>,
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
-    bodies: Vec<Vec<u8>>,
+    bodies: Vec<Arc<[u8]>>,
 }
 
 /// The client sees the entity this tick, and already tracked it.
 const SEES: u8 = 1;
 const TRACKS: u8 = 2;
 
-fn encode_all(packets: &[play::Clientbound], bodies: &mut Vec<Vec<u8>>) {
+fn encode_all(packets: &[play::Clientbound], bodies: &mut Vec<Arc<[u8]>>) {
     bodies.clear();
-    bodies.extend(packets.iter().map(play::Clientbound::encode));
+    bodies.extend(packets.iter().map(|p| Arc::from(p.encode())));
 }
 
 impl Entities {
@@ -848,7 +849,8 @@ impl Entities {
             if !removed.is_empty() {
                 v.out.push(
                     play::Clientbound::RemoveEntities(play::RemoveEntities { ids: removed })
-                        .encode(),
+                        .encode()
+                        .into(),
                 );
             }
         }
@@ -866,7 +868,7 @@ impl Entities {
                 continue;
             }
             let mut encoded = false;
-            let mut pairing: Option<Vec<Vec<u8>>> = None;
+            let mut pairing: Option<Vec<Arc<[u8]>>> = None;
             for (v, flags) in viewers.iter_mut().zip(&self.flags) {
                 let f = flags[index];
                 if f & TRACKS != 0 {
@@ -884,7 +886,7 @@ impl Entities {
                     let bodies = pairing.get_or_insert_with(|| {
                         let mut packets = Vec::new();
                         s.pairing(e, kind, riding, &mut packets);
-                        packets.iter().map(play::Clientbound::encode).collect()
+                        packets.iter().map(|p| Arc::from(p.encode())).collect()
                     });
                     v.out.extend(bodies.iter().cloned());
                     v.tracker.seen.insert(e.id);
@@ -1237,7 +1239,7 @@ mod tests {
     struct Clients {
         chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
         trackers: [Tracker; 2],
-        out: [Vec<Vec<u8>>; 2],
+        out: [Vec<Arc<[u8]>>; 2],
         positions: [[f64; 3]; 2],
         moved: [bool; 2],
     }
@@ -1365,7 +1367,7 @@ mod tests {
         let removed = body(play::Clientbound::RemoveEntities(play::RemoveEntities {
             ids: vec![7],
         }));
-        assert_eq!(c.out[0].first(), Some(&removed));
+        assert_eq!(c.out[0].first().map(|b| &b[..]), Some(&removed[..]));
         // Gone from the level: the other client loses it too, and so does
         // the level.
         e.position[0] = 0.0;
@@ -1373,7 +1375,7 @@ mod tests {
         assert!(c.trackers[0].is_tracking(7));
         c.tick(&mut level, &[&me]);
         assert!(!c.trackers[0].is_tracking(7) && !c.trackers[1].is_tracking(7));
-        assert_eq!(c.out[0].first(), Some(&removed));
+        assert_eq!(c.out[0].first().map(|b| &b[..]), Some(&removed[..]));
         assert_eq!(level.len(), 1);
     }
 

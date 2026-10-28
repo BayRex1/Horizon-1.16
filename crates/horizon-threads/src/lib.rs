@@ -195,6 +195,26 @@ pub fn catch_stop_signals() {
 #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
 pub fn catch_stop_signals() {}
 
+/// Raise the process's sleep timer resolution to 1 ms, as vanilla's JVM does
+/// at startup: Windows otherwise rounds a `sleep` up to the ~15.6 ms system
+/// tick, so a 50 ms server tick can become 62.5 ms. The process keeps it until
+/// it exits. Returns whether the platform took it; nothing elsewhere.
+pub fn raise_timer_resolution() -> bool {
+    raise()
+}
+
+#[cfg(windows)]
+fn raise() -> bool {
+    use windows_sys::Win32::Media::timeBeginPeriod;
+    // SAFETY: winmm has no preconditions; the call only changes the timer resolution.
+    unsafe { timeBeginPeriod(1) == 0 }
+}
+
+#[cfg(not(windows))]
+fn raise() -> bool {
+    false
+}
+
 /// Give back to the OS the memory the allocator holds free, after something
 /// large was dropped: glibc keeps freed pages in the arena of the thread that
 /// allocated them, and macOS in its zones until memory runs short. Nothing
@@ -281,6 +301,15 @@ mod tests {
         .unwrap();
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         assert!(!std::thread::spawn(super::behind_server).join().unwrap());
+    }
+
+    /// The timer resolution hint is a no-op where sleep is already precise.
+    #[test]
+    fn raising_the_timer_resolution_does_nothing_off_windows() {
+        #[cfg(not(windows))]
+        assert!(!super::raise_timer_resolution());
+        #[cfg(windows)]
+        assert!(super::raise_timer_resolution());
     }
 
     /// The idle hint holds on the three platforms.

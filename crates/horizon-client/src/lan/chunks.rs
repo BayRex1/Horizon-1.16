@@ -99,9 +99,9 @@ pub struct ChunkEncoder {
     /// The save's tables, for the heightmaps.
     pub tables: Option<Arc<crate::save::SaveTables>>,
     /// Sections already looked at, by address (see `Encoded`).
-    cache: std::sync::Mutex<FxHashMap<usize, Encoded>>,
+    cache: std::sync::Mutex<SectionCache>,
     /// Each column's heightmaps, with the sections they were made from.
-    heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
+    heights: std::sync::Mutex<HeightCache>,
     /// The level's sections among a column's: all of them in the Overworld,
     /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
     sections: std::ops::Range<usize>,
@@ -126,13 +126,23 @@ struct Heights {
 /// Heightmap type ids with their packed long arrays.
 type ColumnHeightmaps = Arc<Vec<(i32, Vec<i64>)>>;
 
+/// The heightmap cache: dead columns are dropped once it grows past its cap,
+/// live ones always stay. Clearing would make every column after it recompute
+/// its heightmaps during a join.
+#[derive(Default)]
+struct HeightCache {
+    entries: HashMap<(i32, i32), Heights>,
+    /// The length at which dead entries are dropped next.
+    sweep_at: usize,
+}
+
+/// Heightmaps kept before the columns whose sections are gone are dropped.
+const HEIGHT_SWEEP: usize = CACHE_SWEEP / 4;
+
 /// A column's cached heightmaps, while it holds the sections they were made
 /// from.
-fn cached_heights(
-    heights: &HashMap<(i32, i32), Heights>,
-    chunk: &Chunk,
-) -> Option<ColumnHeightmaps> {
-    let h = heights.get(&(chunk.x, chunk.z))?;
+fn cached_heights(heights: &HeightCache, chunk: &Chunk) -> Option<ColumnHeightmaps> {
+    let h = heights.entries.get(&(chunk.x, chunk.z))?;
     let same = h.sections.len() == chunk.sections.len()
         && h.sections
             .iter()
@@ -142,20 +152,21 @@ fn cached_heights(
 }
 
 /// Cache a column's heightmaps with the sections they were made from,
-/// dropping the columns whose sections are gone once there are many.
+/// dropping the columns whose sections are gone.
 fn keep_heights(
-    heights: &mut HashMap<(i32, i32), Heights>,
+    heights: &mut HeightCache,
     key: (i32, i32),
     sections: &[Arc<Section>],
     maps: &ColumnHeightmaps,
 ) {
-    if heights.len() >= CACHE_SWEEP / 4 {
-        heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
-        if heights.len() >= CACHE_SWEEP / 8 {
-            heights.clear();
-        }
+    if heights.entries.len() >= heights.sweep_at.max(HEIGHT_SWEEP) {
+        heights
+            .entries
+            .retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
+        let len = heights.entries.len();
+        heights.sweep_at = (len + len / 4).max(HEIGHT_SWEEP);
     }
-    heights.insert(
+    heights.entries.insert(
         key,
         Heights {
             sections: sections.iter().map(Arc::downgrade).collect(),
@@ -181,6 +192,37 @@ struct Encoded {
 /// A section's blocks that have a block entity type, as (index, state) in
 /// index order (y, then z, then x).
 type Entities = Arc<[(u16, u32)]>;
+
+/// The section wire cache: dead sections are dropped once it grows past the
+/// cap, and live ones always stay (they are the working set a join walks).
+/// Clearing would throw away every section's wire bytes and light layers.
+#[derive(Default)]
+struct SectionCache {
+    entries: FxHashMap<usize, Encoded>,
+    /// The length at which dead entries are dropped next.
+    sweep_at: usize,
+}
+impl SectionCache {
+    fn entry<'a>(
+        &'a mut self,
+        section: &Arc<Section>,
+        non_air: impl FnOnce(&Section) -> bool,
+    ) -> &'a mut Encoded {
+        let key = Arc::as_ptr(section) as usize;
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.sweep_at.max(CACHE_SWEEP)
+        {
+            self.entries.retain(|_, e| e.section.strong_count() > 0);
+            let len = self.entries.len();
+            self.sweep_at = (len + len / 4).max(CACHE_SWEEP);
+        }
+        self.entries.entry(key).or_insert_with(|| Encoded {
+            section: Arc::downgrade(section),
+            non_air: non_air(section),
+            wire: None,
+            light: None,
+        })
+    }
+}
 
 /// One section's light as DataLayers (two blocks per byte, the even one in
 /// the low nibble), and whether each holds any light.
@@ -473,25 +515,8 @@ impl ChunkEncoder {
     }
 
     /// A section's entry in the locked cache, made with `non_air` when missing.
-    fn entry<'a>(
-        &self,
-        cache: &'a mut FxHashMap<usize, Encoded>,
-        section: &Arc<Section>,
-    ) -> &'a mut Encoded {
-        if cache.len() >= CACHE_SWEEP {
-            cache.retain(|_, e| e.section.strong_count() > 0);
-            if cache.len() >= CACHE_SWEEP / 2 {
-                cache.clear();
-            }
-        }
-        cache
-            .entry(Arc::as_ptr(section) as usize)
-            .or_insert_with(|| Encoded {
-                section: Arc::downgrade(section),
-                non_air: self.non_air(section),
-                wire: None,
-                light: None,
-            })
+    fn entry<'a>(&self, cache: &'a mut SectionCache, section: &Arc<Section>) -> &'a mut Encoded {
+        cache.entry(section, |s| self.non_air(s))
     }
 
     /// LevelChunkSection.hasOnlyAir, negated.
@@ -528,7 +553,9 @@ impl ChunkEncoder {
         self.sections = lo..(lo + n).min(SECTIONS);
         self.sky = sky;
         // The heightmaps depend on the level's height.
-        self.heights.get_mut().unwrap().clear();
+        let heights = self.heights.get_mut().unwrap();
+        heights.entries.clear();
+        heights.sweep_at = 0;
     }
     pub fn entity_type(&self, state: u32) -> Option<i32> {
         self.entity_types
@@ -635,6 +662,7 @@ impl ChunkEncoder {
                 .flat_map(|c| &c.sections[self.sections.clone()])
                 .filter(|s| {
                     cache
+                        .entries
                         .get(&(Arc::as_ptr(s) as usize))
                         .is_none_or(|e| e.wire.is_none())
                 })
@@ -1190,6 +1218,27 @@ mod tests {
     }
 
     #[test]
+    fn cached_sections_survive_a_full_cache() {
+        let encoder = encoder();
+        let sections: Vec<Arc<Section>> = (0..CACHE_SWEEP + 32)
+            .map(|_| Arc::new(Section::default()))
+            .collect();
+        let first = Arc::as_ptr(&sections[0]) as usize;
+        {
+            let mut cache = encoder.cache.lock().unwrap();
+            for s in &sections {
+                encoder.entry(&mut cache, s);
+            }
+            // Past the old cap, nothing live was cleared.
+            assert!(cache.entries.contains_key(&first));
+            assert!(cache.entries.len() >= CACHE_SWEEP);
+        }
+        let wire = encoder.section_wire(&sections[0]);
+        assert_eq!(&*wire.0, fresh(&encoder, &sections[0]));
+        assert!(encoder.cache.lock().unwrap().entries.contains_key(&first));
+    }
+
+    #[test]
     fn cached_sections_follow_edits() {
         let encoder = encoder();
         let mut chunk = Chunk::empty(0, 0);
@@ -1406,7 +1455,7 @@ mod tests {
         assert_eq!((job.columns.len(), job.sections.len()), (16, 17 * SECTIONS));
         job.run();
         cold.keep(&job);
-        assert_eq!(cold.heights.lock().unwrap().len(), 16);
+        assert_eq!(cold.heights.lock().unwrap().entries.len(), 16);
         assert_eq!(bodies(&cold), expected);
         // Again, from the cache, with nothing left to warm.
         warmed.warm(&chunks);

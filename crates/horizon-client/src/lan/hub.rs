@@ -210,7 +210,7 @@ pub struct Hub {
     /// Each level's tracked entities, by dimension.
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<Arc<[u8]>>>,
     /// Server mods' commands, a root in the commands report's format, sent
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
@@ -302,17 +302,19 @@ fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
 
 /// The view's queue around a new centre: the queued chunks still tracked, then
 /// the tracked ones neither sent nor queued, closest first (a stable sort, so
-/// equally close chunks keep their order).
+/// equally close chunks keep their order). `queued` is reused across calls.
 fn requeue(
     queue: &mut Vec<(i32, i32)>,
     sent: &crate::fast_hash::FxHashSet<(i32, i32)>,
+    queued: &mut crate::fast_hash::FxHashSet<(i32, i32)>,
     (cx, cz): (i32, i32),
     r: i32,
 ) {
     queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
     // A walking player changes chunk every few ticks with hundreds of chunks
     // queued: a set, not a scan of the queue for each of the view's chunks.
-    let mut queued: crate::fast_hash::FxHashSet<(i32, i32)> = queue.iter().copied().collect();
+    queued.clear();
+    queued.extend(queue.iter().copied());
     for dz in -r - 2..=r + 2 {
         for dx in -r - 2..=r + 2 {
             let key = (cx + dx, cz + dz);
@@ -321,7 +323,8 @@ fn requeue(
             }
         }
     }
-    queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+    // The key is computed once per chunk, and the stable sort keeps the ties.
+    queue.sort_by_cached_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
 }
 
 /// What a level's players were last told of its clock and weather.
@@ -436,9 +439,9 @@ impl Hub {
     }
 
     pub fn broadcast(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// MinecraftServer.onGameRuleChanged: every player is told when
@@ -475,15 +478,15 @@ impl Hub {
     /// `PlayerList.broadcastAll(packet, dimension)`: the players in the
     /// level in place.
     pub fn broadcast_level(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| self.here(g)) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     pub fn broadcast_except(&self, conn: u32, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed && g.conn != conn) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// PlayerList.broadcastSystemMessage.
@@ -1168,6 +1171,15 @@ impl Hub {
                 }
             }
         }
+        let dead: Vec<u32> = self
+            .guests
+            .iter()
+            .filter(|g| g.sender.dead() && g.left_reason.is_empty())
+            .map(|g| g.conn)
+            .collect();
+        for conn in dead {
+            self.kick(conn, translatable("disconnect.timeout", &[]));
+        }
         events
     }
 
@@ -1394,9 +1406,9 @@ impl Hub {
             })
             .collect();
         self.encoder.warm(&columns);
-        let mut bodies: Vec<Vec<u8>> = columns
+        let mut bodies: Vec<Arc<[u8]>> = columns
             .iter()
-            .map(|c| self.encoder.body_in(c, world))
+            .map(|c| self.encoder.body_in(c, world).into())
             .collect();
         for (i, taken, batch) in batches {
             let g = &mut self.guests[i];
@@ -1449,7 +1461,13 @@ impl Hub {
             g.sent_chunks.remove(&(x, z));
             g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
         }
-        requeue(&mut g.chunk_queue, &g.sent_chunks, (cx, cz), r);
+        requeue(
+            &mut g.chunk_queue,
+            &g.sent_chunks,
+            &mut g.chunk_queued,
+            (cx, cz),
+            r,
+        );
     }
 
     /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
@@ -1504,9 +1522,9 @@ impl Hub {
             let Some(chunk) = world.chunks.get(&(x, z)) else {
                 continue;
             };
-            let body = self.encoder.light_update(chunk, sections);
+            let body: Arc<[u8]> = self.encoder.light_update(chunk, sections).into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
         }
     }
@@ -1560,9 +1578,9 @@ impl Hub {
                         .collect(),
                 })
             };
-            let body = packet.encode();
+            let body: Arc<[u8]> = packet.encode().into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
@@ -1576,14 +1594,15 @@ impl Hub {
                 let Some(kind) = self.encoder.entity_type(state) else {
                     continue;
                 };
-                let body = C::BlockEntityData(play::BlockEntityData {
+                let body: Arc<[u8]> = C::BlockEntityData(play::BlockEntityData {
                     pos: [x, y, z],
                     kind,
                     tag,
                 })
-                .encode();
+                .encode()
+                .into();
                 for &i in &viewers {
-                    self.guests[i].sender.send(body.clone());
+                    self.guests[i].sender.send_shared(body.clone());
                 }
             }
         }
@@ -2823,9 +2842,10 @@ mod tests {
         for r in [2, 5, 10, 12, 32] {
             let (mut a, mut b) = (Vec::new(), Vec::new());
             let mut sent = FxHashSet::default();
+            let mut queued = FxHashSet::default();
             for step in 0..60i32 {
                 let center = ((step % 17) - 8, (step * 3 % 11) - 5);
-                requeue(&mut a, &sent, center, r);
+                requeue(&mut a, &sent, &mut queued, center, r);
                 requeue_scan(&mut b, &sent, center, r);
                 assert_eq!(a, b, "radius {r}, step {step}");
                 for key in a.drain(..a.len().min(7)) {
@@ -2842,17 +2862,19 @@ mod tests {
     #[ignore]
     fn requeue_cost() {
         for r in [10, 16, 32] {
-            for (name, f) in [
-                ("scan", requeue_scan as fn(&mut _, &_, _, _)),
-                ("set", requeue as fn(&mut _, &_, _, _)),
-            ] {
+            for name in ["scan", "set"] {
                 let sent = FxHashSet::default();
+                let mut queued = FxHashSet::default();
                 let mut queue = Vec::new();
                 let start = std::time::Instant::now();
                 let moves = 200;
                 for step in 0..moves {
                     // Nothing sent yet (an explorer waiting on generation).
-                    f(&mut queue, &sent, (step, 0), r);
+                    if name == "scan" {
+                        requeue_scan(&mut queue, &sent, (step, 0), r);
+                    } else {
+                        requeue(&mut queue, &sent, &mut queued, (step, 0), r);
+                    }
                 }
                 let per = start.elapsed().as_secs_f64() * 1e6 / f64::from(moves);
                 println!(
