@@ -316,14 +316,17 @@ pub trait NaturalLevel: SpawnLevel {
     /// The `creature_world_gen_spawn_probability` attribute at a position.
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32;
     /// Every structure whose references reach the position's chunk and
-    /// whose id `wanted` takes, in the chunk's reference order.
-    fn structures_at(
+    /// whose id `wanted` takes, in the chunk's reference order: (id, inside a
+    /// piece, inside a start's box). A callback rather than a list, so a
+    /// spawn attempt never allocates the ids.
+    fn for_each_structure_at(
         &self,
         x: i32,
         y: i32,
         z: i32,
         wanted: &dyn Fn(&str) -> bool,
-    ) -> Vec<StructureAt>;
+        found: &mut dyn FnMut(&str, bool, bool),
+    );
     fn structure_spawns(&self) -> &StructureSpawns;
     /// Where the players `getNearestPlayer(x, y, z, -1, false)` measures to
     /// are: every one that is not a spectator.
@@ -676,23 +679,32 @@ pub fn mobs_at<L: NaturalLevel>(
     // most chunks are mineshafts, which override nothing).
     let overrides = l.structure_spawns();
     let monster = category == Category::Monster;
-    let structures = l.structures_at(x, y, z, &|id| {
-        (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some()
-    });
-    if category == Category::Monster
-        && name_at(l, x, y - 1, z) == "minecraft:nether_bricks"
-        && structures
-            .iter()
-            .any(|s| s.id == "minecraft:fortress" && s.in_bounds)
-    {
+    let fortress_floor =
+        monster && name_at(l, x, y - 1, z) == "minecraft:nether_bricks";
+    let mut fortress = false;
+    let mut chosen: Option<&[SpawnEntry]> = None;
+    l.for_each_structure_at(
+        x,
+        y,
+        z,
+        &|id| (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some(),
+        &mut |id, in_piece, in_bounds| {
+            if fortress_floor && id == "minecraft:fortress" && in_bounds {
+                fortress = true;
+            }
+            if chosen.is_none()
+                && let Some(o) = overrides.get(id, category.name())
+                && (if o.piece { in_piece } else { in_bounds })
+            {
+                chosen = Some(&o.spawns);
+            }
+        },
+    );
+    if fortress {
         return fortress_enemies();
     }
-    for s in &structures {
-        if let Some(o) = overrides.get(&s.id, category.name())
-            && (if o.piece { s.in_piece } else { s.in_bounds })
-        {
-            return &o.spawns;
-        }
+    if let Some(spawns) = chosen {
+        return spawns;
     }
     l.biome_spawns(x, y, z)
         .and_then(|b| b.get(category.name()))
@@ -700,7 +712,10 @@ pub fn mobs_at<L: NaturalLevel>(
 }
 
 /// `WeightedList.getRandom`.
-pub fn weighted_pick(list: &[SpawnEntry], random: &mut impl RandomSource) -> Option<SpawnEntry> {
+pub fn weighted_pick<'a>(
+    list: &'a [SpawnEntry],
+    random: &mut impl RandomSource,
+) -> Option<&'a SpawnEntry> {
     let total: i64 = list.iter().map(|e| i64::from(e.weight)).sum();
     if total <= 0 {
         return None;
@@ -709,7 +724,7 @@ pub fn weighted_pick(list: &[SpawnEntry], random: &mut impl RandomSource) -> Opt
     for e in list {
         selection -= i64::from(e.weight);
         if selection < 0 {
-            return Some(e.clone());
+            return Some(e);
         }
     }
     None
@@ -758,7 +773,9 @@ pub struct SpawnState {
     players: Vec<SpawnPlayer>,
     players_near: FxHashMap<(i32, i32), Vec<usize>>,
     player_counts: FxHashMap<usize, [i32; 8]>,
-    last_checked: Option<([i32; 3], String, f64)>,
+    /// The position and charge of the last `can_spawn` test: `after_spawn`
+    /// always follows it for the same entity and position.
+    last_checked: Option<([i32; 3], f64)>,
 }
 impl SpawnState {
     /// `NaturalSpawner.createState`: every non-persistent entity of a
@@ -874,11 +891,11 @@ impl SpawnState {
     fn can_spawn<L: NaturalLevel>(&mut self, l: &L, entity: &str, pos: [i32; 3]) -> bool {
         match l.spawn_cost(entity, pos[0], pos[1], pos[2]) {
             None => {
-                self.last_checked = Some((pos, entity.to_owned(), 0.0));
+                self.last_checked = Some((pos, 0.0));
                 true
             }
             Some(cost) => {
-                self.last_checked = Some((pos, entity.to_owned(), cost.charge));
+                self.last_checked = Some((pos, cost.charge));
                 self.energy_change(pos, cost.charge) <= cost.energy_budget
             }
         }
@@ -913,7 +930,7 @@ impl SpawnState {
         pos: [i32; 3],
     ) {
         let charge = match &self.last_checked {
-            Some((p, t, c)) if *p == pos && t == entity => *c,
+            Some((p, c)) if *p == pos => *c,
             _ => l
                 .spawn_cost(entity, pos[0], pos[1], pos[2])
                 .map_or(0.0, |c| c.charge),
@@ -1023,7 +1040,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
     for _ in 0..3 {
         let (mut x, mut z) = (x0, z0);
         // The group's entry, its type and where it was picked.
-        let mut current: Option<(SpawnEntry, Option<MobType>, [i32; 3])> = None;
+        let mut current: Option<(&SpawnEntry, Option<MobType>, [i32; 3])> = None;
         let mut group_index = 0u32;
         let mut max = (random.next_float() * 4.0).ceil() as i32;
         let mut ll = 0;
@@ -1051,7 +1068,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                 let Some(entry) = list else {
                     break;
                 };
-                max = sample_count(&entry, random) as i32;
+                max = sample_count(entry, random) as i32;
                 let kind = l.mob_type(&entry.entity);
                 current = Some((entry, kind, [x, y, z]));
             }

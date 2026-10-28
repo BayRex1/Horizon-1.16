@@ -13,7 +13,7 @@ use horizon_client::{
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Heightmap, NaturalLevel, SpawnCost, SpawnPlayer, SpawnRequest,
-            SpawnState, Spawned, StructureAt, StructureSpawns,
+            SpawnState, Spawned, StructureSpawns,
         },
     },
 };
@@ -237,22 +237,19 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32 {
         self.biome(x, y, z).map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(
+    fn for_each_structure_at(
         &self,
         x: i32,
         y: i32,
         z: i32,
         wanted: &dyn Fn(&str) -> bool,
-    ) -> Vec<StructureAt> {
-        self.game
-            .structures_reaching_where([x, y, z], wanted)
-            .into_iter()
-            .map(|(id, in_piece)| StructureAt {
-                id,
-                in_piece,
-                in_bounds: true,
-            })
-            .collect()
+        found: &mut dyn FnMut(&str, bool, bool),
+    ) {
+        self.game.for_each_structure_reaching(
+            [x, y, z],
+            wanted,
+            &mut |id, in_piece| found(id, in_piece, true),
+        )
     }
     fn structure_spawns(&self) -> &StructureSpawns {
         StructureSpawns::shared(&self.game.options.resources)

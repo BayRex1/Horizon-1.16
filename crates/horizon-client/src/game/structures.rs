@@ -16,16 +16,35 @@ impl Game<'_> {
         pos: [i32; 3],
         wanted: &dyn Fn(&str) -> bool,
     ) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = Vec::new();
+        self.for_each_structure_reaching(pos, wanted, &mut |id, piece| {
+            match out.iter_mut().find(|(name, _)| name == id) {
+                Some(e) => e.1 |= piece,
+                None => out.push((id.to_owned(), piece)),
+            }
+        });
+        out
+    }
+    /// [`Self::structures_reaching_where`] handing each id to `found` instead
+    /// of cloning it.
+    pub(super) fn for_each_structure_reaching(
+        &self,
+        pos: [i32; 3],
+        wanted: &dyn Fn(&str) -> bool,
+        found: &mut dyn FnMut(&str, bool),
+    ) {
         let Some(chunk) = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)) else {
-            return Vec::new();
+            return;
         };
         if chunk.structure_refs.is_empty() {
-            return Vec::new();
+            return;
         }
         let Some(locator) = self.end.locator() else {
-            return Vec::new();
+            return;
         };
-        let mut out: Vec<(String, bool)> = Vec::new();
+        // Deduped by id, first reference order; the pieces of every start of
+        // an id merge into one answer.
+        let mut out: Vec<(&str, bool)> = Vec::new();
         for (id, (sx, sz)) in &chunk.structure_refs {
             if !wanted(id) {
                 continue;
@@ -35,13 +54,15 @@ impl Game<'_> {
                     continue;
                 }
                 let piece = start.pieces.iter().any(|p| p.bounding_box().is_inside(pos));
-                match out.iter_mut().find(|(n, _)| *n == start.name) {
+                match out.iter_mut().find(|(name, _)| *name == &**id) {
                     Some(e) => e.1 |= piece,
-                    None => out.push((start.name.clone(), piece)),
+                    None => out.push((&**id, piece)),
                 }
             }
         }
-        out
+        for (id, piece) in out {
+            found(id, piece);
+        }
     }
     /// The structures with a piece containing `pos`.
     pub(super) fn structures_at(&self, pos: [i32; 3]) -> Vec<String> {

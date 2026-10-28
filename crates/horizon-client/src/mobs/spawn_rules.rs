@@ -92,6 +92,11 @@ pub trait SpawnLevel {
 fn name<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> &str {
     &l.facts().get(l.state(x, y, z)).name
 }
+/// `name` of the block below (only the hoglin/piglin arms ask for it, so it
+/// must not be allocated up front for every check).
+fn below<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> &str {
+    name(l, x, y - 1, z)
+}
 fn fluid<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> Fluid {
     l.facts().get(l.state(x, y, z)).fluid
 }
@@ -328,7 +333,6 @@ pub fn check_spawn_rules<L: SpawnLevel>(
     if !allowed_in_peaceful(s) && l.peaceful() {
         return false;
     }
-    let below = |l: &L| name(l, x, y - 1, z).to_owned();
     match s {
         S::Axolotl => tag(l, "minecraft:axolotls_spawnable_on", x, y - 1, z),
         S::Cod | S::Pufferfish | S::Salmon | S::Dolphin | S::Squid => surface_water(l, x, y, z),
@@ -443,7 +447,7 @@ pub fn check_spawn_rules<L: SpawnLevel>(
         }
         S::Ocelot => random.next_int_bound(3).unwrap_or(0) != 0,
         S::Parrot => tag(l, "minecraft:parrots_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
-        S::Hoglin | S::Piglin => below(l) != "minecraft:nether_wart_block",
+        S::Hoglin | S::Piglin => below(l, x, y, z) != "minecraft:nether_wart_block",
         S::Pillager => l.block_light(x, y, z) <= 8 && mob_rules(s, l, reason, x, y, z),
         S::PolarBear => {
             if l.biome_tag("minecraft:polar_bears_spawn_on_alternate_blocks", x, y, z) {
@@ -487,7 +491,9 @@ pub fn check_spawn_rules<L: SpawnLevel>(
             y < l.sea_level() + 4 && tag(l, "minecraft:sand", x, y - 1, z) && bright(l, x, y, z)
         }
         S::Wolf => tag(l, "minecraft:wolves_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
-        S::ZombifiedPiglin => !l.peaceful() && below(l) != "minecraft:nether_wart_block",
+        S::ZombifiedPiglin => {
+            !l.peaceful() && below(l, x, y, z) != "minecraft:nether_wart_block"
+        }
         S::Fox => tag(l, "minecraft:foxes_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
         S::Bogged
         | S::CaveSpider

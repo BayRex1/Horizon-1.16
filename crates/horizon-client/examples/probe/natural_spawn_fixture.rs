@@ -33,7 +33,7 @@ use horizon_client::{
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Event, GenEvent, Heightmap, NaturalLevel, SpawnCost,
-            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
+            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureSpawns,
             spawn_box,
         },
         spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
@@ -270,15 +270,16 @@ impl NaturalLevel for World<'_> {
         self.biome_info(x, y, z)
             .map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(
+    fn for_each_structure_at(
         &self,
         x: i32,
         y: i32,
         z: i32,
         wanted: &dyn Fn(&str) -> bool,
-    ) -> Vec<StructureAt> {
+        found: &mut dyn FnMut(&str, bool, bool),
+    ) {
         let (cx, cz) = (x >> 4, z >> 4);
-        let mut out: Vec<StructureAt> = Vec::new();
+        let mut out: Vec<(&str, bool, bool)> = Vec::new();
         for start in self.starts.iter().filter(|s| wanted(&s.id)) {
             let b = start.bounds.0;
             // Referenced: the start's box reaches the chunk's columns.
@@ -287,19 +288,17 @@ impl NaturalLevel for World<'_> {
             }
             let in_piece = start.pieces.iter().any(|p| p.has(x, y, z));
             let in_bounds = start.bounds.has(x, y, z);
-            match out.iter_mut().find(|s| s.id == start.id) {
+            match out.iter_mut().find(|s| s.0 == start.id) {
                 Some(s) => {
-                    s.in_piece |= in_piece;
-                    s.in_bounds |= in_bounds;
+                    s.1 |= in_piece;
+                    s.2 |= in_bounds;
                 }
-                None => out.push(StructureAt {
-                    id: start.id.clone(),
-                    in_piece,
-                    in_bounds,
-                }),
+                None => out.push((&start.id, in_piece, in_bounds)),
             }
         }
-        out
+        for (id, in_piece, in_bounds) in out {
+            found(id, in_piece, in_bounds);
+        }
     }
     fn structure_spawns(&self) -> &StructureSpawns {
         self.s.structures
