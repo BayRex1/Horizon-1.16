@@ -238,7 +238,7 @@ pub struct PlayerSender {
     /// Set when a reservation would pass [`MAX_PENDING`]: no more packets are
     /// queued for this client and the hub disconnects it.
     dead: Arc<AtomicBool>,
-    held: Arc<Mutex<Vec<Vec<u8>>>>,
+    held: Arc<Mutex<Vec<Arc<[u8]>>>>,
     /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
     posted: Arc<AtomicUsize>,
 }
@@ -252,12 +252,15 @@ impl PlayerSender {
             posted: Arc::default(),
         }
     }
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Arc<[u8]>>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
     /// Reserve `len` queued bytes before the body is kept: over the cap the
     /// sender is marked dead and the body dropped.
     fn reserve(&self, len: usize) -> bool {
+        if self.dead.load(Ordering::Relaxed) {
+            return false;
+        }
         let mut pending = self.pending.load(Ordering::Relaxed);
         loop {
             if pending + len > MAX_PENDING {
@@ -279,7 +282,8 @@ impl PlayerSender {
     pub fn dead(&self) -> bool {
         self.dead.load(Ordering::Relaxed)
     }
-    pub fn send(&self, body: Vec<u8>) {
+    /// Send one body, shared with every other recipient of the same bytes.
+    pub fn send_shared(&self, body: Arc<[u8]>) {
         if !self.reserve(body.len()) {
             return;
         }
@@ -290,15 +294,27 @@ impl PlayerSender {
             self.deliver(Out::Packet(body));
         }
     }
-    /// Several packets in order, as [`Self::send`] each: under one lock
-    /// while the tick holds them.
-    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+    /// Send one packet body; `send_shared` avoids the copy when the same
+    /// body goes to several players.
+    pub fn send(&self, body: Vec<u8>) {
+        self.send_shared(body.into());
+    }
+    /// Several packets in order, as [`Self::send_shared`] each: under one
+    /// lock while the tick holds them.
+    pub fn send_many<I, B>(&self, bodies: I)
+    where
+        I: IntoIterator<Item = B>,
+        B: Into<Arc<[u8]>>,
+    {
         if !HOLDING.get() {
-            bodies.into_iter().for_each(|body| self.send(body));
+            bodies
+                .into_iter()
+                .for_each(|body| self.send_shared(body.into()));
             return;
         }
         let mut held = self.held();
         for body in bodies {
+            let body = body.into();
             if !self.reserve(body.len()) {
                 break;
             }
@@ -1290,8 +1306,8 @@ mod tests {
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
         match out {
-            Out::Packet(body) => vec![body],
-            Out::Packets(bodies) => bodies,
+            Out::Packet(body) => vec![body.to_vec()],
+            Out::Packets(bodies) => bodies.iter().map(|b| b.to_vec()).collect(),
             Out::Disconnect(_) => vec![b"disconnect".to_vec()],
             Out::Close => vec![b"close".to_vec()],
         }
@@ -1389,7 +1405,7 @@ mod tests {
         while let Ok(out) = rx.try_recv() {
             let len = match out {
                 Out::Packet(body) => body.len(),
-                Out::Packets(bodies) => bodies.iter().map(Vec::len).sum(),
+                Out::Packets(bodies) => bodies.iter().map(|b| b.len()).sum(),
                 _ => 0,
             };
             sender.pending.fetch_sub(len, Ordering::Relaxed);
@@ -1397,6 +1413,10 @@ mod tests {
         }
         assert_eq!(queued, MAX_PENDING);
         assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        // A dead sender stays dead even with the queue drained.
+        sender.send(vec![1]);
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        assert!(rx.try_recv().is_err());
         // One body larger than the cap is refused outright.
         let (tx, rx) = channel();
         let sender = PlayerSender::new(tx, Arc::default());
@@ -1426,10 +1446,11 @@ mod tests {
                 body
             })
             .collect();
-        let pending = Arc::new(AtomicUsize::new(bodies.iter().map(Vec::len).sum()));
+        let pending = Arc::new(AtomicUsize::new(bodies.iter().map(|b| b.len()).sum()));
         let written = pending.clone();
         let handle = std::thread::spawn(move || write_loop(writer, rx, alive, latency, pending));
-        tx.send(Out::Packets(bodies.clone())).unwrap();
+        let shared: Vec<Arc<[u8]>> = bodies.iter().cloned().map(Arc::from).collect();
+        tx.send(Out::Packets(shared)).unwrap();
         tx.send(Out::Close).unwrap();
         handle.join().unwrap();
         assert_eq!(written.load(std::sync::atomic::Ordering::Relaxed), 0);
@@ -1440,6 +1461,22 @@ mod tests {
             .flat_map(|body| frame::encode(body, Some(64)).unwrap())
             .collect();
         assert_eq!(raw, expected);
+        assert_eq!(written.load(Ordering::Relaxed), 0);
+    }
+
+    /// A body sent to several players is one allocation: each queued copy is
+    /// the same `Arc`.
+    #[test]
+    fn shared_bodies_are_one_allocation() {
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let body: Arc<[u8]> = vec![1, 2, 3].into();
+        sender.send_shared(body.clone());
+        let Out::Packet(sent) = rx.recv().unwrap() else {
+            panic!("expected one packet");
+        };
+        assert_eq!(Arc::as_ptr(&sent), Arc::as_ptr(&body));
+        assert_eq!(&*sent, &[1, 2, 3]);
     }
 
     #[test]

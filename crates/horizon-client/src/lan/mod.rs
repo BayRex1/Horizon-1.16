@@ -74,9 +74,9 @@ pub struct Joined {
 /// Queued for a connection's writer thread.
 pub enum Out {
     /// A packet body: VarInt id and payload.
-    Packet(Vec<u8>),
+    Packet(Arc<[u8]>),
     /// Packet bodies held during a tick, in order.
-    Packets(Vec<Vec<u8>>),
+    Packets(Vec<Arc<[u8]>>),
     /// Send a play disconnect with this component, then close.
     Disconnect(horizon_world::nbt::Tag),
     Close,
