@@ -269,6 +269,10 @@ impl Game<'_> {
         }
     }
     pub(super) fn merge_remote_tree(&mut self) {}
+    pub(super) fn mod_key_rows(&self) -> Vec<horizon_client::options_ui::ModKeyRow> {
+        Vec::new()
+    }
+    pub(super) fn apply_mod_keys(&mut self) {}
     pub(super) fn sync_mods(&mut self) {}
     pub(super) fn tick_mods(&mut self) {}
     pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
@@ -393,6 +397,33 @@ impl Game<'_> {
             .map(|t| t.with_mod_commands(names.iter().map(String::as_str)));
     }
 
+    /// The running mods' keys for Controls, each mod's in the order it
+    /// registered them.
+    pub(super) fn mod_key_rows(&self) -> Vec<horizon_client::options_ui::ModKeyRow> {
+        let mods = &self.mods.mods;
+        mods.entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| Some((i, e.manifest.as_ref()?)))
+            .flat_map(|(i, m)| {
+                mods.keys_of(i)
+                    .iter()
+                    .map(|k| horizon_client::options_ui::ModKeyRow {
+                        id: m.id.clone(),
+                        title: m.name.clone(),
+                        name: k.name.clone(),
+                        label: k.label.clone(),
+                        key: k.key.clone(),
+                        default: k.default.clone(),
+                    })
+            })
+            .collect()
+    }
+    /// The keys chosen in Controls (or on a mod's page) to the running mods.
+    pub(super) fn apply_mod_keys(&mut self) {
+        let chosen = &self.settings.mods;
+        self.mods.mods.set_bindings(|id| chosen.keys_of(id));
+    }
     /// After the options changed: restart the mods if the list of the ones
     /// turned on did.
     pub(super) fn sync_mods(&mut self) {
