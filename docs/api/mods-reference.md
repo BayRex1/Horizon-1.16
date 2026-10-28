@@ -546,7 +546,7 @@ The station a recipe is made at.
 
 Access: not granted by any capability.
 
-Capability `ui` (experimental): a recipe viewer's panel beside the game's inventory and container screens (not the creative inventory), on the right of the screen. The game draws it with its own widgets and slots, pages it and keeps its search box; the mod says what it holds. The first loaded mod with a panel shows.
+Capability `ui` (experimental): a recipe viewer's panel beside the game's inventory, container and creative screens, on the right of the screen. The game draws it with its own widgets and slots, pages it and keeps its search box; the mod says what it holds. The first loaded mod with a panel shows.
 
 ### record `stack`
 
