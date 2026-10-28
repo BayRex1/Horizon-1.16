@@ -1,0 +1,18 @@
+// H8 — proposed WIT fragments for ludovic111/horizon (not applied in Omaha tree).
+// Pair with docs/H8_G4_WIT_DRAFT.md and docs/H8_G5_G6_WIT_DRAFT.md.
+
+// --- G4 world.raycast ---
+// record ray-hit { kind: string, id: string, x: f64, y: f64, z: f64, dist: f64 }
+// raycast: func(dimension: string, ox: f64, oy: f64, oz: f64,
+//               dx: f64, dy: f64, dz: f64, max-dist: f64, hit-entities: bool)
+//   -> option<ray-hit>;
+
+// --- G5 player hurt / died (server hooks) ---
+// player-hurt: func(player: player, amount: f64, source: string);
+// player-died: func(player: player, killer: string, cause: string);
+
+// --- G6 net channel ---
+// interface net {
+//   send-to-player: func(player: player, payload: list<u8>);
+//   poll: func() -> list<list<u8>>;
+// }
