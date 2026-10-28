@@ -333,6 +333,8 @@ pub struct MobType {
     pub height: f64,
     pub eye_height: f64,
     pub category: String,
+    /// `category` parsed once: natural spawning counts every mob by it.
+    pub spawn_category: spawn_selection::Category,
     pub max_health: f32,
     pub speed: f64,
     pub flying_speed: f64,
@@ -447,6 +449,7 @@ impl MobTypes {
                 }
             }
             let category = t["category"].as_str().unwrap_or("creature").to_owned();
+            let category_name = category.clone();
             let speed = attr("movement_speed").unwrap_or(0.25);
             let flags = def.flags(t["fire_immune"].as_bool().unwrap_or(false));
             out.insert(
@@ -497,6 +500,7 @@ impl MobTypes {
                         .map(tag)
                         .unwrap_or_else(|| Arc::from(Vec::new())),
                     category,
+                    spawn_category: spawn_selection::Category::from_name(&category_name),
                     id,
                 },
             );
@@ -2781,6 +2785,7 @@ mod sensor_scan_tests {
             height: 1.4,
             eye_height: 1.3,
             category: "creature".into(),
+            spawn_category: spawn_selection::Category::Creature,
             max_health: 10.0,
             speed: 0.2,
             flying_speed: 0.4,
