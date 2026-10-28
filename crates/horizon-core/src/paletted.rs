@@ -8,6 +8,8 @@
 //! in index order, and the value that did not fit is added last. Palettes
 //! never shrink while resident; `pack` writes the canonical saved form.
 
+use crate::storage::{locate, mask};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// `Strategy.createForBlockStates`: 4096 entries, linear palettes up to 4
@@ -106,20 +108,6 @@ enum Palette {
     List(Vec<u32>),
     Global,
 }
-/// `n / per_word` for `n < 4096` by multiplication: `MAGIC[bits].0 = ceil(2^20 /
-/// (64 / bits))` is exact while `n * (64 / bits) < 2^20`. `.1` is the bits a
-/// word's entries fill (`64 / bits * bits`): looked up, not divided for, as a
-/// division by a run-time value costs tens of cycles on x86.
-const MAGIC: [(u32, u32); 33] = {
-    let mut table = [(0, 0); 33];
-    let mut bits = 1;
-    while bits <= 32 {
-        let per = 64 / bits as u32;
-        table[bits] = ((1u32 << 20).div_ceil(per), per * bits as u32);
-        bits += 1;
-    }
-    table
-};
 /// Words of `bits`-wide values: `entries.div_ceil(64 / bits)`.
 pub fn storage_len(bits: u8, entries: usize) -> usize {
     if bits == 0 {
@@ -127,23 +115,6 @@ pub fn storage_len(bits: u8, entries: usize) -> usize {
     } else {
         entries.div_ceil(64 / usize::from(bits))
     }
-}
-#[inline]
-fn locate(bits: u8, i: usize) -> (usize, u32) {
-    if bits.is_power_of_two() {
-        // 64 / bits is a power of two: shifts instead of the multiplication.
-        let log = bits.trailing_zeros();
-        let word = i >> (6 - log);
-        (word, ((i & ((64 >> log) - 1)) as u32) << log)
-    } else {
-        let (magic, filled) = MAGIC[usize::from(bits)];
-        let word = (i as u32 * magic) >> 20;
-        (word as usize, i as u32 * u32::from(bits) - word * filled)
-    }
-}
-#[inline]
-fn mask(bits: u8) -> u64 {
-    (1u64 << bits) - 1
 }
 fn read(words: &[u64], bits: u8, i: usize) -> u32 {
     let (word, shift) = locate(bits, i);
@@ -476,6 +447,46 @@ impl PalettedContainer {
         let (palette, ids) = palette_ids(values);
         Self::build(strategy, palette, &ids)
     }
+    /// A container over a paletted storage handed over as-is (worldgen's
+    /// `BlockSection`): `palette` in any order, `bits` wide indices in `words`.
+    /// None for a configuration this container does not store that way
+    /// (a global palette, or storage of the wrong size).
+    pub fn from_parts(
+        strategy: Strategy,
+        palette: Vec<u32>,
+        bits: u8,
+        words: Vec<u64>,
+    ) -> Option<Self> {
+        if palette.is_empty() || palette.len() > 1 << bits {
+            return None;
+        }
+        if palette.len() == 1 {
+            return Some(Self::new(strategy, palette[0]));
+        }
+        let config = strategy.config(ceil_log2(palette.len()));
+        let Config::List(_) = config else {
+            return None;
+        };
+        if strategy.storage_bits(config) != bits {
+            return None;
+        }
+        if words.len() != storage_len(bits, strategy.entries()) {
+            return None;
+        }
+        #[cfg(debug_assertions)]
+        for i in 0..strategy.entries() {
+            debug_assert!(
+                (read(&words, bits, i) as usize) < palette.len(),
+                "palette id out of range"
+            );
+        }
+        Some(Self {
+            strategy,
+            bits,
+            palette: Palette::List(palette),
+            words,
+        })
+    }
     /// A container over a distinct-value `palette` and an id per entry.
     fn build(strategy: Strategy, palette: Vec<u32>, ids: &[u32]) -> Self {
         let config = strategy.config(ceil_log2(palette.len()));
@@ -772,6 +783,28 @@ mod tests {
             assert_eq!(b.bits(), want, "after {n} biomes");
         }
     }
+    #[test]
+    fn from_parts_hands_over_storage_unchanged() {
+        let values: Vec<u32> = (0..4096).map(|i| [7, 9, 11][i % 3]).collect();
+        let original = PalettedContainer::from_values(BLOCKS, &values);
+        let (bits, palette, words) = original.to_wire();
+        let handed =
+            PalettedContainer::from_parts(BLOCKS, palette, bits, words.to_vec()).expect("list");
+        assert_eq!(handed, original);
+        assert_eq!(handed.pack(), original.pack());
+        // Dead palette slots are accepted as long as every index is in range.
+        let (bits, mut palette, words) = original.to_wire();
+        palette.push(99);
+        let handed = PalettedContainer::from_parts(BLOCKS, palette, bits, words.to_vec());
+        assert_eq!(handed.expect("dead slot"), original);
+        // A global-palette or wrongly sized storage is refused.
+        assert!(
+            PalettedContainer::from_parts(BLOCKS, vec![0; 300], 9, vec![0; storage_len(9, 4096)])
+                .is_none()
+        );
+        assert!(PalettedContainer::from_parts(BLOCKS, vec![5, 6, 7], 4, vec![0; 8]).is_none());
+    }
+
     #[test]
     fn matches_a_plain_array_under_random_edits() {
         for (strategy, distinct) in [(BLOCKS, 700u64), (BLOCKS, 12), (BIOMES, 9), (BIOMES, 3)] {
