@@ -37,8 +37,14 @@ impl MobWorld<'_> {
             .map_or(0.8, |c| self.biomes.get(c.biome(x, y, z)).temperature)
     }
     /// `Heightmap.Types.MOTION_BLOCKING`: above the highest blocking block.
+    /// Scanned down from the cached world surface, as the weather code does:
+    /// everything at or above it is air, and air neither blocks motion nor
+    /// holds a fluid.
     pub fn motion_blocking_height(&self, x: i32, z: i32) -> i32 {
-        let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
+        let top = self
+            .world
+            .world_surface(x, z, |s| self.facts.is_air(s))
+            .min(crate::chunk::MIN_Y + crate::chunk::HEIGHT);
         (crate::chunk::MIN_Y..top)
             .rev()
             .find(|&y| {

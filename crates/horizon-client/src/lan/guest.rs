@@ -151,6 +151,8 @@ pub struct Guest {
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// The chunks `chunk_queue` holds, kept between view changes.
+    pub chunk_queued: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
     /// rate the client asks for and the chunks the next batch may hold.
@@ -317,6 +319,7 @@ impl Guest {
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
+            chunk_queued: Default::default(),
             unacknowledged: 0,
             max_unacknowledged: 1,
             chunks_per_tick: 9.0,

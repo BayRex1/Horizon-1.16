@@ -13,7 +13,7 @@ use horizon_client::{
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Heightmap, NaturalLevel, SpawnCost, SpawnPlayer, SpawnRequest,
-            SpawnState, Spawned, StructureAt, StructureSpawns,
+            SpawnState, Spawned, StructureSpawns,
         },
     },
 };
@@ -83,6 +83,9 @@ pub(super) struct GameLevel<'g, 'a> {
     /// holds the game); the first ones scan, as the build costs a few scans.
     pub(super) boxes: std::cell::OnceCell<MobBoxes>,
     pub(super) box_queries: std::cell::Cell<u32>,
+    /// The trial spawners' player snapshot, built on their first ask.
+    pub(super) trial_players:
+        std::cell::OnceCell<Vec<horizon_client::mobs::trial_spawner::TrialPlayer>>,
 }
 const SCANNED_QUERIES: u32 = 8;
 /// A mob not removed: its index in `Game::mobs`, box, alive, and whether
@@ -221,12 +224,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
     }
     fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
         let t = self.game.res.mob_types().get(entity)?;
-        Some((
-            t.species,
-            t.width as f32,
-            t.height as f32,
-            Category::from_name(&t.category),
-        ))
+        Some((t.species, t.width as f32, t.height as f32, t.spawn_category))
     }
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
         self.biome(x, y, z).map(|b| &b.spawns)
@@ -237,22 +235,18 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32 {
         self.biome(x, y, z).map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(
+    fn for_each_structure_at(
         &self,
         x: i32,
         y: i32,
         z: i32,
         wanted: &dyn Fn(&str) -> bool,
-    ) -> Vec<StructureAt> {
+        found: &mut dyn FnMut(&str, bool, bool),
+    ) {
         self.game
-            .structures_reaching_where([x, y, z], wanted)
-            .into_iter()
-            .map(|(id, in_piece)| StructureAt {
-                id,
-                in_piece,
-                in_bounds: true,
+            .for_each_structure_reaching([x, y, z], wanted, &mut |id, in_piece| {
+                found(id, in_piece, true)
             })
-            .collect()
     }
     fn structure_spawns(&self) -> &StructureSpawns {
         StructureSpawns::shared(&self.game.options.resources)
@@ -374,6 +368,7 @@ impl<'a> Game<'a> {
             pending_ids: Default::default(),
             boxes: Default::default(),
             box_queries: Default::default(),
+            trial_players: Default::default(),
         }
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the
@@ -497,7 +492,7 @@ impl<'a> Game<'a> {
                 .iter()
                 .map(|m| Counted {
                     entity: &m.kind.id,
-                    category: Category::from_name(&m.kind.category),
+                    category: m.kind.spawn_category,
                     block: [
                         m.position.x.floor() as i32,
                         m.position.y.floor() as i32,

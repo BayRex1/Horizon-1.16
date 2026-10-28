@@ -213,12 +213,13 @@ impl Game<'_> {
         &self,
         id: u32,
         equipment: &[Option<horizon_client::items::ItemStack>; 6],
-    ) -> Vec<AttributeSnapshot> {
+        out: &mut Vec<AttributeSnapshot>,
+    ) {
         const KIND: &str = "minecraft:armor_stand";
-        let mut out = Vec::new();
+        out.clear();
         if let Some(a) = self.synced_attribute(KIND, "minecraft:movement_speed") {
             instance(
-                &mut out,
+                out,
                 a,
                 self.attribute_default(KIND, "minecraft:movement_speed"),
             );
@@ -226,9 +227,8 @@ impl Game<'_> {
         let slots = horizon_client::entities::ArmorStand::SLOTS
             .into_iter()
             .zip(equipment.iter().map(|s| s.as_ref().map(|s| &s.item)));
-        self.equipment_attributes(KIND, |_| None, slots, &mut out);
-        self.generic_attributes_of(Target::Stand(id), &mut out);
-        out
+        self.equipment_attributes(KIND, |_| None, slots, out);
+        self.generic_attributes_of(Target::Stand(id), out);
     }
 
     /// The instances a server player's tick creates, and

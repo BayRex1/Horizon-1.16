@@ -8,7 +8,7 @@ use super::{
     Lan, NetEvent,
     chunks::ChunkEncoder,
     data::SyncData,
-    entity::{Entities, EntityState, Viewer},
+    entity::{Entities, EntityState, States, Viewer},
     guest::{Guest, SentEffect, stack_to_network},
 };
 use crate::{
@@ -210,7 +210,9 @@ pub struct Hub {
     /// Each level's tracked entities, by dimension.
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<Arc<[u8]>>>,
+    /// The host's and guests' states, written over last tick's in place.
+    player_states: States,
     /// Server mods' commands, a root in the commands report's format, sent
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
@@ -302,17 +304,19 @@ fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
 
 /// The view's queue around a new centre: the queued chunks still tracked, then
 /// the tracked ones neither sent nor queued, closest first (a stable sort, so
-/// equally close chunks keep their order).
+/// equally close chunks keep their order). `queued` is reused across calls.
 fn requeue(
     queue: &mut Vec<(i32, i32)>,
     sent: &crate::fast_hash::FxHashSet<(i32, i32)>,
+    queued: &mut crate::fast_hash::FxHashSet<(i32, i32)>,
     (cx, cz): (i32, i32),
     r: i32,
 ) {
     queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
     // A walking player changes chunk every few ticks with hundreds of chunks
     // queued: a set, not a scan of the queue for each of the view's chunks.
-    let mut queued: crate::fast_hash::FxHashSet<(i32, i32)> = queue.iter().copied().collect();
+    queued.clear();
+    queued.extend(queue.iter().copied());
     for dz in -r - 2..=r + 2 {
         for dx in -r - 2..=r + 2 {
             let key = (cx + dx, cz + dz);
@@ -321,7 +325,8 @@ fn requeue(
             }
         }
     }
-    queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+    // The key is computed once per chunk, and the stable sort keeps the ties.
+    queue.sort_by_cached_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
 }
 
 /// What a level's players were last told of its clock and weather.
@@ -382,6 +387,7 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            player_states: Default::default(),
             mod_commands: (serde_json::Value::Null, None),
             teams: Vec::new(),
         }
@@ -436,9 +442,9 @@ impl Hub {
     }
 
     pub fn broadcast(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// MinecraftServer.onGameRuleChanged: every player is told when
@@ -475,15 +481,15 @@ impl Hub {
     /// `PlayerList.broadcastAll(packet, dimension)`: the players in the
     /// level in place.
     pub fn broadcast_level(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| self.here(g)) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     pub fn broadcast_except(&self, conn: u32, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed && g.conn != conn) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// PlayerList.broadcastSystemMessage.
@@ -1168,6 +1174,15 @@ impl Hub {
                 }
             }
         }
+        let dead: Vec<u32> = self
+            .guests
+            .iter()
+            .filter(|g| g.sender.dead() && g.left_reason.is_empty())
+            .map(|g| g.conn)
+            .collect();
+        for conn in dead {
+            self.kick(conn, translatable("disconnect.timeout", &[]));
+        }
         events
     }
 
@@ -1394,9 +1409,9 @@ impl Hub {
             })
             .collect();
         self.encoder.warm(&columns);
-        let mut bodies: Vec<Vec<u8>> = columns
+        let mut bodies: Vec<Arc<[u8]>> = columns
             .iter()
-            .map(|c| self.encoder.body_in(c, world))
+            .map(|c| self.encoder.body_in(c, world).into())
             .collect();
         for (i, taken, batch) in batches {
             let g = &mut self.guests[i];
@@ -1449,7 +1464,13 @@ impl Hub {
             g.sent_chunks.remove(&(x, z));
             g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
         }
-        requeue(&mut g.chunk_queue, &g.sent_chunks, (cx, cz), r);
+        requeue(
+            &mut g.chunk_queue,
+            &g.sent_chunks,
+            &mut g.chunk_queued,
+            (cx, cz),
+            r,
+        );
     }
 
     /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
@@ -1504,9 +1525,9 @@ impl Hub {
             let Some(chunk) = world.chunks.get(&(x, z)) else {
                 continue;
             };
-            let body = self.encoder.light_update(chunk, sections);
+            let body: Arc<[u8]> = self.encoder.light_update(chunk, sections).into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
         }
     }
@@ -1560,9 +1581,9 @@ impl Hub {
                         .collect(),
                 })
             };
-            let body = packet.encode();
+            let body: Arc<[u8]> = packet.encode().into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
@@ -1576,14 +1597,15 @@ impl Hub {
                 let Some(kind) = self.encoder.entity_type(state) else {
                     continue;
                 };
-                let body = C::BlockEntityData(play::BlockEntityData {
+                let body: Arc<[u8]> = C::BlockEntityData(play::BlockEntityData {
                     pos: [x, y, z],
                     kind,
                     tag,
                 })
-                .encode();
+                .encode()
+                .into();
                 for &i in &viewers {
-                    self.guests[i].sender.send(body.clone());
+                    self.guests[i].sender.send_shared(body.clone());
                 }
             }
         }
@@ -1636,8 +1658,7 @@ impl Hub {
 
     fn player_state(
         &self,
-        id: i32,
-        uuid: u128,
+        e: &mut EntityState,
         position: [f64; 3],
         rot: (f32, f32, f32),
         on_ground: bool,
@@ -1647,10 +1668,9 @@ impl Hub {
         bed: Option<[i32; 3]>,
         skin: u8,
         health: f32,
-        equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
-        attributes: Vec<play::AttributeSnapshot>,
         effects: &[EffectInstance],
-    ) -> EntityState {
+    ) {
+        // `e` was reset by `States::add`; write over it so its vectors stay.
         let (sneaking, sprinting, sleeping) = flags;
         let shared = shared_flags(sneaking, sprinting, &body);
         // Player.getDesiredPose (and updatePlayerPose's crawl): sleeping,
@@ -1668,28 +1688,32 @@ impl Hub {
         } else {
             0
         };
-        let mut meta = Vec::new();
+        e.position = position;
+        (e.yaw, e.pitch, e.head_yaw) = rot;
+        e.on_ground = on_ground;
         if shared != 0 {
-            meta.push((0, serializer::BYTE, Value::Byte(shared)));
+            e.meta.push((0, serializer::BYTE, Value::Byte(shared)));
         }
         if pose != 0 {
-            meta.push((6, serializer::POSE, Value::Id(pose)));
+            e.meta.push((6, serializer::POSE, Value::Id(pose)));
         }
         // Always there: the trackers send the entries that changed, and an
         // item no longer in use is a change back to 0.
-        meta.push((8, serializer::BYTE, Value::Byte(living_flags)));
+        e.meta
+            .push((8, serializer::BYTE, Value::Byte(living_flags)));
         // LivingEntity.SLEEPING_POS: the others draw the player lying in it,
         // a player paired later too.
         if let Some(bed) = bed.filter(|_| sleeping) {
-            meta.push((14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(Some(bed))));
+            e.meta
+                .push((14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(Some(bed))));
         }
         if (health - 1.0).abs() > f32::EPSILON && health != 20.0 {
-            meta.push((9, serializer::FLOAT, Value::Float(health)));
+            e.meta.push((9, serializer::FLOAT, Value::Float(health)));
         }
         if skin != 0 {
-            meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
+            e.meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
         }
-        meta.extend(
+        e.meta.extend(
             self.effect_meta(
                 effects
                     .iter()
@@ -1697,39 +1721,21 @@ impl Hub {
                     .map(|e| (e.id, e.ambient)),
             ),
         );
-        EntityState {
-            id,
-            uuid,
-            kind: "minecraft:player".into(),
-            position,
-            yaw: rot.0,
-            pitch: rot.1,
-            head_yaw: rot.2,
-            on_ground,
-            velocity: [0.0; 3],
-            data: 0,
-            meta,
-            // The effect swirls go back to none.
-            defaults: vec![
-                (10, serializer::PARTICLES, Value::Particles(Vec::new())),
-                (11, serializer::BOOLEAN, Value::Bool(false)),
-            ],
-            equipment,
-            attributes,
-            precise: false,
-            needs_sync: false,
-            leash: None,
-        }
+        // The effect swirls go back to none.
+        e.defaults
+            .push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
+        e.defaults
+            .push((11, serializer::BOOLEAN, Value::Bool(false)));
     }
 
     fn equipment_of(
         &mut self,
+        out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         main: &Option<ItemStack>,
         off: &Option<ItemStack>,
         armor: [&Option<ItemStack>; 4],
-    ) -> Vec<(u8, Option<horizon_protocol::item::Stack>)> {
+    ) {
         // Armor is stored head..feet; the wire slots are feet(2) legs(3) chest(4) head(5).
-        let mut out = Vec::new();
         let slots = [
             (0u8, main),
             (1, off),
@@ -1743,21 +1749,17 @@ impl Hub {
                 out.push((slot, self.stack(item)));
             }
         }
-        out
     }
 
     /// All entities as one client sees them: the world's, the host, the other guests.
     fn track_entities(&mut self, ctx: &mut TickCtx) {
-        let mut all: Vec<EntityState> =
-            Vec::with_capacity(ctx.entities.len() + self.guests.len() + 1);
+        let mut states = std::mem::take(&mut self.player_states);
+        // The buffer is reused, so start this tick's pass instead of appending.
+        states.clear();
         if let Some(h) = ctx.host {
-            let equipment = {
-                let e = &h.equipment;
-                self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
-            };
-            all.push(self.player_state(
-                h.entity_id,
-                h.uuid,
+            let e = states.add(h.entity_id, h.uuid, "minecraft:player");
+            self.player_state(
+                e,
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
@@ -1767,51 +1769,56 @@ impl Hub {
                 h.bed,
                 0x7F,
                 h.health,
-                equipment,
-                h.attributes.clone(),
                 &[],
-            ));
+            );
+            let equipment = &h.equipment;
+            self.equipment_of(
+                &mut e.equipment,
+                &equipment[0],
+                &equipment[1],
+                [&equipment[5], &equipment[4], &equipment[3], &equipment[2]],
+            );
+            e.attributes.extend_from_slice(&h.attributes);
         }
         let placed: Vec<usize> = (0..self.guests.len())
             .filter(|&i| self.here(&self.guests[i]))
             .collect();
-        let guest_states: Vec<_> = placed
-            .into_iter()
-            .map(|i| {
-                let (main, off, armor) = {
-                    let g = &self.guests[i];
-                    (
-                        g.inventory.get(g.selected).cloned().flatten(),
-                        g.offhand.clone(),
-                        g.armor.clone(),
-                    )
-                };
-                let equipment =
-                    self.equipment_of(&main, &off, [&armor[0], &armor[1], &armor[2], &armor[3]]);
+        for i in placed {
+            let g = &self.guests[i];
+            let e = states.add(g.entity_id, g.uuid, "minecraft:player");
+            self.player_state(
+                e,
+                g.position,
+                (g.yaw, g.pitch, g.head_yaw),
+                g.on_ground,
+                (g.sneaking, g.sprinting, g.sleeping),
+                guest_body(g),
+                g.living_flags,
+                g.bed,
+                g.info.model_customisation,
+                g.health,
+                &g.effects.list,
+            );
+            let (main, off, armor) = {
                 let g = &self.guests[i];
-                self.player_state(
-                    g.entity_id,
-                    g.uuid,
-                    g.position,
-                    (g.yaw, g.pitch, g.head_yaw),
-                    g.on_ground,
-                    (g.sneaking, g.sprinting, g.sleeping),
-                    guest_body(g),
-                    g.living_flags,
-                    g.bed,
-                    g.info.model_customisation,
-                    g.health,
-                    equipment,
-                    g.motion
-                        .as_ref()
-                        .map(|m| super::attributes::syncable(&m.attributes))
-                        .unwrap_or_default(),
-                    &g.effects.list,
+                (
+                    g.inventory.get(g.selected).cloned().flatten(),
+                    g.offhand.clone(),
+                    g.armor.clone(),
                 )
-            })
-            .collect();
-        all.extend(guest_states);
-        let entities: Vec<&EntityState> = all.iter().chain(ctx.entities).collect();
+            };
+            self.equipment_of(
+                &mut e.equipment,
+                &main,
+                &off,
+                [&armor[0], &armor[1], &armor[2], &armor[3]],
+            );
+            if let Some(m) = self.guests[i].motion.as_ref() {
+                e.attributes
+                    .extend(super::attributes::syncable(&m.attributes));
+            }
+        }
+        let entities: Vec<&EntityState> = states.as_slice().iter().chain(ctx.entities).collect();
         // ChunkMap.tick: the level's entities, once for all its players.
         let mut level = self
             .entities
@@ -1846,6 +1853,7 @@ impl Hub {
             g.sender.send_many(out.drain(..));
         }
         self.entity_out = outs;
+        self.player_states = states;
         self.entities.insert(self.config.dimension.clone(), level);
     }
 
@@ -2823,9 +2831,10 @@ mod tests {
         for r in [2, 5, 10, 12, 32] {
             let (mut a, mut b) = (Vec::new(), Vec::new());
             let mut sent = FxHashSet::default();
+            let mut queued = FxHashSet::default();
             for step in 0..60i32 {
                 let center = ((step % 17) - 8, (step * 3 % 11) - 5);
-                requeue(&mut a, &sent, center, r);
+                requeue(&mut a, &sent, &mut queued, center, r);
                 requeue_scan(&mut b, &sent, center, r);
                 assert_eq!(a, b, "radius {r}, step {step}");
                 for key in a.drain(..a.len().min(7)) {
@@ -2842,17 +2851,19 @@ mod tests {
     #[ignore]
     fn requeue_cost() {
         for r in [10, 16, 32] {
-            for (name, f) in [
-                ("scan", requeue_scan as fn(&mut _, &_, _, _)),
-                ("set", requeue as fn(&mut _, &_, _, _)),
-            ] {
+            for name in ["scan", "set"] {
                 let sent = FxHashSet::default();
+                let mut queued = FxHashSet::default();
                 let mut queue = Vec::new();
                 let start = std::time::Instant::now();
                 let moves = 200;
                 for step in 0..moves {
                     // Nothing sent yet (an explorer waiting on generation).
-                    f(&mut queue, &sent, (step, 0), r);
+                    if name == "scan" {
+                        requeue_scan(&mut queue, &sent, (step, 0), r);
+                    } else {
+                        requeue(&mut queue, &sent, &mut queued, (step, 0), r);
+                    }
                 }
                 let per = start.elapsed().as_secs_f64() * 1e6 / f64::from(moves);
                 println!(
