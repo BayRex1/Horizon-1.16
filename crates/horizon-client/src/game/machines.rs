@@ -67,20 +67,54 @@ impl View {
         }
         None
     }
-    /// `WorldlyContainer.getSlotsForFace` or every slot.
-    fn slots_for_face(&self, face: Option<Direction>) -> Vec<usize> {
-        match (self.kind, face) {
-            (Kind::Furnace, Some(Direction::Down)) => vec![2, 1],
-            (Kind::Furnace, Some(Direction::Up)) => vec![0],
-            (Kind::Furnace, Some(_)) => vec![1],
-            (Kind::Brewing, Some(Direction::Up)) => vec![3],
-            (Kind::Brewing, Some(Direction::Down)) => vec![0, 1, 2, 3],
-            (Kind::Brewing, Some(_)) => vec![0, 1, 2, 4],
-            (Kind::Composter(8), Some(Direction::Down)) => vec![0],
-            (Kind::Composter(level), Some(Direction::Up)) if level < 7 => vec![0],
-            (Kind::Composter(_), _) => vec![],
-            _ => (0..self.len()).collect(),
+}
+
+/// `getSlotsForFace(Direction.DOWN)` in vanilla's order, written into `out`
+/// (a double chest has 54 slots). `tryTakeInItemFromSlot` walks it in order:
+/// a furnace gives its output before its fuel.
+fn down_slots(kind: Kind, len: usize, out: &mut [usize; 64]) -> usize {
+    let end = len.min(out.len());
+    let mut n = 0;
+    let mut push = |slot: usize| {
+        out[n] = slot;
+        n += 1;
+    };
+    match kind {
+        Kind::Furnace => {
+            push(2);
+            push(1);
         }
+        Kind::Brewing => {
+            for slot in 0..4 {
+                push(slot);
+            }
+        }
+        Kind::Composter(8) => push(0),
+        Kind::Composter(_) => {}
+        _ => {
+            for slot in 0..end {
+                push(slot);
+            }
+        }
+    }
+    n
+}
+
+/// `WorldlyContainer.getSlotsForFace` membership or every slot. The only
+/// transfer that reads the order (a furnace's `[2, 1]`) rejects the output
+/// slot first anyway, so callers may walk the slots ascending.
+fn slot_for_face(kind: Kind, face: Option<Direction>, slot: usize) -> bool {
+    match (kind, face) {
+        (Kind::Furnace, Some(Direction::Down)) => matches!(slot, 1 | 2),
+        (Kind::Furnace, Some(Direction::Up)) => slot == 0,
+        (Kind::Furnace, Some(_)) => slot == 1,
+        (Kind::Brewing, Some(Direction::Up)) => slot == 3,
+        (Kind::Brewing, Some(Direction::Down)) => slot <= 3,
+        (Kind::Brewing, Some(_)) => matches!(slot, 0 | 1 | 2 | 4),
+        (Kind::Composter(8), Some(Direction::Down)) => slot == 0,
+        (Kind::Composter(level), Some(Direction::Up)) if level < 7 => slot == 0,
+        (Kind::Composter(_), _) => false,
+        _ => true,
     }
 }
 
@@ -316,10 +350,12 @@ impl Containers<'_> {
     }
     /// `HopperBlockEntity.isFullContainer`.
     fn is_full(&self, view: &View, face: Direction) -> bool {
-        view.slots_for_face(Some(face)).into_iter().all(|i| {
-            self.get(view, i)
-                .is_some_and(|s| s.count >= self.max_stack(s))
-        })
+        (0..view.len())
+            .filter(|&i| slot_for_face(view.kind, Some(face), i))
+            .all(|i| {
+                self.get(view, i)
+                    .is_some_and(|s| s.count >= self.max_stack(s))
+            })
     }
     /// `AbstractContainerMenu.getRedstoneSignalFromContainer`.
     fn signal(&self, view: &View) -> i32 {
@@ -509,7 +545,8 @@ impl Game<'_> {
         if !c.can_place(view, slot, &stack) {
             return Some(stack);
         }
-        let was_empty = c.is_empty(view);
+        // Only a hopper destination reads this, for its transfer cooldown.
+        let was_empty = view.kind == Kind::Hopper && c.is_empty(view);
         let max = c.max_stack(&stack);
         let mut success = false;
         let target = self.slot_mut_at(view, slot)?;
@@ -557,13 +594,8 @@ impl Game<'_> {
             let (x, y, z) = view.parts[0].0;
             return self.composter_container_insert([x, y, z], stack, face == Some(Direction::Up));
         }
-        let slots = if matches!(view.kind, Kind::Furnace | Kind::Brewing) && face.is_some() {
-            view.slots_for_face(face)
-        } else {
-            (0..view.len()).collect()
-        };
         let mut rest = Some(stack);
-        for slot in slots {
+        for slot in (0..view.len()).filter(|&i| slot_for_face(view.kind, face, i)) {
             let Some(stack) = rest.take() else { break };
             rest = self.try_move_in_item(from_hopper, view, stack, slot);
         }
@@ -769,7 +801,9 @@ impl Game<'_> {
         source: &View,
         hopper: &View,
     ) -> bool {
-        for slot in source.slots_for_face(Some(Direction::Down)) {
+        let mut slots = [0; 64];
+        let count = down_slots(source.kind, source.len(), &mut slots);
+        for &slot in &slots[..count] {
             let c = self.containers();
             let Some(stack) = c.get(source, slot) else {
                 continue;
