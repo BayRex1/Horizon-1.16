@@ -49,6 +49,29 @@ impl Fixture {
         )
         .unwrap();
     }
+    fn hardcore_world(&self, folder: &str, name: &str) {
+        crate::save::write_dat(
+            &self.title.saves.join(folder).join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String(name.into())),
+                    ("GameType", Tag::Int(0)),
+                    ("hardcore", Tag::Byte(1)),
+                    ("allowCommands", Tag::Byte(0)),
+                    (
+                        "WorldGenSettings",
+                        Tag::compound([("seed", Tag::Long(123456))]),
+                    ),
+                    (
+                        "Version",
+                        Tag::compound([("Name", Tag::String("26.3".into()))]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+    }
     fn click(&mut self, label: &str) -> Action {
         self.click_with_sound(label).0
     }
@@ -898,4 +921,14 @@ fn server_fields_edit_at_their_cursor() {
         panic!("direct");
     };
     assert_eq!(address, "one ");
+}
+
+#[test]
+fn hardcore_world_in_list_reports_hardcore_mode() {
+    let f = Fixture::new();
+    f.hardcore_world("HardcoreSave", "Survival Hardcore");
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 1);
+    assert!(worlds[0].hardcore);
+    assert!(!worlds[0].creative);
 }

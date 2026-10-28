@@ -2737,6 +2737,9 @@ impl Level {
             level.hardcore = n(d.get("hardcore")) != 0;
             level.difficulty_locked = n(d.get("locked")) != 0;
         }
+        if n(data.get("hardcore")) != 0 {
+            level.hardcore = true;
+        }
         level.allow_commands = Some(n(data.get("allowCommands")) != 0);
         let mut rules: BTreeMap<String, i32> = GAME_RULES
             .iter()
@@ -3245,6 +3248,7 @@ impl Level {
             ("version", Tag::Int(19133)),
             ("LevelName", string(&self.name)),
             ("GameType", Tag::Int(self.mode())),
+            ("hardcore", Tag::Byte(i8::from(self.hardcore))),
             ("Time", Tag::Long(self.time)),
             ("LastPlayed", Tag::Long(now)),
             (
