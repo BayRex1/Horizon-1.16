@@ -667,7 +667,9 @@ impl Game<'_> {
             return;
         }
         self.mod_input_frame();
-        if self.mods.mods.wants_frames() {
+        // Connection cleanup must also run for mods that only request ticks:
+        // after leaving an in-frame world there are no more ticks to stop PCM/UDP.
+        if self.mods.mods.wants_frames() || self.mods.mods.is_connected() != self.player.is_some() {
             let snapshot = self.mod_snapshot();
             self.mods.mods.set_snapshot(snapshot);
         }

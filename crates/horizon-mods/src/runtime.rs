@@ -741,6 +741,10 @@ impl Mods {
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
+    /// Whether the last host snapshot describes an active play session.
+    pub fn is_connected(&self) -> bool {
+        self.snapshot.connected
+    }
     /// Apply live microphone grants. Revocation immediately silences capture.
     pub fn set_microphone_permissions(&mut self, grants: &std::collections::BTreeSet<String>) {
         self.microphone_permissions = grants.clone();
