@@ -108,6 +108,9 @@ impl Game<'_> {
     }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
         let mut ui = std::mem::take(&mut self.ui.options);
+        if !ui.waiting_for_key() {
+            ui.mod_keys = self.mod_key_rows();
+        }
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
     }
@@ -183,7 +186,7 @@ impl Game<'_> {
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
-        self.ui.options.selected_key.is_some()
+        self.ui.options.waiting_for_key()
     }
     pub(super) fn options_bind_mouse(&mut self, button: MouseButton) -> Result<()> {
         let events = self.ui.options.bind_mouse(&mut self.settings, button);
@@ -197,6 +200,7 @@ impl Game<'_> {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
                     self.sync_mods();
+                    self.apply_mod_keys();
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();
                 }

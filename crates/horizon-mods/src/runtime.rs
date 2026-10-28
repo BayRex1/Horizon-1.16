@@ -1621,6 +1621,8 @@ pub struct ModKey {
     pub label: String,
     /// `key.keyboard.r`.
     pub key: String,
+    /// The key the mod registered, for Controls' Reset.
+    pub default: String,
 }
 
 /// What capability `input` holds for one mod.
@@ -1686,18 +1688,24 @@ impl input::Host for State {
             ));
         }
         let (name, label) = (clip(name), clip(label));
+        let default = key.clone();
         let key = match self.input.bindings.iter().find(|(n, _)| *n == name) {
             Some((_, chosen)) => chosen.clone(),
             None => key,
         };
         if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
-            (k.label, k.key) = (label, key);
+            (k.label, k.key, k.default) = (label, key, default);
             return Ok(());
         }
         if self.input.keys.len() == KEYS {
             return Err(format!("a mod may register {KEYS} keys"));
         }
-        self.input.keys.push(ModKey { name, label, key });
+        self.input.keys.push(ModKey {
+            name,
+            label,
+            key,
+            default,
+        });
         Ok(())
     }
     fn held(&mut self) -> Option<HeldItem> {

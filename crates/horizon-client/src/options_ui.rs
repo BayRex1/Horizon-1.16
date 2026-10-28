@@ -861,6 +861,10 @@ enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
+    /// A running mod's key (`input.register-key`), by its row in
+    /// `mod_keys`: wait for a key, reset it to the mod's default.
+    ModKey(usize),
+    ResetModKey(usize),
     /// Controller binds: wait for a button, reset one, reset all.
     PadKey(&'static str),
     ResetPadKey(&'static str),
@@ -908,6 +912,20 @@ struct Widget {
     /// Scrolls with the list (clipped to the list area).
     list: bool,
 }
+/// A running mod's key as Key Binds lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModKeyRow {
+    /// The mod's id (`horizon-mods.txt` keeps its keys under it) and title.
+    pub id: String,
+    pub title: String,
+    /// The mod's name for the key, its label, the bound key and the
+    /// default the mod registered.
+    pub name: String,
+    pub label: String,
+    pub key: String,
+    pub default: String,
+}
+
 /// What the game must do after an interaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -965,6 +983,11 @@ pub struct OptionsUi {
     pub(crate) scrollbar_drag_y: Option<f32>,
     /// Key Binds: the mapping waiting for a key.
     pub selected_key: Option<&'static str>,
+    /// Key Binds: the running mods' keys, listed after vanilla's under
+    /// each mod's name; the game fills it while the options are drawn.
+    pub mod_keys: Vec<ModKeyRow>,
+    /// Key Binds: the mod key row waiting for a key.
+    pub selected_mod_key: Option<usize>,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -1002,6 +1025,8 @@ impl Default for OptionsUi {
             slider_value: None,
             scrollbar_drag_y: None,
             selected_key: None,
+            mod_keys: Vec::new(),
+            selected_mod_key: None,
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -1124,6 +1149,7 @@ impl OptionsUi {
         self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
+        self.selected_mod_key = None;
     }
     fn push(&mut self, page: Page) {
         self.stack.push(page);
@@ -1766,6 +1792,72 @@ impl OptionsUi {
                         Act::ResetKey(name_static),
                     );
                     out.push(if s.keys.is_default(name) {
+                        inactive(reset)
+                    } else {
+                        reset
+                    });
+                    y += 20.0;
+                }
+                // The running mods' keys, each mod under its own name, as
+                // a mod's KeyMapping category lists them in vanilla's
+                // Controls (Fabric's KeyBindingHelper).
+                let mut last_mod = "";
+                for (i, row) in self.mod_keys.iter().enumerate() {
+                    if !(query.is_empty()
+                        || row.label.to_lowercase().contains(&query)
+                        || row.title.to_lowercase().contains(&query))
+                    {
+                        continue;
+                    }
+                    if row.id != last_mod {
+                        last_mod = &row.id;
+                        let label = Text::literal(row.title.clone()).with_style(&Style {
+                            bold: Some(true),
+                            underlined: Some(true),
+                            ..Style::default()
+                        });
+                        out.push(Widget {
+                            x: 0.0,
+                            y: y + 7.0,
+                            w,
+                            h: 9.0,
+                            kind: WKind::Text {
+                                text: label,
+                                color: u32::MAX,
+                                centered: true,
+                            },
+                            list: false,
+                        });
+                        y += 20.0;
+                    }
+                    out.push(Widget {
+                        x: row_left + 2.0,
+                        y: y + 6.0,
+                        w: 200.0,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: Text::literal(row.label.clone()),
+                            color: u32::MAX,
+                            centered: false,
+                        },
+                        list: false,
+                    });
+                    let mut message = keybinds::display_name(&row.key);
+                    if self.selected_mod_key == Some(i) {
+                        message = Text::literal("> ")
+                            .append(message.with_style(&Style {
+                                color: Some(text::WHITE),
+                                underlined: Some(true),
+                                ..Style::default()
+                            }))
+                            .append(" <")
+                            .with_color(text::YELLOW);
+                    }
+                    let reset_x = scrollbar_x - 50.0 - 10.0;
+                    let change_x = reset_x - 5.0 - 75.0;
+                    out.push(button(change_x, y, 75.0, message, Act::ModKey(i)));
+                    let reset = button(reset_x, y, 50.0, tr("controls.reset"), Act::ResetModKey(i));
+                    out.push(if row.key == row.default {
                         inactive(reset)
                     } else {
                         reset
@@ -2462,7 +2554,7 @@ impl OptionsUi {
             return events;
         }
         // Key Binds: a mouse button pressed while waiting binds it.
-        if self.selected_key.is_some() {
+        if self.selected_key.is_some() || self.selected_mod_key.is_some() {
             let button = if right {
                 winit::event::MouseButton::Right
             } else {
@@ -2532,12 +2624,24 @@ impl OptionsUi {
                             }
                         }
                         Act::Key(name) => self.selected_key = Some(name),
+                        Act::ModKey(i) => self.selected_mod_key = Some(i),
+                        Act::ResetModKey(i) => {
+                            if let Some(row) = self.mod_keys.get(i) {
+                                let default = row.default.clone();
+                                self.set_mod_key(s, i, default);
+                                events.push(Event::Changed);
+                            }
+                        }
                         Act::ResetKey(name) => {
                             s.keys.set(name, KeyBinds::default_of(name));
                             events.push(Event::Changed);
                         }
                         Act::ResetKeys => {
                             s.keys.reset_all();
+                            for i in 0..self.mod_keys.len() {
+                                let default = self.mod_keys[i].default.clone();
+                                self.set_mod_key(s, i, default);
+                            }
                             events.push(Event::Changed);
                         }
                         Act::PadKey(action) => self.selected_pad_action = Some(action),
@@ -2672,6 +2776,7 @@ impl OptionsUi {
         self.dragging = None;
         self.slider_value = None;
         self.selected_key = None;
+        self.selected_mod_key = None;
         self.selected_pad_action = None;
         match page {
             Page::Language => {
@@ -2728,7 +2833,10 @@ impl OptionsUi {
         shortcut: crate::clipboard::EditShortcut,
         clipboard: &mut dyn crate::clipboard::Clipboard,
     ) -> bool {
-        if self.resource_error.is_some() || self.selected_key.is_some() {
+        if self.resource_error.is_some()
+            || self.selected_key.is_some()
+            || self.selected_mod_key.is_some()
+        {
             return false;
         }
         if self.page() == Page::Packs
@@ -2752,6 +2860,10 @@ impl OptionsUi {
         false
     }
     fn bind_key(&mut self, s: &mut Settings, value: String) -> Vec<Event> {
+        if let Some(i) = self.selected_mod_key.take() {
+            self.set_mod_key(s, i, value);
+            return vec![Event::Changed];
+        }
         let Some(name) = self.selected_key.take() else {
             return Vec::new();
         };
@@ -2759,6 +2871,23 @@ impl OptionsUi {
             s.keys.set(name, &value);
         }
         vec![Event::Changed]
+    }
+    /// A mapping or a mod key waits for a key or a mouse button.
+    pub fn waiting_for_key(&self) -> bool {
+        self.selected_key.is_some() || self.selected_mod_key.is_some()
+    }
+    /// Binds mod key row `i` to `value`: shown at once, kept in the mod
+    /// list's file, handed to the mod when the game applies the change.
+    fn set_mod_key(&mut self, s: &mut Settings, i: usize, value: String) {
+        let Some(row) = self.mod_keys.get_mut(i) else {
+            return;
+        };
+        row.key = value.clone();
+        s.mods
+            .keys
+            .entry(row.id.clone())
+            .or_default()
+            .insert(row.name.clone(), value);
     }
     /// Mouse bindings use the same settings and persistence as keyboard bindings.
     pub fn bind_mouse(
@@ -2808,7 +2937,7 @@ impl OptionsUi {
             }
             return vec![Event::Changed];
         }
-        if self.selected_key.is_some() {
+        if self.selected_key.is_some() || self.selected_mod_key.is_some() {
             // KeyBindsScreen.keyPressed: Escape unbinds.
             let value = if key == K::Escape {
                 "key.keyboard.unknown".to_owned()
@@ -2995,6 +3124,56 @@ mod tests {
     }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn mod_keys_are_listed_rebound_and_reset_in_key_binds() {
+        use winit::keyboard::KeyCode;
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        ui.mod_keys = vec![ModKeyRow {
+            id: "swing".into(),
+            title: "Spider-Man".into(),
+            name: "web".into(),
+            label: "Web swing".into(),
+            key: "key.keyboard.r".into(),
+            default: "key.keyboard.r".into(),
+        }];
+        let (widgets, ..) = ui.layout(&s, 480.0, 240.0);
+        let has = |pred: &dyn Fn(&WKind) -> bool| widgets.iter().any(|w| pred(&w.kind));
+        assert!(has(
+            &|k| matches!(k, WKind::Text { text, .. } if text.plain() == "Spider-Man")
+        ));
+        assert!(has(&|k| matches!(
+            k,
+            WKind::Button {
+                act: Act::ModKey(0),
+                ..
+            }
+        )));
+        assert!(has(&|k| matches!(
+            k,
+            WKind::Button {
+                act: Act::ResetModKey(0),
+                active: false,
+                ..
+            }
+        )));
+        // Waiting for a key, a press binds it and stores it under the mod.
+        ui.selected_mod_key = Some(0);
+        assert!(ui.waiting_for_key());
+        assert_eq!(
+            ui.key(&mut s, &atlas, KeyCode::KeyV, None),
+            vec![Event::Changed]
+        );
+        assert!(!ui.waiting_for_key());
+        assert_eq!(ui.mod_keys[0].key, "key.keyboard.v");
+        assert_eq!(s.mods.keys["swing"]["web"], "key.keyboard.v");
+        // Reset Keys puts it back with vanilla's.
+        ui.set_mod_key(&mut s, 0, "key.keyboard.r".into());
+        assert_eq!(s.mods.keys["swing"]["web"], "key.keyboard.r");
     }
 
     #[test]
