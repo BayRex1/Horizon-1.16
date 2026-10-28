@@ -44,6 +44,23 @@ It starts at the title screen, creates the world `horizon-benchmark` (seed 1234,
 
 The report is the [benchmark report format](benchmark-report.md): startup to the title screen and to in-world, each scene's chunk load time, chunks generated and section meshes built, every flight's frame figures and histogram, resident and GPU memory, the binary's size, and the machine (OS, CPU, RAM, GPU, driver, backend, display), the load average before the run and whether it ran on battery. If you allowed benchmark uploads (the launcher's data collection choices, [docs/telemetry.md](telemetry.md)), the same report, dated to the day and without local fields, is kept for the launcher to send; otherwise it stays on your machine.
 
+## Profile a run
+
+A release binary has no debug info, so a sampler cannot name inlined frames or
+file:line. Build with the `profiling` profile, which keeps thin LTO and line
+tables:
+
+```sh
+cargo build --profile profiling -p horizon-client
+samply record target/profiling/horizon-client --benchmark standard
+```
+
+The binary is larger and slower to link; do not ship it. `HORIZON_SPIKES=MS`
+still prints the coarse per-frame spans from any build. `HORIZON_LOG` raises
+the game's log level for a run: `HORIZON_LOG=debug`, or per target (matched by
+prefix, longest wins), `HORIZON_LOG=info,horizon_client::game=trace`. It is for
+diagnosis, not production: per-tick lines cost tick time.
+
 ## Reproduce it
 
 You need Horizon built (`cargo build --release -p horizon-client --bins`) and its resources prepared from your own copy of 26.3 (which also provides `.local/minecraft/26.3`, the vanilla client the driver starts), Java 25 with `javac`, and Python 3.10 or newer.
