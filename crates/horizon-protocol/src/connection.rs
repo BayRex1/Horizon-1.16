@@ -604,16 +604,14 @@ mod tests {
         drop(c);
         let mut raw = Vec::new();
         b.read_to_end(&mut raw).unwrap();
-        let mut at = 0;
         for body in &bodies {
-            let (start, len) = frame::split(&raw, at).unwrap().unwrap();
+            let frame = frame::split(&mut raw).unwrap().unwrap();
             assert_eq!(
-                &raw[at + start..at + start + len],
+                &frame[..],
                 &frame::contents(body, Some(64)).unwrap()[..]
             );
-            at += start + len;
         }
-        assert_eq!(at, raw.len());
+        assert!(raw.is_empty());
     }
 
     /// Frames appended for several bodies leave as one write, in order and
