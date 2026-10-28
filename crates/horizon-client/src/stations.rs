@@ -481,26 +481,7 @@ pub struct StationRecipes {
     pub trim_materials: Vec<(String, String)>,
 }
 fn ingredient(v: &Value, items: &Items) -> Ingredient {
-    let mut list: Vec<String> = Vec::new();
-    for s in match v {
-        Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a
-            .iter()
-            .filter_map(|x| x.as_str().map(str::to_owned))
-            .collect(),
-        _ => vec![],
-    } {
-        let more = match s.strip_prefix('#') {
-            Some(tag) => items.item_tag_order.get(tag).cloned().unwrap_or_default(),
-            None => vec![s],
-        };
-        for i in more {
-            if !list.contains(&i) {
-                list.push(i);
-            }
-        }
-    }
-    Ingredient::of(list)
+    Ingredient::parse(v, items).unwrap_or_else(|| Ingredient::of(Vec::new()))
 }
 impl StationRecipes {
     pub fn load(root: &Path, items: &Items) -> Self {
@@ -538,6 +519,8 @@ impl StationRecipes {
                     addition: ingredient(&v["addition"], items),
                     result: v["result"]["id"]
                         .as_str()
+                        .or_else(|| v["result"]["item"].as_str())
+                        .or_else(|| v["result"].as_str())
                         .unwrap_or("minecraft:air")
                         .to_owned(),
                 }),
@@ -552,8 +535,15 @@ impl StationRecipes {
                     id,
                     input: ingredient(&v["ingredient"], items),
                     result: ItemStack::new(
-                        v["result"]["id"].as_str().unwrap_or("minecraft:air"),
-                        v["result"]["count"].as_u64().unwrap_or(1) as u32,
+                        v["result"]["id"]
+                            .as_str()
+                            .or_else(|| v["result"]["item"].as_str())
+                            .or_else(|| v["result"].as_str())
+                            .unwrap_or("minecraft:air"),
+                        v["result"]["count"]
+                            .as_u64()
+                            .or_else(|| v["count"].as_u64())
+                            .unwrap_or(1) as u32,
                     ),
                 }),
                 _ => {}
@@ -1001,5 +991,101 @@ mod tests {
         // min cost of Sharpness III = 23; ceil(23/2)=12 -> 12..23.
         let xp = grindstone_experience(&e, &mut r, Some(&s), None);
         assert!((12..24).contains(&xp));
+    }
+    #[test]
+    fn smithing_ingredient_parses_objects() {
+        let items = sample_items();
+        let e = sample();
+        let json: serde_json::Value = serde_json::json!({
+            "type": "minecraft:smithing_transform",
+            "template": {"item": "minecraft:netherite_upgrade_smithing_template"},
+            "base": [{"item": "minecraft:diamond_sword"}, {"item": "minecraft:diamond_axe"}],
+            "addition": {"item": "minecraft:netherite_ingot"},
+            "result": {"item": "minecraft:netherite_sword"}
+        });
+        let recipe = Smithing::Transform {
+            id: "mod:test_upgrade".into(),
+            template: ingredient(&json["template"], &items),
+            base: ingredient(&json["base"], &items),
+            addition: ingredient(&json["addition"], &items),
+            result: json["result"]["id"]
+                .as_str()
+                .or_else(|| json["result"]["item"].as_str())
+                .or_else(|| json["result"].as_str())
+                .unwrap_or("minecraft:air")
+                .to_owned(),
+        };
+        let recipes = StationRecipes {
+            smithing: vec![recipe],
+            stonecutting: vec![],
+            trim_materials: vec![],
+        };
+        let template = ItemStack::new("minecraft:netherite_upgrade_smithing_template", 1);
+        let base = ItemStack::new("minecraft:diamond_sword", 1);
+        let addition = ItemStack::new("minecraft:netherite_ingot", 1);
+
+        assert!(recipes.smithing_accepts(0, &template));
+        assert!(recipes.smithing_accepts(1, &base));
+        assert!(recipes.smithing_accepts(2, &addition));
+
+        let out = recipes
+            .smithing_result(&e, Some(&template), Some(&base), Some(&addition))
+            .expect("smithing result should produce upgraded item");
+        assert_eq!(&*out.item, "minecraft:netherite_sword");
+
+        let stone_json: serde_json::Value = serde_json::json!({
+            "type": "minecraft:stonecutting",
+            "ingredient": {"item": "minecraft:stone"},
+            "result": {"item": "minecraft:stone_bricks", "count": 2}
+        });
+        let stone_recipe = Stonecutting {
+            id: "mod:test_cut".into(),
+            input: ingredient(&stone_json["ingredient"], &items),
+            result: ItemStack::new(
+                stone_json["result"]["id"]
+                    .as_str()
+                    .or_else(|| stone_json["result"]["item"].as_str())
+                    .or_else(|| stone_json["result"].as_str())
+                    .unwrap_or("minecraft:air"),
+                stone_json["result"]["count"]
+                    .as_u64()
+                    .or_else(|| stone_json["count"].as_u64())
+                    .unwrap_or(1) as u32,
+            ),
+        };
+        let stone_recipes = StationRecipes {
+            smithing: vec![],
+            stonecutting: vec![stone_recipe],
+            trim_materials: vec![],
+        };
+        let stone = ItemStack::new("minecraft:stone", 1);
+        let cut = stone_recipes.stonecutter(&stone);
+        assert_eq!(cut.len(), 1);
+        assert_eq!(&*cut[0].result.item, "minecraft:stone_bricks");
+        assert_eq!(cut[0].result.count, 2);
+
+        let temp =
+            std::env::temp_dir().join(format!("horizon_test_recipes_{}", std::process::id()));
+        let dir = temp.join("data/minecraft/recipe");
+        let _ = fs::create_dir_all(&dir);
+        let recipe_json = r#"{
+            "type": "minecraft:smithing_transform",
+            "template": {"item": "minecraft:netherite_upgrade_smithing_template"},
+            "base": {"item": "minecraft:diamond_sword"},
+            "addition": {"item": "minecraft:netherite_ingot"},
+            "result": {"item": "minecraft:netherite_sword"}
+        }"#;
+        fs::write(dir.join("netherite_sword_smithing.json"), recipe_json).unwrap();
+        let loaded = StationRecipes::load(&temp, &items);
+        let _ = fs::remove_dir_all(&temp);
+
+        assert_eq!(loaded.smithing.len(), 1);
+        assert!(loaded.smithing_accepts(0, &template));
+        assert!(loaded.smithing_accepts(1, &base));
+        assert!(loaded.smithing_accepts(2, &addition));
+        let loaded_out = loaded
+            .smithing_result(&e, Some(&template), Some(&base), Some(&addition))
+            .unwrap();
+        assert_eq!(&*loaded_out.item, "minecraft:netherite_sword");
     }
 }
