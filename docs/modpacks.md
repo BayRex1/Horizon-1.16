@@ -220,7 +220,12 @@ Most decoration and resource blocks are vanilla classes with other numbers: Maca
 `DoorBlock`s, XTones are full cubes, ore sets are `DropExperienceBlock`s. So templates cover the
 data tier without code. Templates also give mod blocks every behaviour Horizon already
 implements and the harnesses already check. Items work the same way (`"template":
-"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and so on).
+"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and so on). Both
+take a `tab`: the creative tab the item goes in, a vanilla category
+(`"tab": "minecraft:combat"`) or the mod's own — tabs are
+`data/<mod>/horizon/creative_tab/*.json`, `{"icon": "<item>", "name":
+"Ruby"}`, and the game puts them on rows above vanilla's
+([mods.md](mods.md#registries)).
 
 How the game loads them, without touching vanilla's path:
 

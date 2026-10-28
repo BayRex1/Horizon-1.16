@@ -57,6 +57,22 @@ fn vanilla_id(id: &str) -> bool {
     })
 }
 
+/// The vanilla tabs an item's `tab` may name (CreativeModeTabs' category
+/// tabs): hotbar, search, inventory and the hidden op_blocks take no
+/// additions.
+const VANILLA_TABS: [&str; 10] = [
+    "building_blocks",
+    "colored_blocks",
+    "natural_blocks",
+    "functional_blocks",
+    "redstone_blocks",
+    "tools_and_utilities",
+    "combat",
+    "food_and_drinks",
+    "ingredients",
+    "spawn_eggs",
+];
+
 /// What a declared block changes from its template; unset keeps the
 /// template's value.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -83,6 +99,9 @@ struct BlockFile {
     properties: BlockProperties,
     #[serde(default = "yes")]
     item: bool,
+    /// The creative tab its block item goes in (`tab`, docs/modpacks.md).
+    #[serde(default)]
+    tab: Option<String>,
 }
 fn yes() -> bool {
     true
@@ -99,6 +118,9 @@ pub struct Block {
     pub properties: BlockProperties,
     /// Also add a block item with the same id.
     pub item: bool,
+    /// The block item's creative tab: a vanilla category
+    /// (`minecraft:combat`) or the mod's own (`<mod id>:<path>`).
+    pub tab: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -116,6 +138,9 @@ struct ItemFile {
     template: String,
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
+    /// The creative tab the item goes in (`tab`, docs/modpacks.md).
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 /// An item the mod adds: a vanilla template item's components under a new
@@ -127,6 +152,32 @@ pub struct Item {
     pub template: String,
     pub max_stack_size: Option<u8>,
     pub rarity: Option<Rarity>,
+    /// The creative tab it goes in: a vanilla category (`minecraft:combat`)
+    /// or the mod's own (`<mod id>:<path>`).
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TabFile {
+    /// The item id the tab's button shows (a vanilla item or the mod's own).
+    icon: String,
+    /// The English title; a lang file's `itemGroup.<mod id>.<path>` wins.
+    name: Option<String>,
+}
+
+/// A creative tab the mod adds:
+/// `data/<id>/horizon/creative_tab/<path>.json` (docs/modpacks.md). The game
+/// puts the mods' tabs on extra rows above vanilla's (both vanilla rows are
+/// full with the hotbar, the search and the inventory).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreativeTab {
+    /// `<mod id>:<path>`.
+    pub id: String,
+    /// The item id the tab's button shows.
+    pub icon: String,
+    /// The English title, `name` or the prettified path.
+    pub name: String,
 }
 
 #[derive(Debug)]
@@ -143,6 +194,8 @@ pub struct Content {
     pub files: Vec<String>,
     pub blocks: Vec<Block>,
     pub items: Vec<Item>,
+    /// The creative tabs it adds, in file order.
+    pub tabs: Vec<CreativeTab>,
     /// The namespaces it owns: the mod id, then the manifest's `namespaces`.
     pub namespaces: Vec<String>,
 }
@@ -229,6 +282,7 @@ impl Content {
             files,
             blocks: Vec::new(),
             items: Vec::new(),
+            tabs: Vec::new(),
             namespaces: manifest.owned_namespaces().map(str::to_owned).collect(),
         };
         content.check(manifest)?;
@@ -271,6 +325,7 @@ impl Content {
         }
         let mut blocks = Vec::new();
         let mut items = Vec::new();
+        let mut tabs = Vec::new();
         for name in &self.files {
             let mut parts = name.splitn(3, '/');
             let (top, namespace, rest) = (
@@ -311,9 +366,11 @@ impl Content {
                 blocks.push((block, name.clone()));
             } else if let Some(item) = parse("item") {
                 items.push((item, name.clone()));
+            } else if let Some(tab) = parse("creative_tab") {
+                tabs.push((tab, name.clone()));
             } else {
                 return Err(format!(
-                    "{name}: data/{id}/horizon/ holds block/*.json and item/*.json only"
+                    "{name}: data/{id}/horizon/ holds block/*.json, item/*.json and creative_tab/*.json only"
                 ));
             }
         }
@@ -322,6 +379,11 @@ impl Content {
             let file: BlockFile =
                 serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
             check_block(&file).map_err(|e| format!("{name}: {e}"))?;
+            if !file.item && file.tab.is_some() {
+                return Err(format!(
+                    "{name}: tab needs item: true (the block item's tab)"
+                ));
+            }
             if file.item {
                 ids.insert(block.clone());
             }
@@ -330,6 +392,7 @@ impl Content {
                 template: file.template,
                 properties: file.properties,
                 item: file.item,
+                tab: file.tab,
             });
         }
         for (item, name) in items {
@@ -352,7 +415,50 @@ impl Content {
                 template: file.template,
                 max_stack_size: file.max_stack_size,
                 rarity: file.rarity,
+                tab: file.tab,
             });
+        }
+        for (tab, name) in tabs {
+            let file: TabFile =
+                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+            let title = file.name.unwrap_or_else(|| {
+                tab.strip_prefix(&format!("{id}:"))
+                    .unwrap_or(&tab)
+                    .replace('_', " ")
+            });
+            self.tabs.push(CreativeTab {
+                id: tab,
+                icon: file.icon,
+                name: title,
+            });
+        }
+        // Where items may go: vanilla's category tabs and the mod's own.
+        let mut tab_ids: BTreeSet<String> = VANILLA_TABS
+            .iter()
+            .map(|t| format!("minecraft:{t}"))
+            .collect();
+        tab_ids.extend(self.tabs.iter().map(|t| t.id.clone()));
+        for (tab, what) in self
+            .blocks
+            .iter()
+            .map(|b| (&b.tab, b.id.as_str()))
+            .chain(self.items.iter().map(|i| (&i.tab, i.id.as_str())))
+        {
+            if let Some(tab) = tab
+                && !tab_ids.contains(tab.as_str())
+            {
+                return Err(format!(
+                    "{what}: tab {tab:?} is not a vanilla category (minecraft:...) or the mod's own creative_tab"
+                ));
+            }
+        }
+        for tab in &self.tabs {
+            if !vanilla_id(&tab.icon) && !ids.contains(&tab.icon) {
+                return Err(format!(
+                    "{}: icon {:?} is not a vanilla item (minecraft:...) or the mod's own",
+                    tab.id, tab.icon
+                ));
+            }
         }
         Ok(())
     }
@@ -478,10 +584,80 @@ capabilities = ["registries"]
                     ..BlockProperties::default()
                 },
                 item: true,
+                tab: None,
             }]
         );
         assert_eq!(content.items[0].id, "ruby:ruby");
         assert_eq!(content.items[0].rarity, Some(Rarity::Uncommon));
+    }
+
+    #[test]
+    fn tabs_and_their_items_parse() {
+        let files: &[(&str, &[u8])] = &[
+            (
+                "data/ruby/horizon/creative_tab/main.json",
+                br#"{"icon": "ruby:ruby"}"#,
+            ),
+            (
+                "data/ruby/horizon/block/ruby_block.json",
+                br#"{"template": "minecraft:iron_block", "tab": "ruby:main"}"#,
+            ),
+            (
+                "data/ruby/horizon/item/ruby.json",
+                br#"{"template": "minecraft:diamond", "tab": "minecraft:ingredients"}"#,
+            ),
+        ];
+        let content = hmod("tabs", MANIFEST_TEXT, files).unwrap();
+        assert_eq!(
+            content.tabs,
+            [CreativeTab {
+                id: "ruby:main".into(),
+                icon: "ruby:ruby".into(),
+                name: "main".into(),
+            }]
+        );
+        assert_eq!(content.blocks[0].tab.as_deref(), Some("ruby:main"));
+        assert_eq!(
+            content.items[0].tab.as_deref(),
+            Some("minecraft:ingredients")
+        );
+    }
+
+    #[test]
+    fn refuses_tabs_outside_the_fence() {
+        // No such vanilla tab, and none of the non-category ones.
+        for tab in ["minecraft:swords", "minecraft:hotbar", "other:main"] {
+            let block = format!(r#"{{"template": "minecraft:iron_block", "tab": "{tab}"}}"#);
+            let e = hmod(
+                "tab",
+                MANIFEST_TEXT,
+                &[("data/ruby/horizon/block/ruby_block.json", block.as_bytes())],
+            )
+            .unwrap_err();
+            assert!(e.contains("tab"), "{tab}: {e}");
+        }
+        // tab without the block item it would belong to.
+        let e = hmod(
+            "no-item",
+            MANIFEST_TEXT,
+            &[(
+                "data/ruby/horizon/block/ruby_block.json",
+                br#"{"template": "minecraft:iron_block", "item": false, "tab": "minecraft:combat"}"#,
+            )],
+        )
+        .unwrap_err();
+        assert!(e.contains("tab needs item: true"), "{e}");
+        // A tab whose icon is neither vanilla nor the mod's own.
+        let e = hmod(
+            "icon",
+            MANIFEST_TEXT,
+            &[(
+                "data/ruby/horizon/creative_tab/main.json",
+                br#"{"icon": "ruby:none"}"#,
+            )],
+        )
+        .unwrap_err();
+        assert!(e.contains("icon"), "{e}");
     }
 
     #[test]

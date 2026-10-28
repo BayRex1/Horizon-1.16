@@ -17,6 +17,9 @@ pub struct Tab {
     pub icon: String,
     pub items: Vec<ItemStack>,
     pub top: bool,
+    /// Extra top rows above vanilla's: the mods' tabs (vanilla's are row 0,
+    /// whose 7 columns are full with the categories, hotbar and search).
+    pub row: u32,
     pub column: u32,
     pub search: bool,
     pub inventory: bool,
@@ -186,16 +189,23 @@ impl Creative {
     pub const SCROLL_WIDTH: f32 = 14.0;
     pub const SCROLL_HEIGHT: f32 = 112.0;
     /// `creative-inventory.json` (VanillaCreativeTabsExporter); resources
-    /// prepared before it fall back to `creative-tabs.json`'s item ids.
+    /// prepared before it fall back to `creative-tabs.json`'s item ids. The
+    /// content mods' additions (`creative-mods.json`, mod_content's build)
+    /// merge in over either; none in a vanilla root.
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join("creative-inventory.json");
-        if path.exists() {
-            Self::from_json(&serde_json::from_slice(&fs::read(path)?)?)
+        let mut creative = if path.exists() {
+            Self::from_json(&serde_json::from_slice(&fs::read(path)?)?)?
         } else {
             Self::from_legacy(&serde_json::from_slice(&fs::read(
                 root.join("creative-tabs.json"),
-            )?)?)
+            )?)?)?
+        };
+        let mods = root.join("creative-mods.json");
+        if mods.exists() {
+            creative.merge_mods(&serde_json::from_slice(&fs::read(mods)?)?)?;
         }
+        Ok(creative)
     }
     pub fn from_json(raw: &Value) -> Result<Self> {
         let mut tabs = Vec::new();
@@ -241,6 +251,7 @@ impl Creative {
                 icon: icon.map_or_else(|| "minecraft:stone".to_owned(), |s| s.item.to_string()),
                 items,
                 top: t["row"] == "TOP",
+                row: 0,
                 column: t["column"].as_u64().unwrap_or(0) as u32,
                 search: kind == "SEARCH",
                 inventory: kind == "INVENTORY",
@@ -274,6 +285,7 @@ impl Creative {
                 icon: t["icon"].as_str().unwrap_or("minecraft:stone").to_owned(),
                 items,
                 top: t["row"] == "TOP",
+                row: 0,
                 column: t["column"].as_u64().unwrap_or(0) as u32,
                 search: kind == "SEARCH",
                 inventory: kind == "INVENTORY",
@@ -330,6 +342,7 @@ impl Creative {
                 icon: t.icon.clone(),
                 items: Vec::new(),
                 top: t.top,
+                row: t.row,
                 column: t.column,
                 search: t.search,
                 inventory: t.inventory,
@@ -338,6 +351,83 @@ impl Creative {
     }
     pub fn tab(&self) -> &Tab {
         &self.tabs[self.selected.min(self.tabs.len() - 1)]
+    }
+    /// Content mods' additions (`creative-mods.json`, mod_content's build):
+    /// items appended to vanilla's tabs, and the mods' own tabs, which wrap
+    /// onto extra top rows above vanilla's (both vanilla rows are full) as
+    /// 5 left-aligned columns each, reusing vanilla's sprites 1 to 5. Every
+    /// added item joins the search tab, as every tabbed item's does.
+    fn merge_mods(&mut self, raw: &Value) -> Result<()> {
+        let mut additions: Vec<(String, Vec<ItemStack>)> = Vec::new();
+        let mut custom: Vec<(String, String, String, Vec<ItemStack>)> = Vec::new();
+        for t in raw["tabs"].as_array().into_iter().flatten() {
+            let mut items = Vec::new();
+            for v in t["items"].as_array().into_iter().flatten() {
+                let snbt = v.as_str().unwrap_or("-");
+                if let Some(stack) = crate::item_data::parse_stack(snbt)? {
+                    items.push(stack);
+                }
+            }
+            let id = t["id"].as_str().unwrap_or("").to_owned();
+            if self.tabs.iter().any(|tab| tab.id == id) {
+                additions.push((id, items));
+            } else {
+                custom.push((
+                    id,
+                    t["title"].as_str().unwrap_or("").to_owned(),
+                    t["icon"].as_str().unwrap_or("minecraft:stone").to_owned(),
+                    items,
+                ));
+            }
+        }
+        for (id, items) in additions {
+            // A mod's additions to hotbar, search or inventory would not
+            // show: their tabs' contents are the player's and the search's.
+            let shows = self
+                .tabs
+                .iter()
+                .find(|tab| tab.id == id)
+                .is_some_and(|tab| !tab.search && !tab.inventory);
+            if shows {
+                self.add_search(&items);
+                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.items.extend(items);
+                }
+            }
+        }
+        let search = self.tabs.iter().position(|t| t.search);
+        let at = search.unwrap_or(self.tabs.len());
+        let mut tabs = Vec::new();
+        for (k, (id, title, icon, items)) in custom.into_iter().enumerate() {
+            self.add_search(&items);
+            tabs.push(Tab {
+                id,
+                title,
+                icon,
+                items,
+                top: true,
+                row: 1 + (k as u32 / 5),
+                column: k as u32 % 5,
+                search: false,
+                inventory: false,
+            });
+        }
+        self.tabs.splice(at..at, tabs);
+        self.selected = self.selected.min(self.tabs.len() - 1);
+        Ok(())
+    }
+    /// Adds items to the search tab: its stacks and their index (the name
+    /// tree matches the display name, the id tree the namespace and path).
+    fn add_search(&mut self, items: &[ItemStack]) {
+        for stack in items {
+            let (namespace, path) = split_id(&java_lower(&stack.item));
+            self.search_index.push(SearchEntry {
+                namespace,
+                path,
+                ..Default::default()
+            });
+            self.search_items.push(stack.clone());
+        }
     }
     /// selectTab: a different tab empties the search box; the scrollbar goes to the top.
     pub fn select(&mut self, tab: usize) {
@@ -534,7 +624,13 @@ impl Creative {
             // Right-aligned tabs (search, inventory).
             x = Self::WIDTH - 27.0 * (7 - tab.column) as f32 + 1.0;
         }
-        let y = if tab.top { -28.0 } else { Self::HEIGHT - 4.0 };
+        let y = if tab.top {
+            // The mods' tabs (row 1 up) wrap onto rows above vanilla's,
+            // which are full: each row is 28 px of tab over the last.
+            -28.0 * (tab.row + 1) as f32
+        } else {
+            Self::HEIGHT - 4.0
+        };
         (x, y)
     }
 }
@@ -1005,5 +1101,84 @@ mod tests {
         c.search.key(KeyCode::ArrowRight, false, false);
         c.search.key(KeyCode::Backspace, false, false);
         assert_eq!(c.search.value, "world");
+    }
+
+    /// A vanilla export with a combat category and the search tab.
+    fn vanilla() -> Creative {
+        Creative::from_json(&serde_json::json!({
+            "schema": 2,
+            "tabs": [
+                {"id": "minecraft:combat", "type": "CATEGORY", "row": "BOTTOM", "column": 1,
+                 "items": ["{count:1,id:\"minecraft:stick\"}"], "lines": [""], "tags": []},
+                {"id": "minecraft:search", "type": "SEARCH", "row": "TOP", "column": 6,
+                 "items": ["{count:1,id:\"minecraft:stick\"}"], "lines": [""], "tags": []}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn mod_items_join_a_vanilla_tab_and_the_search() {
+        let mut c = vanilla();
+        c.merge_mods(&serde_json::json!({
+            "schema": 1,
+            "tabs": [{"id": "minecraft:combat",
+                      "items": ["{count:1,id:\"ruby:ruby_sword\"}"]}]
+        }))
+        .unwrap();
+        // Combat keeps its vanilla item with the mod's after it; the search
+        // lists the mod's too, and finds it by its id and its display name.
+        assert_eq!(c.tabs[0].items[1].item.as_ref(), "ruby:ruby_sword");
+        assert_eq!(c.search_items[1].item.as_ref(), "ruby:ruby_sword");
+        let names = Names::default();
+        assert_eq!(c.search_results("ruby:ruby_sw", &names), [1]);
+        assert_eq!(c.search_results("ruby sw", &names), [1]);
+        // The mod's own tabs never show: their entries are plain ids the
+        // game built, so an unknown one becomes a tab — refuse nothing here,
+        // but a vanilla tab id is the only way in.
+        assert_eq!(c.tabs.len(), 2);
+    }
+
+    #[test]
+    fn mod_tabs_wrap_onto_rows_above_vanillas() {
+        let mut c = vanilla();
+        c.merge_mods(&serde_json::json!({
+            "schema": 1,
+            "tabs": [
+                {"id": "ruby:main", "icon": "ruby:ruby", "title": "Ruby",
+                 "items": ["{count:1,id:\"ruby:ruby\"}"]},
+                {"id": "ruby:gear", "icon": "ruby:ruby", "title": "Ruby Gear"}
+            ]
+        }))
+        .unwrap();
+        // The mod's tabs sit between vanilla's and the search tab, on the
+        // first extra row (5 left-aligned columns, vanilla sprites 1 to 5).
+        assert_eq!(
+            c.tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            [
+                "minecraft:combat",
+                "ruby:main",
+                "ruby:gear",
+                "minecraft:search"
+            ]
+        );
+        let tab = &c.tabs[1];
+        assert_eq!(tab.title, "Ruby");
+        assert_eq!(tab.icon, "ruby:ruby");
+        assert!(tab.top && !tab.search && !tab.inventory);
+        assert_eq!((tab.row, tab.column), (1, 0));
+        assert_eq!(Creative::tab_position(tab), (0.0, -56.0));
+        assert_eq!(c.tabs[2].column, 1);
+        // The tab's items joined the search tab.
+        assert_eq!(c.search_items[1].item.as_ref(), "ruby:ruby");
+    }
+
+    #[test]
+    fn an_empty_mod_merge_changes_nothing() {
+        let mut c = vanilla();
+        let before = (c.tabs.len(), c.search_items.len());
+        c.merge_mods(&serde_json::json!({"schema": 1, "tabs": []}))
+            .unwrap();
+        assert_eq!((c.tabs.len(), c.search_items.len()), before);
     }
 }

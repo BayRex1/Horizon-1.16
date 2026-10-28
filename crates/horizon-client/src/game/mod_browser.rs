@@ -105,9 +105,12 @@ impl Game<'_> {
         Some(HudBatch::new([r.config.width, r.config.height]))
     }
     /// The mod showing a panel, with its items made into stacks once per
-    /// `set-items`; none while no mod shows one or no container screen is up.
+    /// `set-items`; none while no mod shows one or no inventory, container
+    /// or creative screen is up.
     fn browser_sync(&mut self) -> Option<usize> {
-        if self.screen != Screen::Inventory || self.title.is_some() {
+        if (self.screen != Screen::Inventory && self.screen != Screen::Creative)
+            || self.title.is_some()
+        {
             return None;
         }
         let Some((owner, version)) = self.mods.mods.browser_items().map(|(o, v, _)| (o, v)) else {
@@ -372,7 +375,7 @@ impl Game<'_> {
 
     /// Whether keys go to the panel's search box.
     pub(super) fn mod_browser_typing(&self) -> bool {
-        self.screen == Screen::Inventory
+        (self.screen == Screen::Inventory || self.screen == Screen::Creative)
             && self.mods.browser.of.is_some()
             && self.mods.browser.search.as_ref().is_some_and(|s| s.focused)
     }

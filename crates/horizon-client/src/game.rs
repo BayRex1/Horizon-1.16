@@ -6181,6 +6181,7 @@ impl Game<'_> {
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
+                self.draw_mod_browser(&mut batch);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Mod => self.draw_mod_screen(&mut batch),
@@ -11046,10 +11047,15 @@ impl Game<'_> {
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
         batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
     }
-    /// A creative tab's title: `itemGroup.*`, else the export's English title.
+    /// A creative tab's title: `itemGroup.*`, else the export's English
+    /// title. A mod's tab has no vanilla key: `itemGroup.<mod id>.<path>`,
+    /// the mod's lang files', else its declaration's `name`.
     fn creative_tab_title(&self, tab: &horizon_client::creative::Tab) -> String {
-        horizon_client::creative::item_group_key(&tab.id)
-            .map_or_else(|| tab.title.clone(), |key| self.translate(key, &tab.title))
+        let key = match horizon_client::creative::item_group_key(&tab.id) {
+            Some(key) => key.to_owned(),
+            None => format!("itemGroup.{}", tab.id.replace(':', ".")),
+        };
+        self.translate(&key, &tab.title)
     }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
@@ -11261,7 +11267,13 @@ impl Game<'_> {
             && cursor.1 >= oy + y
             && cursor.1 < oy + y + 16.0
     }
+    /// A mouse press on the creative screen: the mods' item panel takes its
+    /// own area (a click there never throws the carried stack or picks a
+    /// grid slot), else the tabs, the grid and the player's slots.
     fn click_creative(&mut self, right: bool) {
+        if self.mod_browser_press(right) {
+            return;
+        }
         let Some(size) = self
             .renderer
             .as_ref()

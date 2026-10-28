@@ -121,10 +121,10 @@ impl Game<'_> {
         if repeat || !self.mods.mods.has_keys() {
             return;
         }
-        // Over an item on a container screen, the mods' keys are `browser`
-        // events (a recipe viewer's R and U).
+        // Over an item on a container or the creative screen, the mods'
+        // keys are `browser` events (a recipe viewer's R and U).
         if pressed
-            && self.screen == Screen::Inventory
+            && (self.screen == Screen::Inventory || self.screen == Screen::Creative)
             && self.title.is_none()
             && !self.mod_browser_typing()
             && let Some(name) = horizon_client::keybinds::key_name(key)

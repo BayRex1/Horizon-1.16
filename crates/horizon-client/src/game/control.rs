@@ -628,7 +628,7 @@ impl Game<'_> {
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
                     Screen::WorldOptions => self.world_options_text(Some(text)),
-                    Screen::Inventory if self.mod_browser_typing() => {
+                    Screen::Inventory | Screen::Creative if self.mod_browser_typing() => {
                         self.mod_browser_text((text != "\\b").then_some(text), text == "\\b")
                     }
                     Screen::Inventory if self.recipe_search_focused() => {

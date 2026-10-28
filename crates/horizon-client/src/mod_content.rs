@@ -1222,6 +1222,8 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
             overlay.write(&own, &fs::read(&vanilla)?)?;
         }
     }
+    // The mods' creative additions, beside the tables (creative.rs's merge).
+    overlay.write(CREATIVE_MODS, &creative_mods(mods)?)?;
     let mut namespaces: Vec<&str> = mods
         .iter()
         .flat_map(|m| m.content.namespaces.iter().map(String::as_str))
@@ -1259,6 +1261,66 @@ pub fn resource_root(base: &Path, mods: &[ContentMod], cache: &Path) -> Result<P
 
 /// In a root built by [`build`]: its warnings, one per line.
 const WARNINGS: &str = "horizon-mod-content-warnings.txt";
+
+/// In a root built by [`build`]: the content mods' creative inventory
+/// additions ([`creative_mods`]; creative.rs's `merge_mods` reads it).
+const CREATIVE_MODS: &str = "creative-mods.json";
+
+/// One tab id's slot: its id, the mod's own tab's icon and title, and the
+/// stacks appended to it.
+type TabAddition = (String, Option<(String, String)>, Vec<String>);
+
+/// The slot a tab id appends to: the first with that id, else a new one.
+fn slot(tabs: &mut Vec<TabAddition>, id: &str, custom: Option<(&str, &str)>) -> usize {
+    if let Some(i) = tabs.iter().position(|t| t.0 == id) {
+        return i;
+    }
+    tabs.push((
+        id.to_owned(),
+        custom.map(|(icon, title)| (icon.to_owned(), title.to_owned())),
+        Vec::new(),
+    ));
+    tabs.len() - 1
+}
+
+/// The mods' creative additions as `creative-mods.json`'s bytes: one entry
+/// per tab id, in declaration order, a mod's own tab carrying its icon and
+/// title. The stacks are plain (`{count:1,id:"<id>"}`), as the export's.
+fn creative_mods(mods: &[ContentMod]) -> Result<Vec<u8>> {
+    let mut tabs: Vec<TabAddition> = Vec::new();
+    for m in mods {
+        for tab in &m.content.tabs {
+            slot(&mut tabs, &tab.id, Some((&tab.icon, &tab.name)));
+        }
+        for block in &m.content.blocks {
+            let (Some(tab), true) = (&block.tab, block.item) else {
+                continue;
+            };
+            let i = slot(&mut tabs, tab, None);
+            tabs[i].2.push(format!("{{count:1,id:\"{}\"}}", block.id));
+        }
+        for item in &m.content.items {
+            let Some(tab) = &item.tab else { continue };
+            let i = slot(&mut tabs, tab, None);
+            tabs[i].2.push(format!("{{count:1,id:\"{}\"}}", item.id));
+        }
+    }
+    let doc = serde_json::json!({
+        "schema": 1,
+        "tabs": tabs
+            .iter()
+            .map(|(id, custom, items)| {
+                let mut tab = serde_json::json!({ "id": id, "items": items });
+                if let Some((icon, title)) = custom {
+                    tab["icon"] = icon.clone().into();
+                    tab["title"] = title.clone().into();
+                }
+                tab
+            })
+            .collect::<Vec<_>>(),
+    });
+    Ok(serde_json::to_vec(&doc)?)
+}
 
 /// In a root built by [`resource_root`]: what it was built from.
 const STAMP: &str = "horizon-mod-content.stamp";

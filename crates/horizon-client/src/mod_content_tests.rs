@@ -61,14 +61,14 @@ fn prepared() -> Option<PathBuf> {
 /// A content mod folder: a full block, a door and an item-less glass from
 /// templates, an item, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 8] = [
+    let files: [(&str, &str); 9] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
         ),
         (
             "data/ruby/horizon/block/ruby_block.json",
-            r#"{"template": "minecraft:iron_block", "properties": {"hardness": 4.0, "light": 3,
+            r#"{"template": "minecraft:iron_block", "tab": "ruby:main", "properties": {"hardness": 4.0, "light": 3,
                 "sounds": "minecraft:amethyst_block", "map_color": 28, "friction": 0.8}}"#,
         ),
         (
@@ -81,7 +81,7 @@ fn ruby_mod(dir: &Path) -> ContentMod {
         ),
         (
             "data/ruby/horizon/item/ruby.json",
-            r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare"}"#,
+            r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare", "tab": "minecraft:ingredients"}"#,
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -92,6 +92,10 @@ fn ruby_mod(dir: &Path) -> ContentMod {
         (
             "data/c/tags/item/gems/ruby.json",
             r#"{"values": ["ruby:ruby", "othermod:ruby"]}"#,
+        ),
+        (
+            "data/ruby/horizon/creative_tab/main.json",
+            r#"{"icon": "ruby:ruby", "name": "Ruby"}"#,
         ),
         (
             "assets/ruby/lang/en_us.json",
@@ -266,6 +270,24 @@ fn content_root_loads_with_every_table() {
     crate::motion::MotionResources::load(&root, &assets).unwrap();
     horizon_world::worldgen::generator::GeneratorData::load(&root.join("worldgen"), new).unwrap();
     assert!(root.join("assets/ruby/lang/en_us.json").is_file());
+    // The creative inventory's additions: the mod's own tab first (it is
+    // declared first), then the vanilla one its item named; the search
+    // merges them in creative.rs.
+    let creative: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("creative-mods.json")).unwrap()).unwrap();
+    assert_eq!(creative["schema"], 1);
+    assert_eq!(creative["tabs"][0]["id"], "ruby:main");
+    assert_eq!(creative["tabs"][0]["icon"], "ruby:ruby");
+    assert_eq!(creative["tabs"][0]["title"], "Ruby");
+    assert_eq!(
+        creative["tabs"][0]["items"][0],
+        r#"{count:1,id:"ruby:ruby_block"}"#
+    );
+    assert_eq!(creative["tabs"][1]["id"], "minecraft:ingredients");
+    assert_eq!(
+        creative["tabs"][1]["items"][0],
+        r#"{count:1,id:"ruby:ruby"}"#
+    );
     // Blocks without a blockstate of their own take their template's.
     assert_eq!(
         fs::read(root.join("assets/ruby/blockstates/ruby_door.json")).unwrap(),

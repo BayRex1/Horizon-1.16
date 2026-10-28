@@ -1,12 +1,12 @@
 //! Horizon's official recipe viewer. Every item sits in the item panel the
-//! game draws beside the inventory and container screens (`browser`), with
-//! a search box. R over an item, the panel's or any slot's, shows its
-//! recipes, U its uses (`input.register-key`, so both can be rebound in
-//! Controls); a click does the same, left for recipes and right for uses.
-//! A recipe page has a tab per station, and + beside a crafting recipe the
-//! player knows fills the grid as the recipe book does (`recipes.place`).
-//! In creative mode, with "Click gives items" on, a click on a panel item
-//! gives one, a right click a stack (`recipes.give`).
+//! game draws beside the inventory, container and creative screens
+//! (`browser`), with a search box. R over an item, the panel's or any
+//! slot's, shows its recipes, U its uses (`input.register-key`, so both
+//! can be rebound in Controls); a click does the same, left for recipes and
+//! right for uses. A recipe page has a tab per station, and + beside a
+//! crafting recipe the player knows fills the grid as the recipe book does
+//! (`recipes.place`). In creative mode, with "Click gives items" on, a
+//! click on a panel item gives one, a right click a stack (`recipes.give`).
 //!
 //! On a server that is not Horizon the recipes are the game's own 26.3
 //! ones; `known` and `place` follow the server's recipe book.
