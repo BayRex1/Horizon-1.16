@@ -473,6 +473,7 @@ fn build_overlay_uncached(
         filters: &[&Filter],
         zips: &[Option<Zip>],
         dependencies: &mut cache::Dependencies,
+        extract: &mut Vec<(PathBuf, usize, String)>,
     ) -> io::Result<()> {
         let src = if rel.is_empty() {
             vanilla.to_path_buf()
@@ -510,11 +511,8 @@ fn build_overlay_uncached(
                 let target = out.join(&child);
                 match path {
                     Some(p) => link(p, &target)?,
-                    None => {
-                        if let Some(Some(z)) = zips.get(*owner) {
-                            fs::write(&target, z.read(inner)?)?;
-                        }
-                    }
+                    // Archived files are inflated together once the tree is laid out.
+                    None => extract.push((target, *owner, inner.clone())),
                 }
             } else if touched.contains(&child)
                 // Windows cannot link a directory the way unix does (`link` above), so an
@@ -533,6 +531,7 @@ fn build_overlay_uncached(
                     filters,
                     zips,
                     dependencies,
+                    extract,
                 )?;
             } else if filters.iter().any(|f| f.blocks(&child)) {
                 // Hidden by a pack's filter.
@@ -546,6 +545,7 @@ fn build_overlay_uncached(
         }
         Ok(())
     }
+    let mut extract = Vec::new();
     mirror(
         "",
         vanilla,
@@ -556,7 +556,16 @@ fn build_overlay_uncached(
         &filters,
         &zips,
         dependencies,
-    )
+        &mut extract,
+    )?;
+    // A server pack is one archive of thousands of files: inflate and write
+    // them on every core rather than one after another.
+    crate::par::par_map(&extract, |(target, owner, inner)| match zips.get(*owner) {
+        Some(Some(z)) => fs::write(target, z.read(inner)?),
+        _ => Ok(()),
+    })
+    .into_iter()
+    .collect()
 }
 /// Files vanilla loads from every pack in turn (`getResourceStack`) rather
 /// than from the top pack only.
