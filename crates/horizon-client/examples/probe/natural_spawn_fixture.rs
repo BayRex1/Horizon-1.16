@@ -33,8 +33,7 @@ use horizon_client::{
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Event, GenEvent, Heightmap, NaturalLevel, SpawnCost,
-            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
-            spawn_box,
+            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureSpawns, spawn_box,
         },
         spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
         species::{self, Baby},
@@ -124,6 +123,7 @@ struct World<'a> {
     placed: RefCell<Vec<([i32; 3], BlockStateId)>>,
     /// The game time (trial cases advance it).
     time: Cell<i64>,
+    trial_players: std::cell::OnceCell<Vec<TrialPlayer>>,
     /// The mobs a trial spawner added: UUID, position, height and box.
     trial_mobs: RefCell<Vec<([i32; 4], [f64; 3], f32, Aabb)>>,
     /// How many mobs a trial spawner added (their UUIDs count up).
@@ -270,15 +270,16 @@ impl NaturalLevel for World<'_> {
         self.biome_info(x, y, z)
             .map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(
+    fn for_each_structure_at(
         &self,
         x: i32,
         y: i32,
         z: i32,
         wanted: &dyn Fn(&str) -> bool,
-    ) -> Vec<StructureAt> {
+        found: &mut dyn FnMut(&str, bool, bool),
+    ) {
         let (cx, cz) = (x >> 4, z >> 4);
-        let mut out: Vec<StructureAt> = Vec::new();
+        let mut out: Vec<(&str, bool, bool)> = Vec::new();
         for start in self.starts.iter().filter(|s| wanted(&s.id)) {
             let b = start.bounds.0;
             // Referenced: the start's box reaches the chunk's columns.
@@ -287,19 +288,17 @@ impl NaturalLevel for World<'_> {
             }
             let in_piece = start.pieces.iter().any(|p| p.has(x, y, z));
             let in_bounds = start.bounds.has(x, y, z);
-            match out.iter_mut().find(|s| s.id == start.id) {
+            match out.iter_mut().find(|s| s.0 == start.id) {
                 Some(s) => {
-                    s.in_piece |= in_piece;
-                    s.in_bounds |= in_bounds;
+                    s.1 |= in_piece;
+                    s.2 |= in_bounds;
                 }
-                None => out.push(StructureAt {
-                    id: start.id.clone(),
-                    in_piece,
-                    in_bounds,
-                }),
+                None => out.push((&start.id, in_piece, in_bounds)),
             }
         }
-        out
+        for (id, in_piece, in_bounds) in out {
+            found(id, in_piece, in_bounds);
+        }
     }
     fn structure_spawns(&self) -> &StructureSpawns {
         self.s.structures
@@ -378,28 +377,30 @@ impl TrialSpawnerLevel for World<'_> {
     fn mob_spawning(&self) -> bool {
         self.spawn_mobs
     }
-    fn players(&self) -> Vec<TrialPlayer> {
-        self.players
-            .iter()
-            .enumerate()
-            .map(|(i, (p, mode))| TrialPlayer {
-                uuid: [0, 0, 0, i as i32 + 1],
-                block: p.map(|v| v.floor() as i32),
-                eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
-                creative: mode == "creative",
-                spectator: mode == "spectator",
-                position: *p,
-                height: 1.8,
-                alive: true,
-                omen: self
-                    .omens
-                    .borrow()
-                    .get(i)
-                    .copied()
-                    .flatten()
-                    .map(|(o, _)| o),
-            })
-            .collect()
+    fn players(&self) -> &[TrialPlayer] {
+        self.trial_players.get_or_init(|| {
+            self.players
+                .iter()
+                .enumerate()
+                .map(|(i, (p, mode))| TrialPlayer {
+                    uuid: [0, 0, 0, i as i32 + 1],
+                    block: p.map(|v| v.floor() as i32),
+                    eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
+                    creative: mode == "creative",
+                    spectator: mode == "spectator",
+                    position: *p,
+                    height: 1.8,
+                    alive: true,
+                    omen: self
+                        .omens
+                        .borrow()
+                        .get(i)
+                        .copied()
+                        .flatten()
+                        .map(|(o, _)| o),
+                })
+                .collect()
+        })
     }
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {
         let lookup = |x: i32, y: i32, z: i32| self.state(x, y, z);
@@ -736,6 +737,7 @@ pub fn main() -> horizon_client::Result<()> {
             trial_mobs: RefCell::new(Vec::new()),
             trial_count: Cell::new(0),
             omens: RefCell::new(omens),
+            trial_players: std::cell::OnceCell::new(),
             loot: loot.clone(),
             entities: RefCell::new(
                 case_entities

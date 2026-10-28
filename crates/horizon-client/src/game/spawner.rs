@@ -40,6 +40,32 @@ pub(super) struct SpawnerState {
 }
 
 impl Game<'_> {
+    /// `Level.hasNearbyAlivePlayer` (a living non-spectator closer than
+    /// `range`, any distance when negative), read in place: the level snapshot
+    /// is a Vec of players and a nearest list nobody needs for this question.
+    pub(super) fn player_within(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
+        let near = |p: Vec3, alive: bool, spectator: bool| {
+            alive
+                && !spectator
+                && (range < 0.0
+                    || (p.x - x).powi(2) + (p.y - y).powi(2) + (p.z - z).powi(2) < range * range)
+        };
+        if self
+            .player_view()
+            .is_some_and(|p| near(p.position, p.alive, p.spectator))
+        {
+            return true;
+        }
+        self.lan.as_ref().is_some_and(|h| {
+            h.hub.guests.iter().filter(|g| h.hub.here(g)).any(|g| {
+                near(
+                    Vec3::new(g.position[0], g.position[1], g.position[2]),
+                    !g.dead,
+                    g.spectator(),
+                )
+            })
+        })
+    }
     /// `EntityType.byString`: the type is in the registry.
     pub(super) fn entity_type_exists(&self, id: &str) -> bool {
         self.spawners
@@ -98,6 +124,18 @@ impl Game<'_> {
     }
     fn server_tick_spawner(&mut self, key: Pos, spawner: &mut Spawner) -> Result<()> {
         let pos = [key.0, key.1, key.2];
+        // `BaseSpawner.serverTick` bails out before any draw without a live,
+        // non-spectator player in range: skip building the level snapshot for
+        // a spawner nobody is near.
+        let range = f64::from(spawner.required_player_range);
+        if !self.player_within(
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+            range,
+        ) {
+            return Ok(());
+        }
         let mut random = std::mem::replace(
             &mut self.world.random,
             horizon_core::random::LegacyRandom::new(0),

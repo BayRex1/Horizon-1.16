@@ -378,7 +378,7 @@ impl Game<'_> {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        let body = C::LevelParticles(play::LevelParticles {
+        let body: std::sync::Arc<[u8]> = C::LevelParticles(play::LevelParticles {
             particle,
             override_limiter: false,
             always_show: false,
@@ -388,7 +388,8 @@ impl Game<'_> {
             count: count as i32,
             randomization: 0,
         })
-        .encode();
+        .encode()
+        .into();
         for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
             // BlockPos.closerToCenterThan(at, 32): from the centre of the
             // player's block.
@@ -396,7 +397,7 @@ impl Game<'_> {
                 .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
                 .sum();
             if d < 32.0 * 32.0 {
-                g.sender.send(body.clone());
+                g.sender.send_shared(body.clone());
             }
         }
     }
@@ -530,7 +531,7 @@ impl Game<'_> {
             return;
         };
         let center = packet.center;
-        let plain = C::Explode(packet.clone()).encode();
+        let plain: std::sync::Arc<[u8]> = C::Explode(packet.clone()).encode().into();
         for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
             let d: f64 = (0..3).map(|k| (g.position[k] - center[k]).powi(2)).sum();
             if d >= 4096.0 {
@@ -541,7 +542,7 @@ impl Game<'_> {
                     packet.knockback = Some(*push);
                     g.send(&C::Explode(packet.clone()));
                 }
-                None => g.sender.send(plain.clone()),
+                None => g.sender.send_shared(plain.clone()),
             }
         }
     }

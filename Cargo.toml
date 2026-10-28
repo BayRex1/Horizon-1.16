@@ -75,6 +75,28 @@ debug = "line-tables-only"
 lto = "thin"
 codegen-units = 1
 
+# The largest crates codegen on several units: thin LTO still imports across
+# them, and one unit each made these the long pole of a clean build.
+[profile.release.package.horizon-world]
+codegen-units = 16
+[profile.release.package.horizon-client]
+codegen-units = 16
+[profile.release.package.horizon-items]
+codegen-units = 16
+[profile.release.package.horizon-assets]
+codegen-units = 16
+[profile.release.package.horizon-protocol]
+codegen-units = 16
+[profile.release.package.horizon-mods]
+codegen-units = 16
+
+# A release build with file:line in profiles and backtraces:
+# cargo build --profile profiling -p horizon-client
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+
 # Optimized but quick-to-link builds for iteration: cargo build --profile fast
 [profile.fast]
 inherits = "release"

@@ -130,6 +130,9 @@ impl Levels {
 pub struct ChunkTickets {
     sources: Option<Sources>,
     levels: Levels,
+    /// Bumped whenever the levels are rebuilt: callers cache what they derive
+    /// from them (the random-tick chunk list) and compare this.
+    generation: u64,
 }
 
 impl ChunkTickets {
@@ -145,9 +148,18 @@ impl ChunkTickets {
         }
         self.levels = Levels(sources.as_ref().map(|s| Arc::new(compute(s))));
         self.sources = sources;
+        self.generation = self.generation.wrapping_add(1);
     }
     pub fn levels(&self) -> Levels {
         self.levels.clone()
+    }
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Whether `sources` are the ones last applied, sorted as `update` keeps
+    /// them: lets a caller reuse its own buffers and skip the update.
+    pub fn matches(&self, sources: Option<&Sources>) -> bool {
+        self.sources.as_ref() == sources
     }
 }
 
@@ -337,6 +349,32 @@ mod tests {
         assert!(t.levels().entity_ticking(3, 0) && !first.entity_ticking(3, 0));
         t.update(None);
         assert!(t.levels().0.is_none());
+    }
+
+    /// The generation a cache of what ticks compares bumps only on a rebuild,
+    /// and `matches` sees the sorted form `update` stores.
+    #[test]
+    fn generation_changes_only_with_the_levels() {
+        let mut t = ChunkTickets::default();
+        let s = |players: Vec<(i32, i32)>| Sources {
+            players,
+            forced: Vec::new(),
+            view_distance: 2,
+            simulation_distance: 2,
+        };
+        t.update(Some(s(vec![(5, 5), (0, 0)])));
+        let first = t.generation();
+        // Same set in another order: no rebuild, no bump.
+        t.update(Some(s(vec![(0, 0), (5, 5)])));
+        assert_eq!(t.generation(), first);
+        // The stored form is the sorted one.
+        assert!(t.matches(Some(&s(vec![(0, 0), (5, 5)]))));
+        assert!(!t.matches(Some(&s(vec![(1, 0)]))));
+        t.update(Some(s(vec![(1, 0)])));
+        assert_ne!(t.generation(), first);
+        let second = t.generation();
+        t.update(Some(s(vec![(1, 0)])));
+        assert_eq!(t.generation(), second);
     }
 
     /// The grid answers as the map does, everywhere around the tickets.

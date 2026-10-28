@@ -359,7 +359,7 @@ pub trait TrialSpawnerLevel: SpawnerLevel {
     /// `canSpawnInLevel`'s `spawn_mobs` game rule.
     fn mob_spawning(&self) -> bool;
     /// `level.getPlayers()`, in the server's order.
-    fn players(&self) -> Vec<TrialPlayer>;
+    fn players(&self) -> &[TrialPlayer];
     /// The block a VISUAL clip from `from` to `to` (no fluids) first hits.
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]>;
     /// The block position of a living entity of this dimension, if any.
@@ -593,7 +593,7 @@ impl TrialSpawner {
     fn detect<L: TrialSpawnerLevel>(&self, l: &L, pos: [i32; 3], line_of_sight: bool) -> Vec<Uuid> {
         let range = f64::from(self.required_player_range);
         l.players()
-            .into_iter()
+            .iter()
             .filter(|p| {
                 let d = [0, 1, 2].map(|i| f64::from(p.block[i] - pos[i]));
                 d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range

@@ -304,6 +304,16 @@ impl Game<'_> {
         else {
             return;
         };
+        // Nothing new since the last full pass: every resident chunk was lit
+        // and looked at. A chunk added, unloaded or lit changes one of these.
+        let revision = self.world.chunks.membership_revision();
+        let len = self.world.chunks.len();
+        if self.creaking.scan_revision == revision
+            && self.creaking.scan_len == len
+            && self.creaking.scanned.len() == len
+        {
+            return;
+        }
         let keys: Vec<(i32, i32)> = self
             .world
             .chunks
@@ -353,6 +363,8 @@ impl Game<'_> {
         }
         let chunks = &self.world.chunks;
         self.creaking.scanned.retain(|k| chunks.contains_key(k));
+        self.creaking.scan_revision = revision;
+        self.creaking.scan_len = len;
     }
 }
 
@@ -363,6 +375,9 @@ pub(super) struct CreakingState {
     scanned: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
     /// Which block states are creaking hearts, by state id.
     hearts: Vec<bool>,
+    /// The chunk map's membership revision and length of the last full pass.
+    scan_revision: u64,
+    scan_len: usize,
 }
 
 impl CreakingState {
@@ -370,5 +385,7 @@ impl CreakingState {
     /// (game/levels.rs).
     pub(super) fn swap_level(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.scanned, &mut other.scanned);
+        std::mem::swap(&mut self.scan_revision, &mut other.scan_revision);
+        std::mem::swap(&mut self.scan_len, &mut other.scan_len);
     }
 }

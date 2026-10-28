@@ -210,7 +210,7 @@ pub struct Hub {
     /// Each level's tracked entities, by dimension.
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<Arc<[u8]>>>,
     /// Server mods' commands, a root in the commands report's format, sent
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
@@ -436,9 +436,9 @@ impl Hub {
     }
 
     pub fn broadcast(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// MinecraftServer.onGameRuleChanged: every player is told when
@@ -475,15 +475,15 @@ impl Hub {
     /// `PlayerList.broadcastAll(packet, dimension)`: the players in the
     /// level in place.
     pub fn broadcast_level(&self, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| self.here(g)) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     pub fn broadcast_except(&self, conn: u32, packet: &C) {
-        let body = packet.encode();
+        let body: Arc<[u8]> = packet.encode().into();
         for g in self.guests.iter().filter(|g| g.placed && g.conn != conn) {
-            g.sender.send(body.clone());
+            g.sender.send_shared(body.clone());
         }
     }
     /// PlayerList.broadcastSystemMessage.
@@ -1168,6 +1168,15 @@ impl Hub {
                 }
             }
         }
+        let dead: Vec<u32> = self
+            .guests
+            .iter()
+            .filter(|g| g.sender.dead() && g.left_reason.is_empty())
+            .map(|g| g.conn)
+            .collect();
+        for conn in dead {
+            self.kick(conn, translatable("disconnect.timeout", &[]));
+        }
         events
     }
 
@@ -1394,9 +1403,9 @@ impl Hub {
             })
             .collect();
         self.encoder.warm(&columns);
-        let mut bodies: Vec<Vec<u8>> = columns
+        let mut bodies: Vec<Arc<[u8]>> = columns
             .iter()
-            .map(|c| self.encoder.body_in(c, world))
+            .map(|c| self.encoder.body_in(c, world).into())
             .collect();
         for (i, taken, batch) in batches {
             let g = &mut self.guests[i];
@@ -1504,9 +1513,9 @@ impl Hub {
             let Some(chunk) = world.chunks.get(&(x, z)) else {
                 continue;
             };
-            let body = self.encoder.light_update(chunk, sections);
+            let body: Arc<[u8]> = self.encoder.light_update(chunk, sections).into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
         }
     }
@@ -1560,9 +1569,9 @@ impl Hub {
                         .collect(),
                 })
             };
-            let body = packet.encode();
+            let body: Arc<[u8]> = packet.encode().into();
             for &i in &viewers {
-                self.guests[i].sender.send(body.clone());
+                self.guests[i].sender.send_shared(body.clone());
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
@@ -1576,14 +1585,15 @@ impl Hub {
                 let Some(kind) = self.encoder.entity_type(state) else {
                     continue;
                 };
-                let body = C::BlockEntityData(play::BlockEntityData {
+                let body: Arc<[u8]> = C::BlockEntityData(play::BlockEntityData {
                     pos: [x, y, z],
                     kind,
                     tag,
                 })
-                .encode();
+                .encode()
+                .into();
                 for &i in &viewers {
-                    self.guests[i].sender.send(body.clone());
+                    self.guests[i].sender.send_shared(body.clone());
                 }
             }
         }

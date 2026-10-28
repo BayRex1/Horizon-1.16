@@ -26,7 +26,7 @@ use std::{
     net::TcpStream,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     time::{Duration, Instant},
@@ -35,8 +35,12 @@ use std::{
 /// ServerCommonPacketListenerImpl.KEEPALIVE_TIME and the disconnect timeout.
 const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Packets queued for one client beyond this many bytes disconnect it.
-const MAX_PENDING: usize = 96 << 20;
+/// A write that cannot finish in this long disconnects the client.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bytes queued for one client beyond this disconnect it. Far above any
+/// real burst (a 1 Mbit/s uplink needs minutes to drain 16 MiB), and it
+/// bounds the memory a client that stops reading can pin.
+const MAX_PENDING: usize = 16 << 20;
 /// Vanilla's server-side disconnect during login is a JSON component.
 fn login_disconnect(c: &mut Connection, reason: &horizon_world::nbt::Tag) {
     let json = component_json(reason);
@@ -231,7 +235,10 @@ impl Drop for Holding {
 pub struct PlayerSender {
     pub tx: Sender<Out>,
     pub pending: Arc<AtomicUsize>,
-    held: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Set when a reservation would pass [`MAX_PENDING`]: no more packets are
+    /// queued for this client and the hub disconnects it.
+    dead: Arc<AtomicBool>,
+    held: Arc<Mutex<Vec<Arc<[u8]>>>>,
     /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
     posted: Arc<AtomicUsize>,
 }
@@ -240,15 +247,46 @@ impl PlayerSender {
         Self {
             tx,
             pending,
+            dead: Arc::default(),
             held: Arc::default(),
             posted: Arc::default(),
         }
     }
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Arc<[u8]>>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    pub fn send(&self, body: Vec<u8>) {
-        self.pending.fetch_add(body.len(), Ordering::Relaxed);
+    /// Reserve `len` queued bytes before the body is kept: over the cap the
+    /// sender is marked dead and the body dropped.
+    fn reserve(&self, len: usize) -> bool {
+        if self.dead.load(Ordering::Relaxed) {
+            return false;
+        }
+        let mut pending = self.pending.load(Ordering::Relaxed);
+        loop {
+            if pending + len > MAX_PENDING {
+                self.dead.store(true, Ordering::Relaxed);
+                return false;
+            }
+            match self.pending.compare_exchange_weak(
+                pending,
+                pending + len,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => pending = now,
+            }
+        }
+    }
+    /// Whether a reservation was refused: the writer exits and the hub kicks.
+    pub fn dead(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
+    }
+    /// Send one body, shared with every other recipient of the same bytes.
+    pub fn send_shared(&self, body: Arc<[u8]>) {
+        if !self.reserve(body.len()) {
+            return;
+        }
         if HOLDING.get() {
             self.held().push(body);
         } else {
@@ -256,16 +294,30 @@ impl PlayerSender {
             self.deliver(Out::Packet(body));
         }
     }
-    /// Several packets in order, as [`Self::send`] each: under one lock
-    /// while the tick holds them.
-    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+    /// Send one packet body; `send_shared` avoids the copy when the same
+    /// body goes to several players.
+    pub fn send(&self, body: Vec<u8>) {
+        self.send_shared(body.into());
+    }
+    /// Several packets in order, as [`Self::send_shared`] each: under one
+    /// lock while the tick holds them.
+    pub fn send_many<I, B>(&self, bodies: I)
+    where
+        I: IntoIterator<Item = B>,
+        B: Into<Arc<[u8]>>,
+    {
         if !HOLDING.get() {
-            bodies.into_iter().for_each(|body| self.send(body));
+            bodies
+                .into_iter()
+                .for_each(|body| self.send_shared(body.into()));
             return;
         }
         let mut held = self.held();
         for body in bodies {
-            self.pending.fetch_add(body.len(), Ordering::Relaxed);
+            let body = body.into();
+            if !self.reserve(body.len()) {
+                break;
+            }
             held.push(body);
         }
     }
@@ -952,6 +1004,8 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     let events = shared.events.clone();
     let _ = c.reader.set_read_timeout(Some(KEEP_ALIVE_TIMEOUT));
     let (mut reader, writer) = c.split();
+    // A peer that stops reading must not pin the writer in write_all forever.
+    let _ = writer.set_write_timeout(Some(WRITE_TIMEOUT));
     let (tx, rx) = channel();
     let pending = Arc::new(AtomicUsize::new(0));
     let latency = Arc::new(AtomicI32::new(0));
@@ -1113,15 +1167,24 @@ impl SharedFrames {
 
 /// Send one packet body: a large one compressed through [`SharedFrames`],
 /// so a chunk column sent to fifty players is compressed once, not fifty
-/// times. The bytes on the wire are the same.
-fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<()> {
+/// times. The bytes on the wire are the same. Frames are appended to `out`
+/// so one write can carry the whole batch.
+fn send_body(
+    writer: &mut ConnWriter,
+    body: &[u8],
+    out: &mut Vec<u8>,
+) -> horizon_protocol::Result<()> {
     match writer.threshold {
         Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
-            writer.send_contents(&SharedFrames::get().contents(body, t)?)
+            writer.append_contents(&SharedFrames::get().contents(body, t)?, out)
         }
-        _ => writer.send(body),
+        _ => writer.append(body, out),
     }
 }
+
+/// A batch is written out once it holds this much, at the end of a drained
+/// queue, never across a `recv_timeout`.
+const BATCH_BYTES: usize = 64 << 10;
 
 fn write_loop(
     mut writer: ConnWriter,
@@ -1133,30 +1196,59 @@ fn write_loop(
     let start = Instant::now();
     let mut sent_at: Option<(i64, Instant)> = None;
     let mut next = Instant::now() + KEEP_ALIVE_EVERY;
+    let mut batch: Vec<u8> = Vec::new();
     loop {
-        let mut write = |body: Vec<u8>| {
-            pending.fetch_sub(body.len(), Ordering::Relaxed);
-            send_body(&mut writer, &body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
-        };
+        let mut closing = None;
+        let mut stop = false;
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Out::Packet(body)) => {
-                if !write(body) {
-                    break;
+            Ok(first) => {
+                let mut queued = Some(first);
+                while let Some(out) = queued {
+                    match out {
+                        Out::Packet(body) => {
+                            pending.fetch_sub(body.len(), Ordering::Relaxed);
+                            if send_body(&mut writer, &body, &mut batch).is_err() {
+                                stop = true;
+                            }
+                        }
+                        Out::Packets(bodies) => {
+                            for body in bodies {
+                                if stop {
+                                    break;
+                                }
+                                pending.fetch_sub(body.len(), Ordering::Relaxed);
+                                if send_body(&mut writer, &body, &mut batch).is_err() {
+                                    stop = true;
+                                }
+                            }
+                        }
+                        Out::Disconnect(reason) => {
+                            closing = Some(reason);
+                            stop = true;
+                        }
+                        Out::Close => stop = true,
+                    }
+                    if stop || batch.len() >= BATCH_BYTES {
+                        break;
+                    }
+                    queued = rx.try_recv().ok();
                 }
             }
-            Ok(Out::Packets(bodies)) => {
-                if !bodies.into_iter().all(&mut write) {
-                    break;
-                }
-            }
-            Ok(Out::Disconnect(reason)) => {
-                let _ = writer
-                    .send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
-                std::thread::sleep(Duration::from_millis(50));
-                break;
-            }
-            Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => stop = true,
+        }
+        // One write for everything the queue held, before what comes after.
+        if writer.write_batch(&mut batch).is_err() {
+            stop = true;
+        }
+        if let Some(reason) = closing {
+            let _ =
+                writer.send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
+            std::thread::sleep(Duration::from_millis(50));
+            break;
+        }
+        if stop {
+            break;
         }
         let now = Instant::now();
         if let Some((id, at)) = sent_at {
@@ -1214,8 +1306,8 @@ mod tests {
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
         match out {
-            Out::Packet(body) => vec![body],
-            Out::Packets(bodies) => bodies,
+            Out::Packet(body) => vec![body.to_vec()],
+            Out::Packets(bodies) => bodies.iter().map(|b| b.to_vec()).collect(),
             Out::Disconnect(_) => vec![b"disconnect".to_vec()],
             Out::Close => vec![b"close".to_vec()],
         }
@@ -1296,6 +1388,95 @@ mod tests {
             cache.frames.values().map(|c| c.len()).sum::<usize>()
         );
         assert!(cache.bytes <= first * 2);
+    }
+
+    /// Reservations stop at the per-connection cap, and are released as the
+    /// writer hands the bytes to the socket.
+    #[test]
+    fn outbound_reservations_stop_at_the_cap_and_release() {
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let body = vec![0u8; 1 << 20];
+        while !sender.dead() {
+            sender.send(body.clone());
+        }
+        assert_eq!(sender.pending.load(Ordering::Relaxed), MAX_PENDING);
+        let mut queued = 0;
+        while let Ok(out) = rx.try_recv() {
+            let len = match out {
+                Out::Packet(body) => body.len(),
+                Out::Packets(bodies) => bodies.iter().map(|b| b.len()).sum(),
+                _ => 0,
+            };
+            sender.pending.fetch_sub(len, Ordering::Relaxed);
+            queued += len;
+        }
+        assert_eq!(queued, MAX_PENDING);
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        // A dead sender stays dead even with the queue drained.
+        sender.send(vec![1]);
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        assert!(rx.try_recv().is_err());
+        // One body larger than the cap is refused outright.
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        sender.send(vec![0u8; MAX_PENDING + 1]);
+        assert!(sender.dead());
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A queue drained by the writer thread leaves as one batch, in order and
+    /// byte-identical to encoding each packet on its own.
+    #[test]
+    fn a_drained_queue_goes_out_as_one_batch_in_order() {
+        use horizon_protocol::{connection::Pipe, frame};
+        use std::io::Read;
+        let (a, mut b) = Pipe::pair();
+        let mut c = Connection::local(a);
+        c.set_compression(64);
+        let (_, writer) = c.split();
+        let (tx, rx) = channel();
+        let alive = Arc::new(AtomicI64::new(-1));
+        let latency = Arc::new(AtomicI32::new(0));
+        let bodies: Vec<Vec<u8>> = (0..40u8)
+            .map(|i| {
+                let mut body = vec![5u8];
+                body.extend(std::iter::repeat_n(i, 300));
+                body
+            })
+            .collect();
+        let pending = Arc::new(AtomicUsize::new(bodies.iter().map(|b| b.len()).sum()));
+        let written = pending.clone();
+        let handle = std::thread::spawn(move || write_loop(writer, rx, alive, latency, pending));
+        let shared: Vec<Arc<[u8]>> = bodies.iter().cloned().map(Arc::from).collect();
+        tx.send(Out::Packets(shared)).unwrap();
+        tx.send(Out::Close).unwrap();
+        handle.join().unwrap();
+        assert_eq!(written.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let mut raw = Vec::new();
+        b.read_to_end(&mut raw).unwrap();
+        let expected: Vec<u8> = bodies
+            .iter()
+            .flat_map(|body| frame::encode(body, Some(64)).unwrap())
+            .collect();
+        assert_eq!(raw, expected);
+        assert_eq!(written.load(Ordering::Relaxed), 0);
+    }
+
+    /// A body sent to several players is one allocation: each queued copy is
+    /// the same `Arc`.
+    #[test]
+    fn shared_bodies_are_one_allocation() {
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let body: Arc<[u8]> = vec![1, 2, 3].into();
+        sender.send_shared(body.clone());
+        let Out::Packet(sent) = rx.recv().unwrap() else {
+            panic!("expected one packet");
+        };
+        assert_eq!(Arc::as_ptr(&sent), Arc::as_ptr(&body));
+        assert_eq!(&*sent, &[1, 2, 3]);
     }
 
     #[test]
