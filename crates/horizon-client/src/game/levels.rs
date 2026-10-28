@@ -19,9 +19,10 @@ use super::{
     ominous_item_spawner, persist, raids::Raiding, sculk::SculkState, tnt, trident,
 };
 use horizon_client::{
-    Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
-    save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
-    ticket_levels::ChunkTickets, vanillagen::VanillaTerrain, world::World,
+    Result, block_entity_anim::BlockEntityAnims, clock::Overload,
+    random_tick_sections::RandomTickSections, save::SaveDir, streaming::Streaming,
+    tick_chunk_membership::TickChunkMembership, ticket_levels::ChunkTickets,
+    vanillagen::VanillaTerrain, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{
@@ -109,6 +110,10 @@ impl Default for Pass {
 #[derive(Default)]
 pub(super) struct Levels {
     parked: HashMap<Dim, Parked>,
+    /// When the server tick loop started, on its own clock.
+    loop_started: Option<Instant>,
+    /// Vanilla's "Can't keep up" gate for late server deadlines.
+    overload: Overload,
 }
 
 impl Levels {
@@ -406,7 +411,8 @@ impl Game<'_> {
             *next = now;
             return;
         }
-        *next += self.clock.tick_duration();
+        let tick = self.clock.tick_duration();
+        *next += tick;
         if *next > now {
             // A `/pregen` task or force-loaded chunks keep the workers fed
             // until the next tick.
@@ -415,8 +421,20 @@ impl Game<'_> {
             if *next > now {
                 std::thread::sleep(*next - now);
             }
-        } else if now - *next > Duration::from_secs(2) {
-            *next = now;
+        } else {
+            let started = *self.levels.loop_started.get_or_insert(now);
+            let behind = now - *next;
+            let ticks = (behind.as_nanos() / tick.as_nanos().max(1)).min(u32::MAX as u128) as u32;
+            if let Some(warning) = self
+                .levels
+                .overload
+                .late(behind, ticks, tick, now - started)
+            {
+                log::warn!("{warning}");
+            }
+            if behind > Duration::from_secs(2) {
+                *next = now;
+            }
         }
     }
 
