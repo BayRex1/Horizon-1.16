@@ -28,7 +28,8 @@ type Pos = (i32, i32, i32);
 /// every tracked mob asks for its entity each tick.
 #[derive(Default)]
 pub(super) struct UuidIndex {
-    tick: i64,
+    /// None until built: a level swap clears it even at the same game time.
+    tick: Option<i64>,
     by_uuid: horizon_client::fast_hash::FxHashMap<Uuid, u32>,
 }
 
@@ -36,14 +37,18 @@ impl UuidIndex {
     fn get(&self, uuid: &Uuid) -> Option<&u32> {
         self.by_uuid.get(uuid)
     }
+    /// The ids belong to the level that was in place; a swap replaces them.
+    pub(super) fn invalidate(&mut self) {
+        self.tick = None;
+    }
 }
 
 impl Game<'_> {
     /// The persistent entities' ids by uuid, current as of this tick.
     pub(super) fn uuid_index(&self) -> std::cell::Ref<'_, UuidIndex> {
         let mut index = self.trial_uuid_index.borrow_mut();
-        if index.tick != self.world.game_time {
-            index.tick = self.world.game_time;
+        if index.tick != Some(self.world.game_time) {
+            index.tick = Some(self.world.game_time);
             index.by_uuid.clear();
             index
                 .by_uuid

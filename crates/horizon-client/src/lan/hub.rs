@@ -1754,6 +1754,8 @@ impl Hub {
     /// All entities as one client sees them: the world's, the host, the other guests.
     fn track_entities(&mut self, ctx: &mut TickCtx) {
         let mut states = std::mem::take(&mut self.player_states);
+        // The buffer is reused, so start this tick's pass instead of appending.
+        states.clear();
         if let Some(h) = ctx.host {
             let e = states.add(h.entity_id, h.uuid, "minecraft:player");
             self.player_state(
