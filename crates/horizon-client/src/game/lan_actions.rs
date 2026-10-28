@@ -1044,6 +1044,10 @@ impl Game<'_> {
                         self.spawn_protection_message(host, conn, a.pos);
                         return;
                     }
+                    // A server mod may refuse it (block-events.break-block): the ack puts it back.
+                    if self.mods_refuse_break(host, conn, a.pos) {
+                        return;
+                    }
                     let face = direction(i32::from(a.direction));
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
@@ -1177,6 +1181,8 @@ impl Game<'_> {
                 // placed; the player is told and the blocks below go back.
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
+                } else if self.mods_take_use(host, conn, p.pos, hand == Hand::Off) {
+                    // A server mod handled the click (block-events.use-block): vanilla does nothing.
                 } else {
                     let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
                     let heard = self.audio.capture.as_ref().map_or(0, Vec::len);

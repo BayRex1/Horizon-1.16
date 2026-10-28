@@ -27,12 +27,24 @@ A client mod: runs in the player's game.
 - Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `events`
 
-## World `horizon-server-mod`
+## World `block-host`
 
-A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
+A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server. `block-events` for the server: a world of its own, so a server mod built before it still instantiates as `horizon-server-mod` and is not asked.
+
+- Imports (what the game offers): `players`
+- Exports (what the mod provides): `block-events`
+
+## World `horizon-server-mod`
 
 - Imports (what the game offers): `log`, `storage`, `players`, `world`
 - Exports (what the mod provides): `server-events`
+
+## World `horizon-server-block-mod`
+
+What the SDK builds a server mod as: `horizon-server-mod` and the block hooks.
+
+- Imports (what the game offers): `log`, `storage`, `players`, `world`
+- Exports (what the mod provides): `block-events`, `server-events`
 
 ## World `horizon-ui-mod`
 
@@ -769,3 +781,18 @@ An argument's value, parsed as its kind says.
 | `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |
+
+## `block-events`
+
+Access: exported by the mod: the game calls it.
+
+Asked before the server acts on a block: what a server mod answers decides it (manifest `api = "0.3"`, the mod's registration has `blocks`). A server mod built before this interface has no such export and is not asked. The block hasn't changed yet when the mod is asked.
+
+### type `player`
+
+`type player = player`
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `break-block` | `func(player: player, x: s32, y: s32, z: s32, state: string) -> bool` | `player` starts breaking the block at `x y z` in their dimension; `state` is what is there, as `minecraft:oak_log[axis=y]`. True refuses it: the block stays, and the player's game puts it back, as under spawn protection. Every mod asked may refuse. |
+| `use-block` | `func(player: player, x: s32, y: s32, z: s32, state: string, item: string) -> bool` | `player` right-clicks the block at `x y z` (`state`) holding `item` in the hand they use (`minecraft:air`: an empty hand). True: the mod handled it, and vanilla neither uses the block (doors, chests, buttons...) nor uses or places the held item there. The first mod (in load order) that answers true takes it. |

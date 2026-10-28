@@ -49,6 +49,8 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "beacons",
                 "-p",
+                "block-guard",
+                "-p",
                 "horizon-mods-test-guest",
                 "-p",
                 "horizon-mods-test-ui-guest",
@@ -73,6 +75,7 @@ fn mods_dir() -> &'static Path {
             ("predator_missile", example("predator-missile")),
             ("welcome", example("welcome")),
             ("beacons", example("beacons")),
+            ("block_guard", example("block-guard")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
@@ -521,6 +524,42 @@ fn ui_screens_settings_and_events() {
     assert!(mods.command("ui_close"));
     assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
     assert!(mods.screen(0).is_none());
+}
+
+// `block-events`: the server asks a mod before it breaks or uses a block, and the mod's answer decides it
+#[test]
+fn block_events_refuse_and_take() {
+    let mut mods = Mods::load(&[mods_dir().join("block_guard.hmod")], |_| true, |_| false);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let steve = ServerPlayer {
+        id: "00000000-0000-0000-0000-000000000001".into(),
+        name: "Steve".into(),
+        x: 0.5,
+        y: 64.0,
+        z: 0.5,
+        dimension: "minecraft:overworld".into(),
+        game_mode: GameMode::Survival,
+        health: 20.0,
+    };
+    mods.set_snapshot(Snapshot {
+        players: vec![steve.clone()],
+        ..Snapshot::default()
+    });
+    let at = BlockPos { x: 1, y: 64, z: 2 };
+    // A guarded block stays, and the player is told why; stone breaks as usual.
+    assert!(mods.break_block(&steve, at, "minecraft:diamond_block"));
+    assert!(mods.drain().iter().any(|o| matches!(o, Output::Tell { text, .. } if text == "This block is guarded")));
+    assert!(!mods.break_block(&steve, at, "minecraft:stone"));
+    // A stick reads the block instead of using it; anything else is vanilla's.
+    assert!(mods.use_block(&steve, at, "minecraft:oak_door[open=false]", "minecraft:stick"));
+    assert!(mods
+        .drain()
+        .iter()
+        .any(|o| matches!(o, Output::Tell { text, .. } if text == "1 64 2: minecraft:oak_door[open=false]")));
+    assert!(!mods.use_block(&steve, at, "minecraft:oak_door[open=false]", "minecraft:air"));
+    // A server mod that didn't register `blocks` is not asked.
+    let mut beacons = Mods::load(&[mods_dir().join("beacons.hmod")], |_| true, |_| false);
+    assert!(!beacons.break_block(&steve, at, "minecraft:diamond_block"));
 }
 
 // `ui.replace-screen`: the mod's screen opens in the inventory's place, not over it, until it gives it back

@@ -1,0 +1,8 @@
+id = "block_guard"
+name = "Block Guard"
+version = "0.1.0"
+description = "Diamond blocks can't be broken; a right click with a stick says what a block is instead of using it."
+authors = ["Horizon Hammer Core"]
+api = "0.3"
+side = "server"
+capabilities = ["players"]

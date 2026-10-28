@@ -48,6 +48,18 @@ impl Game<'_> {
         false
     }
     pub(super) fn apply_mod_block_writes(&mut self) {}
+    pub(super) fn mods_refuse_break(&mut self, _host: &mut LanHost, _conn: u32, _pos: [i32; 3]) -> bool {
+        false
+    }
+    pub(super) fn mods_take_use(
+        &mut self,
+        _host: &mut LanHost,
+        _conn: u32,
+        _pos: [i32; 3],
+        _off_hand: bool,
+    ) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "mods")]
@@ -397,6 +409,72 @@ mod run {
                     );
                 }
             }
+        }
+
+        /// The server player of connection `conn`, as server mods see them.
+        fn guest_server_player(&self, host: &LanHost, conn: u32) -> Option<ServerPlayer> {
+            let uuid = host.hub.guests.iter().find(|g| g.conn == conn)?.uuid;
+            let id = uuid_string(uuid);
+            self.server_players(Some(host)).into_iter().find(|p| p.id == id)
+        }
+
+        /// Asks server mods before guest `conn` starts breaking the block at
+        /// `pos` (`block-events.break-block`): true when one refuses it.
+        pub(in crate::game) fn mods_refuse_break(
+            &mut self,
+            host: &mut LanHost,
+            conn: u32,
+            pos: [i32; 3],
+        ) -> bool {
+            if !self.hears_players() {
+                return false;
+            }
+            let Some(player) = self.guest_server_player(host, conn) else {
+                return false;
+            };
+            // In the guest's level: its block, and the world lent for the call.
+            self.as_guest(host, conn, |g| {
+                let state = g.state_string(g.world.block(pos[0], pos[1], pos[2]));
+                g.lend_world();
+                let at = BlockPos { x: pos[0], y: pos[1], z: pos[2] };
+                let refused = g.mods.mods.break_block(&player, at, &state);
+                g.return_world();
+                g.show_mod_output();
+                refused
+            })
+            .unwrap_or(false)
+        }
+
+        /// Asks server mods before vanilla acts on guest `conn`'s right click
+        /// on the block at `pos` (`block-events.use-block`): true when one took
+        /// it, and the game neither uses the block nor uses or places the item.
+        pub(in crate::game) fn mods_take_use(
+            &mut self,
+            host: &mut LanHost,
+            conn: u32,
+            pos: [i32; 3],
+            off_hand: bool,
+        ) -> bool {
+            if !self.hears_players() {
+                return false;
+            }
+            let Some(player) = self.guest_server_player(host, conn) else {
+                return false;
+            };
+            self.as_guest(host, conn, |g| {
+                let state = g.state_string(g.world.block(pos[0], pos[1], pos[2]));
+                let slot = if off_hand { crate::game::shield::OFFHAND_SLOT } else { g.selected };
+                let item = g
+                    .stack_in(slot)
+                    .map_or_else(|| "minecraft:air".to_owned(), |s| s.item.to_string());
+                g.lend_world();
+                let at = BlockPos { x: pos[0], y: pos[1], z: pos[2] };
+                let taken = g.mods.mods.use_block(&player, at, &state, &item);
+                g.return_world();
+                g.show_mod_output();
+                taken
+            })
+            .unwrap_or(false)
         }
 
         /// A player broke (or placed) `state` at `pos`: the player acting now.

@@ -23,6 +23,24 @@ The project has a working WASM mod system in `crates/horizon-mods/` with:
 
 ## Changelog
 
+### 2025-10-28 - Block hooks (`block-events`)
+
+#### Added
+- **WIT `interface block-events`** (exported by server mods, asked before the server acts on a block)
+  - `break-block(player, x, y, z, state) -> bool` - true refuses breaking: the block stays, the player's game puts it back
+  - `use-block(player, x, y, z, state, item) -> bool` - true: the mod handled the right click; vanilla neither uses the
+    block nor uses or places the held item. First mod that takes it wins
+  - Asked only of mods whose registration has `blocks` (`Registration::on_blocks()`)
+- **Worlds**: `block-host` (the host's optional binding, like `ui-host`) and `horizon-server-block-mod` (what the SDK builds
+  server mods as). Server mods built before it have no export and are simply not asked - nothing breaks
+- **`runtime.rs`** - `block_bindings`, `Running.blocks`; `Mods::break_block`, `Mods::use_block`
+- **SDK** - `ServerMod::break_block`, `ServerMod::use_block` (default false), wired in `export_server_mod!`
+- **Game integration** (`horizon-client`): `game/server_mods.rs` `mods_refuse_break`, `mods_take_use` (in the guest's level,
+  world lent for the call); `game/lan_actions.rs` asks them next to spawn protection (dig start; use item on block).
+  Covers the server thread (default single player), LAN and dedicated servers; not the old `--in-frame` path
+- **Example** `crates/horizon-mod-sdk/examples/block-guard`: diamond blocks can't be broken, a stick reads a block instead of using it
+- **Tests** - `sandbox.rs` `block_events_refuse_and_take`; `docs/api/mods-reference.md` regenerated
+
 ### 2025-10-28 - Screen replacement (`ui.replace-screen`, API level 8)
 
 #### Added

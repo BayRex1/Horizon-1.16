@@ -184,7 +184,7 @@ macro_rules! export_mod {
 pub mod server {
     wit_bindgen::generate!({
         path: "wit",
-        world: "horizon-server-mod",
+        world: "horizon-server-block-mod",
         pub_export_macro: true,
         export_macro_name: "__export_horizon_server_mod",
         default_bindings_module: "horizon_mod_sdk::server",
@@ -194,6 +194,7 @@ pub mod server {
         },
     });
 
+    pub use exports::horizon::mods::block_events::Guest as __BlockGuest;
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
@@ -228,6 +229,19 @@ pub mod server {
         /// When [`Registration::blocks`] is set: `state` is what was there.
         fn block_broken(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
         fn block_placed(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
+        /// Before `player` starts breaking `state` at `pos`, when
+        /// [`Registration::blocks`] is set: true refuses it and the block
+        /// stays (the player's game puts it back).
+        fn break_block(&mut self, _player: &Player, _pos: BlockPos, _state: &str) -> bool {
+            false
+        }
+        /// Before vanilla acts on `player`'s right click on `state` at `pos`
+        /// holding `item` (`minecraft:air`: empty hand), when
+        /// [`Registration::blocks`] is set: true means the mod handled it, and
+        /// vanilla neither uses the block nor uses or places the item.
+        fn use_block(&mut self, _player: &Player, _pos: BlockPos, _state: &str, _item: &str) -> bool {
+            false
+        }
     }
 
     impl Registration {
@@ -436,6 +450,18 @@ macro_rules! export_server_mod {
                 }
                 fn block_placed(player: Player, pos: BlockPos, state: String) {
                     with(|m| m.block_placed(&player, pos, &state))
+                }
+            }
+            impl $crate::server::__BlockGuest for Export {
+                fn break_block(player: Player, x: i32, y: i32, z: i32, state: String) -> bool {
+                    let mut out = false;
+                    with(|m| out = m.break_block(&player, BlockPos { x, y, z }, &state));
+                    out
+                }
+                fn use_block(player: Player, x: i32, y: i32, z: i32, state: String, item: String) -> bool {
+                    let mut out = false;
+                    with(|m| out = m.use_block(&player, BlockPos { x, y, z }, &state, &item));
+                    out
                 }
             }
             #[cfg(target_arch = "wasm32")]

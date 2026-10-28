@@ -793,6 +793,26 @@ interface server-events {
     block-placed: func(player: player, pos: block-pos, state: string);
 }
 
+/// Asked before the server acts on a block: what a server mod answers
+/// decides it (manifest `api = "0.3"`, the mod's registration has
+/// `blocks`). A server mod built before this interface has no such export
+/// and is not asked. The block hasn't changed yet when the mod is asked.
+interface block-events {
+    use players.{player};
+
+    /// `player` starts breaking the block at `x y z` in their dimension;
+    /// `state` is what is there, as `minecraft:oak_log[axis=y]`. True refuses
+    /// it: the block stays, and the player's game puts it back, as under
+    /// spawn protection. Every mod asked may refuse.
+    break-block: func(player: player, x: s32, y: s32, z: s32, state: string) -> bool;
+    /// `player` right-clicks the block at `x y z` (`state`) holding `item`
+    /// in the hand they use (`minecraft:air`: an empty hand). True: the mod
+    /// handled it, and vanilla neither uses the block (doors, chests,
+    /// buttons...) nor uses or places the held item there. The first mod (in
+    /// load order) that answers true takes it.
+    use-block: func(player: player, x: s32, y: s32, z: s32, state: string, item: string) -> bool;
+}
+
 /// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
@@ -807,6 +827,19 @@ world horizon-mod {
 /// A server mod (manifest `side = "server"`, `api = "0.3"`, experimental):
 /// runs where the world is simulated, on the dedicated server, a LAN host
 /// and single player's own server.
+/// `block-events` for the server: a world of its own, so a server mod built
+/// before it still instantiates as `horizon-server-mod` and is not asked.
+world block-host {
+    export block-events;
+}
+
+/// What the SDK builds a server mod as: `horizon-server-mod` and the block
+/// hooks.
+world horizon-server-block-mod {
+    include horizon-server-mod;
+    export block-events;
+}
+
 world horizon-server-mod {
     import log;
     import storage;

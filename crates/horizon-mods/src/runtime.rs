@@ -37,6 +37,18 @@ mod server_bindings {
         },
     });
 }
+/// `block-events` beyond `horizon-server-mod`: a second world, so server mods
+/// built before it (no export) still instantiate and are simply not asked.
+mod block_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "block-host",
+        with: {
+            "horizon:mods/players": super::server_bindings::horizon::mods::players,
+        },
+    });
+}
+use block_bindings::BlockHost;
 /// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
 /// world, so mods built before it (no `ui-events` export) still instantiate
 /// as `horizon-mod` and simply hear nothing of their widgets.
@@ -319,6 +331,8 @@ struct Running {
     /// The mod's `ui-events` export; none for a mod built before `ui`, or a
     /// server mod.
     ui: Option<UiHost>,
+    /// A server mod's `block-events` export; none for one built before it.
+    blocks: Option<BlockHost>,
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
@@ -680,13 +694,15 @@ impl Mods {
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|e| reason(&e))?;
-        let (mut hooks, ui) = if server {
+        let (mut hooks, ui, blocks) = if server {
             let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+            // `block-events` is a server mod built since it; older ones are not asked.
+            let blocks = BlockHost::new(&mut store, &instance).ok();
             let r = exports
                 .horizon_mods_server_events()
                 .call_init(&mut store)
                 .map_err(|e| reason(&e))??;
-            (Hooks::Server(exports, r), None)
+            (Hooks::Server(exports, r), None, blocks)
         } else {
             let exports = HorizonMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
             // `ui-events` is a mod built since `ui`'s; older mods have no export
@@ -696,7 +712,7 @@ impl Mods {
                 .horizon_mods_events()
                 .call_init(&mut store)
                 .map_err(|e| reason(&e))??;
-            (Hooks::Client(exports, r), ui)
+            (Hooks::Client(exports, r), ui, None)
         };
         let free = |c: &str| {
             let free = !reserved(c) && !taken.iter().any(|t| t == c);
@@ -726,6 +742,7 @@ impl Mods {
         Ok(Some(Running {
             store,
             ui,
+            blocks,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             reads_recipes: functions.iter().any(|f| f.starts_with("recipes.")),
@@ -932,6 +949,60 @@ impl Mods {
             |h| h.blocks,
             |m, s| m.call_block_broken(s, player, pos, state),
         );
+    }
+    /// Running server mods asked about blocks: registration `blocks` and the
+    /// `block-events` export.
+    fn asks_blocks(&self, i: usize) -> bool {
+        self.entries[i].run.as_ref().is_some_and(|r| {
+            r.blocks.is_some() && r.hooks.server().is_some_and(|h| h.blocks)
+        })
+    }
+    /// `player` starts breaking `state` at `pos` (`block-events.break-block`):
+    /// true when a server mod refuses it, and the block stays.
+    pub fn break_block(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str) -> bool {
+        let mut refused = false;
+        for i in 0..self.entries.len() {
+            if !self.asks_blocks(i) {
+                continue;
+            }
+            refused |= self
+                .call(i, FUEL_EVENT, |run| {
+                    let Running { blocks, store, .. } = run;
+                    match blocks {
+                        Some(b) => b.horizon_mods_block_events().call_break_block(
+                            store, player, pos.x, pos.y, pos.z, state,
+                        ),
+                        None => Ok(false),
+                    }
+                })
+                .unwrap_or(false);
+        }
+        refused
+    }
+    /// `player` right-clicks `state` at `pos` holding `item`
+    /// (`block-events.use-block`): true when a server mod handled it, and
+    /// vanilla does nothing there. The first mod that takes it ends the asking.
+    pub fn use_block(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str, item: &str) -> bool {
+        for i in 0..self.entries.len() {
+            if !self.asks_blocks(i) {
+                continue;
+            }
+            let taken = self
+                .call(i, FUEL_EVENT, |run| {
+                    let Running { blocks, store, .. } = run;
+                    match blocks {
+                        Some(b) => b.horizon_mods_block_events().call_use_block(
+                            store, player, pos.x, pos.y, pos.z, state, item,
+                        ),
+                        None => Ok(false),
+                    }
+                })
+                .unwrap_or(false);
+            if taken {
+                return true;
+            }
+        }
+        false
     }
     /// `player` placed `state` at `pos`.
     pub fn block_placed(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str) {
