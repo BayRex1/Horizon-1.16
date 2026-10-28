@@ -1,0 +1,20 @@
+[package]
+name = "waypoints"
+version = "0.1.0"
+edition = "2024"
+description = "Horizon mod: waypoints, a minimap overlay and a world map in one mod"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Next to the folder you unpacked horizon-main.zip into:
+#   horizon-main/
+#   horizon-waypoints/   <- this folder
+horizon-mod-sdk = { path = "/home/etienne/horizon-FryedCheesefork/crates/horizon-mod-sdk" }
+# Or pin the SDK from Git instead (use the revision your Horizon build comes from):
+# horizon-mod-sdk = { git = "https://github.com/ludovic111/horizon", rev = "<commit>" }
+
+[profile.release]
+opt-level = "s"
+lto = true
