@@ -660,8 +660,8 @@ impl Launcher {
                                 continue;
                             }
                         };
-                        self.owner = Some(true);
                         if let Some(file) = file {
+                            self.owner = Some(true);
                             cmd.arg("--session-file").arg(file);
                         }
                         // Still play, offline, and say why.
@@ -2235,8 +2235,7 @@ impl Launcher {
                     .child(play),
             );
 
-        // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
-        // owner there is nothing to play, so signing in comes first.
+        // Owners can download from Mojang; everyone can prepare their own local install.
         let first = (!prepared && !self.preparing)
             .then_some(self.owner)
             .flatten();
@@ -2246,11 +2245,7 @@ impl Launcher {
                 "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
                 &[("version", &version)],
             ),
-            Some(false) => trf(
-                "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.",
-                &[("version", &version)],
-            ),
-            None => backend::resources_summary(prepared, !silent, &version),
+            Some(false) | None => backend::resources_summary(prepared, !silent, &version),
         };
         let mut prepare = button(
             "prepare",
@@ -2294,15 +2289,7 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
-            Some(false) => div().child(
-                button("prepare-sign-in", "Sign in", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
-                        cx.notify();
-                    },
-                )),
-            ),
-            None => div().child(prepare),
+            Some(false) | None => div().child(prepare),
         };
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
@@ -2347,8 +2334,8 @@ impl Launcher {
         {
             rows = rows.child(self.join_friend_row(prepared && !running, cx));
             // The top bar shows who plays; a row only when there is something to do about it:
-            // no account that owns the game (Play needs one), or offline.
-            if self.owner == Some(false) {
+            // a selected account that needs sign-in, or an optional sign-in while offline.
+            if self.owner == Some(false) && self.accounts.selected().is_some() {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
@@ -3293,7 +3280,7 @@ impl Launcher {
             Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
             None if self.accounts.accounts.is_empty() => div().child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+                "Microsoft sign-in is needed for authenticated Java servers. You can play offline without signing in.",
             )),
             None => div().child(tr("Add another account.")),
         };

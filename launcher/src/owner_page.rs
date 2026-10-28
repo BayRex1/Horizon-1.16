@@ -1,17 +1,11 @@
-//! The owner gate in the window (`horizon_launcher::account::launch`): the screen that asks for a
-//! Microsoft account that owns Minecraft: Java Edition. It covers the launcher once for players
-//! without one (those who played offline before the gate), and again whenever Play is refused.
-//! The sign-in runs on it, code and all.
+//! Optional Microsoft sign-in, opened explicitly or after a selected account fails its owner check.
+//! Offline players never see this screen automatically.
 use super::*;
 
 impl Launcher {
-    /// Whether the screen covers the window: no owner, and either Play was refused or the player
-    /// hasn't read it yet. The data question comes first.
+    /// Show only when explicitly opened; the data question comes first.
     pub(crate) fn asking_owner(&self) -> bool {
-        self.owner == Some(false)
-            && (self.owner_screen_open || !self.settings.owner_notice_seen)
-            && !self.asking_consent()
-            && self.opening.is_none()
+        self.owner_screen_open && !self.asking_consent() && self.opening.is_none()
     }
 
     /// Opens the screen and starts the sign-in on it.
@@ -45,10 +39,10 @@ impl Launcher {
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child(format!("{}.", tr(account::NEEDS_OWNER))),
+                    .child(tr("Sign in with Microsoft")),
             )
             .child(text(theme::UI).text_color(t.muted).child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
+                "Microsoft sign-in is needed for authenticated Java servers. You can play offline without signing in.",
             )))
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Your worlds, offline names and settings stay where they are.",

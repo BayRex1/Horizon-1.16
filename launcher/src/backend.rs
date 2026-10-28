@@ -1910,9 +1910,8 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
     }
 }
 
-/// The client's command, once the owner gate lets it start and its resources are prepared. Past
-/// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
-/// offline.
+/// The client's command once resources are prepared. Explicit offline play needs no account;
+/// Microsoft play still checks ownership and supplies a session when available.
 pub fn client(tag: &str) -> Result<Command, String> {
     let (session, offline) = account::session_for_game(&game_home())
         .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;

@@ -1,5 +1,4 @@
-//! The owner gate from the outside: with no account that owns Minecraft: Java Edition in the
-//! launcher, neither `horizon-launcher play` nor the MCP server's play starts the game.
+//! Offline CLI/MCP play reaches resource preparation without an account or a session file.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -30,6 +29,9 @@ fn launcher(root: &Path, args: &[&str]) -> Command {
         .env("HORIZON_LAUNCHER_HOME", root.join("launcher"))
         .env("XDG_DATA_HOME", root.join("data"))
         .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("HORIZON_LAUNCHER_TRASH", root.join("trash"))
+        .env("HORIZON_LAUNCHER_CLIPBOARD", root.join("clipboard"))
+        .env("HORIZON_LAUNCHER_DESKTOP", root.join("desktop"))
         .env("HORIZON_LAUNCHER_NO_SELF_UPDATE", "1")
         .env("HORIZON_NO_AUDIO", "1")
         .env("HORIZON_TELEMETRY_URL", "off")
@@ -44,14 +46,14 @@ fn text(out: &Output) -> String {
 }
 
 #[test]
-fn the_cli_refuses_to_play_without_an_owner() {
+fn the_cli_allows_offline_play_without_an_owner() {
     let root = home("cli");
     let out = launcher(&root, &["play"]).output().unwrap();
     let said = text(&out);
     assert!(!out.status.success(), "{said}");
-    assert!(said.contains(REFUSED), "{said}");
-    assert!(said.contains("horizon-launcher account sign-in"), "{said}");
-    // Nothing of the game ran, and the offline name is still there.
+    assert!(!said.contains(REFUSED), "{said}");
+    assert!(said.contains("not prepared yet"), "{said}");
+    // Preparation still requires the player's own resources; no session is fabricated.
     assert!(!root.join("game/sessions").exists());
     let accounts = std::fs::read_to_string(root.join("launcher/accounts.json")).unwrap();
     assert!(accounts.contains("Builder_1"), "{accounts}");
@@ -59,7 +61,7 @@ fn the_cli_refuses_to_play_without_an_owner() {
 }
 
 #[test]
-fn the_mcp_server_refuses_to_play_without_an_owner() {
+fn the_mcp_server_allows_offline_play_without_an_owner() {
     let root = home("mcp");
     let mut child = launcher(&root, &["mcp"])
         .stdin(Stdio::piped())
@@ -84,6 +86,38 @@ fn the_mcp_server_refuses_to_play_without_an_owner() {
         .expect("a reply to play");
     assert_eq!(reply["result"]["isError"], true, "{reply}");
     let said = reply["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(said.contains(REFUSED), "{said}");
+    assert!(!said.contains(REFUSED), "{said}");
+    assert!(said.contains("not prepared yet"), "{said}");
+    assert!(!root.join("game/sessions").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_fresh_install_and_a_build_without_microsoft_configuration_can_play_offline() {
+    let root = home("fresh");
+    std::fs::remove_file(root.join("launcher/accounts.json")).unwrap();
+    let out = launcher(&root, &["play"])
+        .env("HORIZON_MSA_CLIENT_ID", "")
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert!(said.contains("not prepared yet"), "{said}");
+    assert!(!said.contains(REFUSED), "{said}");
+    assert!(!root.join("game/sessions").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn offline_profile_selection_does_not_require_a_keychain_owner() {
+    let root = home("profile");
+    let out = launcher(&root, &["account", "offline", "Builder_2"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let accounts: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("launcher/accounts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(accounts["offline_selected"], "Builder_2");
     let _ = std::fs::remove_dir_all(&root);
 }

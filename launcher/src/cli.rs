@@ -79,8 +79,7 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
-    /// Minecraft: Java Edition
+    /// Sign in with a Microsoft account in your browser (device code) for authenticated Java play
     SignIn,
     /// Sign out: the account's tokens leave the keychain
     SignOut {
@@ -89,9 +88,8 @@ enum AccountCmd {
     },
     /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
-    /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
-    /// made up
+    /// Play offline without a Microsoft account: as NAME (3 to 16 letters, digits or _),
+    /// or as the name the game made up
     Offline { name: Option<String> },
     /// Forget one of your offline names
     ForgetOffline { name: String },
@@ -562,7 +560,7 @@ enum Cmd {
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
+    /// Start the client (Microsoft sign-in is optional for offline play)
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -1352,7 +1350,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "Playing offline as the game's own name (`account select NAME` to switch)."
                     );
                 }
-                if !accounts.has_owner(account::store()) {
+                if accounts.selected().is_some() && !accounts.has_owner(account::store()) {
                     println!("{}.", account::NEEDS_OWNER);
                 }
             }

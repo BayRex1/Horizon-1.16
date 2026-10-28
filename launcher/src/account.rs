@@ -5,8 +5,8 @@
 //! reads once (`--session-file`), never on its command line. Tokens never reach logs, errors or
 //! output.
 //!
-//! The owner gate ([`launch`]): the launcher starts the game only while an account in it owns
-//! Minecraft: Java Edition, as other launchers do. Offline names play behind such an account.
+//! Microsoft sessions and Mojang downloads require an owning account ([`launch`]). Explicit
+//! offline play does not require a Microsoft account and does not contact the account services.
 //! The game binary itself, its harnesses and the servers don't go through the launcher's gate.
 //!
 //! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
@@ -784,9 +784,6 @@ pub enum Player {
     GameName,
 }
 
-const OFFLINE_NEEDS_OWNER: &str =
-    "Offline names need a Microsoft account that owns Minecraft: Java Edition in the launcher.";
-
 /// The secrets an account keeps in `store`, if it still has them there.
 fn secrets_in(store: &dyn SecretStore, uuid: &str) -> Option<Secrets> {
     store
@@ -850,7 +847,7 @@ impl Accounts {
         Ok(())
     }
     /// Whether an account here owned the game at its last check (the keychain's answer, no
-    /// request): what Play and offline names need.
+    /// request): whether authenticated play or a Mojang download may be available.
     pub fn has_owner(&self, store: &dyn SecretStore) -> bool {
         self.accounts
             .iter()
@@ -866,9 +863,8 @@ impl Accounts {
         }
     }
 
-    /// Plays as `who`: an account, an offline name (kept, only beside an account that owns the
-    /// game), or the game's own name.
-    pub fn play_as(&mut self, store: &dyn SecretStore, who: Player) -> Result<(), String> {
+    /// Plays as `who`: an account, an offline name, or the game's own name.
+    pub fn play_as(&mut self, _store: &dyn SecretStore, who: Player) -> Result<(), String> {
         match who {
             Player::Microsoft(uuid) => {
                 if !self.accounts.iter().any(|a| a.uuid == uuid) {
@@ -877,9 +873,6 @@ impl Accounts {
                 self.selected = Some(uuid);
             }
             Player::Offline(name) => {
-                if !self.has_owner(store) {
-                    return Err(OFFLINE_NEEDS_OWNER.into());
-                }
                 let name = self.add_offline(&name)?;
                 self.selected = None;
                 self.offline_selected = Some(name);
@@ -956,8 +949,7 @@ impl Accounts {
         }
     }
 
-    /// Sign out: the secrets leave the keychain, the account the list. Offline names stay, but
-    /// play only once an account that owns the game is back.
+    /// Sign out: the secrets leave the keychain, the account the list. Offline names stay playable.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         store.delete(uuid)?;
         self.accounts.retain(|a| a.uuid != uuid);
@@ -1144,10 +1136,15 @@ impl SignIn {
     }
 }
 
-/// The owner gate for the game about to start, then the selected account's session in a file
-/// for it: the file (none: offline) and why the account plays offline this time, if it does.
+/// Explicit offline play needs no account. Otherwise check the selected Microsoft session:
+/// the file (none: offline) and why the account plays offline this time, if it does.
 pub fn session_for_game(game_home: &Path) -> Result<(Option<PathBuf>, Option<String>), NoOwner> {
     let mut accounts = Accounts::load();
+    // No selected Microsoft profile means explicit offline play, including a fresh installation.
+    // Do not consult the keychain, renew unrelated accounts or create a session file.
+    if accounts.selected().is_none() {
+        return Ok((None, None));
+    }
     let pass = launch(
         &Endpoints::live(),
         client_id().as_deref(),
