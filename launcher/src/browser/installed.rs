@@ -71,7 +71,9 @@ impl Installed {
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
         fs::write(&part, text).map_err(|e| format!("{}: {e}", part.display()))?;
-        fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))
+        fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::mod_inventory::refresh(home);
+        Ok(())
     }
 
     pub fn find(&self, source: SourceId, project: &str) -> Option<&Entry> {

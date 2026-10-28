@@ -15,6 +15,7 @@ pub mod i18n;
 pub mod import;
 pub mod instances;
 pub mod launch;
+pub mod mod_inventory;
 pub mod modpacks;
 pub mod mojang;
 pub mod nightly;

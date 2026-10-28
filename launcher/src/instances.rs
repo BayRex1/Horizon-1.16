@@ -470,6 +470,7 @@ pub fn apply(cmd: &mut Command, instance: &Instance) -> Result<(), String> {
         Kind::Port | Kind::Pack => modpacks::apply_profile(cmd, &instance.work)?,
     }
     follow_player(&backend::game_home(), &instance.home);
+    crate::mod_inventory::refresh(&instance.home);
     Ok(())
 }
 

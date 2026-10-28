@@ -137,7 +137,9 @@ pub fn set_enabled(home: &Path, id: &str, on: bool) -> Result<(), String> {
     if !out.is_empty() {
         out.push('\n');
     }
-    fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+    fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))?;
+    crate::mod_inventory::refresh(home);
+    Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {

@@ -1802,6 +1802,7 @@ pub fn append_game_args(cmd: &mut Command) {
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
+    crate::mod_inventory::refresh(&home);
     let mut cmd = Command::new(client_program(tag));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
     // PipeWire remembers volume and mute per application name. The game's own name is
