@@ -378,24 +378,26 @@ impl Containers<'_> {
     }
 }
 
-/// The block columns any item entity's box reaches, so that a hopper with
-/// no item over it skips the scan of every item. Kept for one block-entity
-/// pass, in which items do not move: removing one leaves a superset, still
-/// right, and adding one (always pushed at the end, under a new id) or
-/// removing the last rebuilds the columns.
+/// The item entities each block column's boxes reach, so a hopper takes the
+/// items over it instead of scanning every dropped item. Kept for one
+/// block-entity pass, in which items do not move: an addition (always pushed
+/// at the end, under a new id) rebuilds, and a removal invalidates the
+/// indices ([`ItemColumns::removed`]).
 #[derive(Default)]
 pub(super) struct ItemColumns {
     /// The item count and last item id when last asked, if built.
     seen: Option<(usize, Option<u32>)>,
-    cells: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
+    cells: horizon_client::fast_hash::FxHashMap<(i32, i32), Vec<u32>>,
 }
 impl ItemColumns {
-    /// Whether an item's box may reach into column (x, z).
-    fn may_reach(
+    /// Rebuild if the item list changed, then hand the column's indices to
+    /// `out` in `dropped` order (they were pushed in it).
+    fn collect(
         &mut self,
         items: &[horizon_client::entities::ItemEntity],
         x: i32,
         z: i32,
+        out: &mut Vec<u32>,
     ) -> bool {
         let (len, last) = (items.len(), items.last().map(|i| i.id));
         let stale = self
@@ -403,18 +405,40 @@ impl ItemColumns {
             .is_none_or(|(seen_len, seen_last)| len > seen_len || last != seen_last);
         self.seen = Some((len, last));
         if stale {
-            self.cells.clear();
-            for item in items {
+            for list in self.cells.values_mut() {
+                list.clear();
+            }
+            for (i, item) in items.iter().enumerate() {
                 let b = item.bounds();
                 let (lo, hi) = (b.min_position(), b.max_position());
                 for cx in lo.x.floor() as i32..=hi.x.floor() as i32 {
                     for cz in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                        self.cells.insert((cx, cz));
+                        self.cells.entry((cx, cz)).or_default().push(i as u32);
                     }
                 }
             }
+            self.cells.retain(|_, list| !list.is_empty());
         }
-        self.cells.contains(&(x, z))
+        out.clear();
+        if let Some(list) = self.cells.get(&(x, z)) {
+            out.extend_from_slice(list);
+        }
+        !out.is_empty()
+    }
+    /// An item left `dropped`: the indices after it moved.
+    fn removed(&mut self) {
+        self.seen = None;
+    }
+    /// Whether an item's box may reach into column (x, z).
+    #[cfg(test)]
+    fn may_reach(
+        &mut self,
+        items: &[horizon_client::entities::ItemEntity],
+        x: i32,
+        z: i32,
+    ) -> bool {
+        let mut out = Vec::new();
+        self.collect(items, x, z, &mut out)
     }
 }
 
@@ -756,11 +780,6 @@ impl Game<'_> {
                 f64::from(pos.2) + 1.0,
             ],
         );
-        if let Some(columns) = self.item_columns.as_mut()
-            && !columns.may_reach(&self.dropped, pos.0, pos.2)
-        {
-            return false;
-        }
         self.suck_item_entities(hopper, min, max)
     }
     /// The container half of `HopperBlockEntity.suckInItems`: one item from the
@@ -925,9 +944,27 @@ impl Game<'_> {
     /// The item half of `HopperBlockEntity.suckInItems` (`getItemsAtAndAbove`):
     /// adds the item entities that meet the box, until one is taken whole.
     fn suck_item_entities(&mut self, hopper: &View, min: [f64; 3], max: [f64; 3]) -> bool {
-        let mut i = 0;
-        while i < self.dropped.len() {
-            let b = self.dropped[i].bounds();
+        // The hopper's bowl is one block column: only the items whose boxes
+        // reach it can meet the box.
+        let (x, z) = (min[0].floor() as i32, min[2].floor() as i32);
+        let mut candidates = std::mem::take(&mut self.item_candidates);
+        match self.item_columns.as_mut() {
+            Some(columns) => {
+                columns.collect(&self.dropped, x, z, &mut candidates);
+            }
+            None => {
+                candidates.clear();
+                candidates.extend(0..self.dropped.len() as u32);
+            }
+        }
+        let mut took = false;
+        for &candidate in &candidates {
+            let i = candidate as usize;
+            let Some(item) = self.dropped.get(i) else {
+                // Only a removal in this loop can shift the rest, and it returns.
+                break;
+            };
+            let b = item.bounds();
             let (lo, hi) = (b.min_position(), b.max_position());
             let inside = lo.x < max[0]
                 && hi.x > min[0]
@@ -940,14 +977,18 @@ impl Game<'_> {
                 match self.add_item(None, hopper, stack, None) {
                     None => {
                         self.dropped.remove(i);
-                        return true;
+                        if let Some(columns) = self.item_columns.as_mut() {
+                            columns.removed();
+                        }
+                        took = true;
+                        break;
                     }
                     Some(rest) => self.dropped[i].stack = rest,
                 }
             }
-            i += 1;
         }
-        false
+        self.item_candidates = candidates;
+        took
     }
     /// `MinecartHopper.tick`'s `tryConsumeItems` (`suckInItems`) for an enabled
     /// hopper minecart: one item from the container above, else the item
@@ -1274,13 +1315,65 @@ mod item_column_tests {
             let before = t.elapsed().as_secs_f64() * 1e3;
             let t = std::time::Instant::now();
             let mut columns = ItemColumns::default();
+            let mut out = Vec::new();
             let b: Vec<bool> = at
                 .iter()
-                .map(|&h| columns.may_reach(&items, h.0, h.2) && scan(&items, h))
+                .map(|&h| columns.collect(&items, h.0, h.2, &mut out) && scan(&items, h))
                 .collect();
             let after = t.elapsed().as_secs_f64() * 1e3;
             assert_eq!(a, b);
             println!("{hoppers} hoppers, {count} items: {before:.3} ms -> {after:.3} ms");
+        }
+    }
+
+    /// The column index follows removals: a hopper's candidates are exactly
+    /// the items whose boxes reach its column, in `dropped` order.
+    #[test]
+    fn column_index_matches_a_full_scan_after_edits() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |range: f64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+        };
+        let mut items: Vec<ItemEntity> = Vec::new();
+        let mut columns = ItemColumns::default();
+        let mut out = Vec::new();
+        let mut next_id = 0;
+        for round in 0..2000 {
+            match round % 3 {
+                0 => {
+                    next_id += 1;
+                    items.push(item(
+                        next_id,
+                        next(8.0) - 4.0,
+                        64.0,
+                        next(8.0) - 4.0,
+                    ));
+                }
+                1 if !items.is_empty() => {
+                    let i = next(items.len() as f64) as usize;
+                    items.remove(i);
+                    columns.removed();
+                }
+                _ => {}
+            }
+            let (x, z) = (next(12.0) as i32 - 6, next(12.0) as i32 - 6);
+            let found = columns.collect(&items, x, z, &mut out);
+            let expected: Vec<u32> = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    let b = item.bounds();
+                    let (lo, hi) = (b.min_position(), b.max_position());
+                    x >= lo.x.floor() as i32
+                        && x <= hi.x.floor() as i32
+                        && z >= lo.z.floor() as i32
+                        && z <= hi.z.floor() as i32
+                })
+                .map(|(i, _)| i as u32)
+                .collect();
+            assert_eq!(out, expected, "round {round} at ({x}, {z})");
+            assert_eq!(found, !expected.is_empty());
         }
     }
 
