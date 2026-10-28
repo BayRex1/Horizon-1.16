@@ -1123,7 +1123,8 @@ impl Game<'_> {
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Drown { mob, at } => {
                     self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
-                    let v = self.mob(mob)
+                    let v = self
+                        .mob(mob)
                         .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
                     self.drown_particles(at, v);
                 }
@@ -1307,7 +1308,8 @@ impl Game<'_> {
                                 from: Some(from),
                             };
                             let hurt = self.mob_hits_mob(id, 10.0, source);
-                            let resistance = self.mob(id)
+                            let resistance = self
+                                .mob(id)
                                 .map_or(0.0, |m| self.mob_knockback_resistance(m));
                             (hurt, resistance)
                         }
