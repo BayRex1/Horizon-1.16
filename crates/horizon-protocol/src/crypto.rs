@@ -142,7 +142,17 @@ impl Cfb8 {
 
 /// Fill `out` with the operating system's cryptographic randomness.
 pub fn random_bytes(out: &mut [u8]) -> crate::Result<()> {
-    getrandom::fill(out).map_err(|e| crate::Error::new(format!("No secure random source: {e}")))
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        getrandom::fill(out).map_err(|e| crate::Error::new(format!("No secure random source: {e}")))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = out;
+        Err(crate::Error::new(
+            "No secure random source in a WebAssembly mod",
+        ))
+    }
 }
 
 /// Crypt.generateSecretKey: a random AES-128 key, the connection's shared secret.

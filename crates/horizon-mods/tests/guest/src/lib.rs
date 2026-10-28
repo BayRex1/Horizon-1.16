@@ -3,13 +3,29 @@
 //! capability `storage` on a fixed key, `/save_key <key> <text>` exercises
 //! it on an arbitrary key (for the quota and key-count limits); `tick` and
 //! `frame` do nothing, to measure the cost of a call.
-use horizon_mod_sdk::{Mod, Registration, chat, storage};
+use horizon_mod_sdk::{Mod, NetworkDirection, NetworkPhase, Registration, chat, storage};
 
 struct Guest {
     ticks: u64,
 }
 
 impl Mod for Guest {
+    fn network_start(_address: &str, target_version: Option<&str>) -> Result<Option<Self>, String> {
+        Ok((target_version == Some("test")).then_some(Self { ticks: 0 }))
+    }
+    fn network_packet(
+        &mut self,
+        phase: NetworkPhase,
+        direction: NetworkDirection,
+        body: Vec<u8>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        self.ticks += 1;
+        if matches!(phase, NetworkPhase::Play) && matches!(direction, NetworkDirection::Clientbound)
+        {
+            return Ok(vec![vec![2, self.ticks as u8], body]);
+        }
+        Ok(vec![body])
+    }
     fn init() -> Result<(Self, Registration), String> {
         let hooks = ["spin", "panic", "grow", "hello", "save", "load", "save_key"]
             .into_iter()

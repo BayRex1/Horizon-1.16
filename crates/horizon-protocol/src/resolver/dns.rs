@@ -67,7 +67,7 @@ pub(super) fn query_srv(
     timeout: Duration,
 ) -> Option<(String, u16)> {
     let mut id = [0; 2];
-    getrandom::fill(&mut id).ok()?;
+    crate::crypto::random_bytes(&mut id).ok()?;
     let id = u16::from_be_bytes(id);
     let query = encode_query(id, name)?;
     for &server in servers {

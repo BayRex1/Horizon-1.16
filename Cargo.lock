@@ -1504,6 +1504,7 @@ dependencies = [
 name = "horizon-mods"
 version = "0.1.0"
 dependencies = [
+ "horizon-protocol",
  "horizon-shader-api",
  "log",
  "minisign-verify",

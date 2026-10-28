@@ -3,8 +3,9 @@
 //! splits into a reader (for a receive thread) and a shareable writer. It runs
 //! over TCP, or over an in-memory pipe between two threads of one process
 //! (vanilla's `LocalChannel`, which an integrated server's player uses).
-use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
+use crate::{Direction, Error, Result, State, buf::Reader, crypto::Cfb8, frame};
 use std::{
+    collections::VecDeque,
     io::{Read, Write},
     net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
     sync::{
@@ -170,15 +171,37 @@ pub struct Counters {
 pub struct ConnReader {
     stream: Stream,
     buffer: Vec<u8>,
+    translated: VecDeque<(i32, Vec<u8>)>,
+    translator: Option<Arc<Translation>>,
     decrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
 }
 pub struct ConnWriter {
     stream: Stream,
+    translator: Option<Arc<Translation>>,
     encrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     counters: Arc<Counters>,
+}
+
+/// Changes complete packet bodies (VarInt id followed by payload) between the
+/// wire and Horizon's 26.3 codec. A translator may drop, replace or expand a
+/// packet. It runs before compression on send and after decompression on receive.
+/// Implementations must synchronize their own per-connection state because the
+/// reader and writer run on different threads after [`Connection::split`].
+pub trait PacketTranslator: Send + Sync {
+    fn translate(&self, state: State, direction: Direction, body: &[u8]) -> Result<Vec<Vec<u8>>>;
+}
+
+struct Translation {
+    translator: Arc<dyn PacketTranslator>,
+    state: Mutex<State>,
+}
+impl Translation {
+    fn state(&self) -> State {
+        *self.state.lock().unwrap()
+    }
 }
 /// `InetAddress.getByName` under Java's default `java.net.preferIPv6Addresses=false`: IPv4
 /// addresses first, whatever order the system resolver gives (macOS lists IPv6 first). Vanilla
@@ -235,17 +258,34 @@ impl Connection {
             reader: ConnReader {
                 stream,
                 buffer: Vec::new(),
+                translated: VecDeque::new(),
+                translator: None,
                 decrypt: None,
                 threshold: None,
                 counters: counters.clone(),
             },
             writer: ConnWriter {
                 stream: write,
+                translator: None,
                 encrypt: None,
                 threshold: None,
                 counters,
             },
         })
+    }
+    /// Attach a native packet translator before sending the handshake. Both
+    /// halves keep it after `split`; an unmodified connection stays on the
+    /// direct path with no translation calls.
+    pub fn set_translator(&mut self, translator: Arc<dyn PacketTranslator>) {
+        let shared = Arc::new(Translation {
+            translator,
+            state: Mutex::new(State::Handshake),
+        });
+        self.reader.translator = Some(shared.clone());
+        self.writer.translator = Some(shared);
+    }
+    pub fn set_packet_state(&self, state: State) {
+        self.reader.set_packet_state(state);
     }
     /// `Connection.isMemoryConnection`: through a [`Pipe`] rather than a socket.
     pub fn is_memory(&self) -> bool {
@@ -276,16 +316,40 @@ impl Connection {
     }
 }
 impl ConnReader {
+    /// Reader and writer share the same protocol phase after a split.
+    pub fn set_packet_state(&self, state: State) {
+        if let Some(translation) = &self.translator {
+            *translation.state.lock().unwrap() = state;
+        }
+    }
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         loop {
+            if let Some(packet) = self.translated.pop_front() {
+                return Ok(packet);
+            }
             if let Some(frame) = frame::split(&mut self.buffer)? {
                 let body = frame::decompress(frame, self.threshold)?;
-                let mut r = Reader::new(&body);
-                let id = r.varint()?;
-                let start = r.position();
                 self.counters.received.fetch_add(1, Ordering::Relaxed);
-                return Ok((id, body[start..].to_vec()));
+                if let Some(translation) = &self.translator {
+                    let bodies = translation.translator.translate(
+                        translation.state(),
+                        Direction::Clientbound,
+                        &body,
+                    )?;
+                    for body in bodies {
+                        let mut r = Reader::new(&body);
+                        let id = r.varint()?;
+                        let start = r.position();
+                        self.translated.push_back((id, body[start..].to_vec()));
+                    }
+                    continue;
+                } else {
+                    let mut r = Reader::new(&body);
+                    let id = r.varint()?;
+                    let start = r.position();
+                    return Ok((id, body[start..].to_vec()));
+                }
             }
             let mut chunk = [0u8; 16384];
             let n = self.stream.read(&mut chunk)?;
@@ -309,7 +373,19 @@ impl ConnReader {
 impl ConnWriter {
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
-        self.send_contents(&frame::contents(body, self.threshold)?)
+        if let Some(translation) = &self.translator {
+            let bodies = translation.translator.translate(
+                translation.state(),
+                Direction::Serverbound,
+                body,
+            )?;
+            for body in bodies {
+                self.send_contents(&frame::contents(&body, self.threshold)?)?;
+            }
+            Ok(())
+        } else {
+            self.send_contents(&frame::contents(body, self.threshold)?)
+        }
     }
     /// Send a frame whose contents [`frame::contents`] made with this
     /// writer's threshold.
@@ -334,6 +410,57 @@ impl ConnWriter {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[derive(Default)]
+    struct TestTranslator {
+        seen: Mutex<Vec<(State, Direction)>>,
+    }
+    impl PacketTranslator for TestTranslator {
+        fn translate(
+            &self,
+            state: State,
+            direction: Direction,
+            body: &[u8],
+        ) -> Result<Vec<Vec<u8>>> {
+            self.seen.lock().unwrap().push((state, direction));
+            Ok(match (direction, body) {
+                (Direction::Serverbound, [1, 0x41]) => vec![vec![2, 0x42], vec![3]],
+                (Direction::Clientbound, [4]) => vec![],
+                (Direction::Clientbound, [5]) => vec![vec![6, 0x43]],
+                _ => vec![body.to_vec()],
+            })
+        }
+    }
+
+    #[test]
+    fn translator_changes_both_directions_and_shares_phase_after_split() {
+        let (client_pipe, server_pipe) = Pipe::pair();
+        let mut client = Connection::local(client_pipe);
+        let mut server = Connection::local(server_pipe);
+        let translator = Arc::new(TestTranslator::default());
+        client.set_translator(translator.clone());
+        client.set_packet_state(State::Play);
+        client.send(&[1, 0x41]).unwrap();
+        assert_eq!(server.recv().unwrap(), (2, vec![0x42]));
+        assert_eq!(server.recv().unwrap(), (3, vec![]));
+
+        let (mut reader, mut writer) = client.split();
+        reader.set_packet_state(State::Login);
+        writer.send(&[7]).unwrap();
+        assert_eq!(server.recv().unwrap(), (7, vec![]));
+        server.send(&[4]).unwrap(); // dropped by the translator
+        server.send(&[5]).unwrap();
+        assert_eq!(reader.recv().unwrap(), (6, vec![0x43]));
+        assert_eq!(
+            *translator.seen.lock().unwrap(),
+            [
+                (State::Play, Direction::Serverbound),
+                (State::Login, Direction::Serverbound),
+                (State::Login, Direction::Clientbound),
+                (State::Login, Direction::Clientbound),
+            ]
+        );
+    }
 
     #[test]
     fn ipv4_first_keeps_each_familys_order() {

@@ -19,6 +19,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
+| `network` | [`network-events`](#network-events) | read, drop and replace packets sent to and from remote servers |
 
 ## World `horizon-mod`
 
@@ -39,7 +40,14 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
 - Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `log`, `game`, `chat`, `hud`, `storage`, `command`
-- Exports (what the mod provides): `ui-events`, `events`
+- Exports (what the mod provides): `ui-events`, `network-events`, `events`
+
+## World `network-host`
+
+Only the network export is called in the connection's own mod instance.
+
+- Imports (what the game offers): `log`
+- Exports (what the mod provides): `network-events`
 
 ## World `ui-host`
 
@@ -477,6 +485,34 @@ What the game calls. Only the hooks `init` asks for are ever called.
 | `frame` | `func(seconds: f32)` | Each rendered frame, with the seconds since the last one. |
 | `command` | `func(name: string, args: string) -> result<option<string>, string>` | `/name args`: ok(some(text)) is shown as feedback, err(text) in red. |
 | `chat` | `func(text: string)` | Each chat line the player receives, as plain text. |
+
+## `network-events`
+
+Access: exported by the mod: the game calls it.
+
+Capability `network` (experimental): packet bodies after decryption and decompression, before Horizon's packet codec. A separate mod instance is created for each remote connection. The host enforces packet size, output count, memory and instruction limits. A failure closes the connection.
+
+### enum `phase`
+
+| Case | |
+| --- | --- |
+| `handshake` |  |
+| `status` |  |
+| `login` |  |
+| `configuration` |  |
+| `play` |  |
+
+### enum `direction`
+
+| Case | |
+| --- | --- |
+| `clientbound` |  |
+| `serverbound` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `start` | `func(address: string, target-version: option<string>) -> result<bool, string>` | Called before the handshake. Return true to handle this connection. A mod can use `target-version` to offer an explicit version choice. |
+| `packet` | `func(phase: phase, direction: direction, body: list<u8>) -> result<list<list<u8>>, string>` | A body begins with the VarInt packet id. Return zero or more complete bodies in the other protocol. Packet order is preserved. |
 
 ## `recipes`
 

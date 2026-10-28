@@ -371,8 +371,34 @@ impl Game<'_> {
             Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
             None => {
                 self.extras_connecting(address, name);
-                match cookies {
-                    Some(cookies) => Session::connect_transferred(
+                #[cfg(feature = "mods")]
+                let translator = self
+                    .mods
+                    .mods
+                    .network_translator(address, self.options.target_version.as_deref())?;
+                #[cfg(not(feature = "mods"))]
+                let translator: Option<
+                    Arc<dyn horizon_protocol::connection::PacketTranslator>,
+                > = None;
+                match (cookies, translator) {
+                    (Some(cookies), Some(translator)) => Session::connect_transferred_translated(
+                        address,
+                        name,
+                        auth.clone(),
+                        view,
+                        lang.clone(),
+                        cookies,
+                        translator,
+                    ),
+                    (None, Some(translator)) => Session::connect_translated(
+                        address,
+                        name,
+                        auth.clone(),
+                        view,
+                        lang.clone(),
+                        translator,
+                    ),
+                    (Some(cookies), None) => Session::connect_transferred(
                         address,
                         name,
                         auth.clone(),
@@ -380,7 +406,9 @@ impl Game<'_> {
                         lang.clone(),
                         cookies,
                     ),
-                    None => Session::connect(address, name, auth.clone(), view, lang.clone()),
+                    (None, None) => {
+                        Session::connect(address, name, auth.clone(), view, lang.clone())
+                    }
                 }
             }
         };

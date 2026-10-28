@@ -8,8 +8,8 @@
 //! encrypts the connection (ClientHandshakePacketListenerImpl.handleHello).
 use crate::auth::AuthSession;
 use horizon_protocol::{
-    PROTOCOL_VERSION,
-    connection::{ConnReader, ConnWriter, Connection, Counters},
+    PROTOCOL_VERSION, State,
+    connection::{ConnReader, ConnWriter, Connection, Counters, PacketTranslator},
     crypto::{generate_secret, offline_uuid, server_hash},
     packets::{Empty, configuration as cfg, handshake, login, play},
     registry::Dynamic,
@@ -104,7 +104,28 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start(address, name, auth, view_distance, lang, None, None)
+        Self::start(address, name, auth, view_distance, lang, None, None, None)
+    }
+    /// Connect through a native packet translator. The translator sees complete
+    /// packet bodies on both sides of Horizon's normal 26.3 codec.
+    pub fn connect_translated(
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+        translator: Arc<dyn PacketTranslator>,
+    ) -> Self {
+        Self::start(
+            address,
+            name,
+            auth,
+            view_distance,
+            lang,
+            None,
+            None,
+            Some(translator),
+        )
     }
     /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
     /// server stored carry to the new connection (`TransferState`).
@@ -124,6 +145,29 @@ impl Session {
             lang,
             None,
             Some(cookies),
+            None,
+        )
+    }
+    /// A transferred connection with its own translator instance. A translator
+    /// keeps state for one TCP connection, so callers provide a fresh one.
+    pub fn connect_transferred_translated(
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+        cookies: Cookies,
+        translator: Arc<dyn PacketTranslator>,
+    ) -> Self {
+        Self::start(
+            address,
+            name,
+            auth,
+            view_distance,
+            lang,
+            None,
+            Some(cookies),
+            Some(translator),
         )
     }
     /// Join an integrated server through memory (`Connection.connectToLocalServer`).
@@ -133,7 +177,16 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start("local", name, None, view_distance, lang, Some(pipe), None)
+        Self::start(
+            "local",
+            name,
+            None,
+            view_distance,
+            lang,
+            Some(pipe),
+            None,
+            None,
+        )
     }
     fn start(
         address: &str,
@@ -143,6 +196,7 @@ impl Session {
         lang: Arc<Language>,
         local: Option<horizon_protocol::connection::Pipe>,
         cookies: Option<Cookies>,
+        translator: Option<Arc<dyn PacketTranslator>>,
     ) -> Self {
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
@@ -172,6 +226,7 @@ impl Session {
                     &thread_counters,
                     &thread_cookies,
                     transferred,
+                    translator,
                 );
                 let from_server = result.is_ok();
                 let reason = result.unwrap_or_else(|e| e);
@@ -366,6 +421,7 @@ fn run(
     shared_counters: &Mutex<Option<Arc<Counters>>>,
     cookies: &Cookies,
     transferred: bool,
+    translator: Option<Arc<dyn PacketTranslator>>,
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
@@ -389,6 +445,9 @@ fn run(
         .map_err(|e| e.to_string())?;
         (host, port, c)
     };
+    if let Some(translator) = translator {
+        c.set_translator(translator);
+    }
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
     let e = |e: horizon_protocol::Error| e.to_string();
     c.send(
@@ -405,6 +464,7 @@ fn run(
         .encode(),
     )
     .map_err(e)?;
+    c.set_packet_state(State::Login);
     // Vanilla's login sends the account's profile id, or the offline one.
     let uuid = auth.map_or_else(|| offline_uuid(name), |a| a.uuid);
     c.send(
@@ -422,6 +482,7 @@ fn run(
             login::Clientbound::LoginFinished(p) => {
                 c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
                     .map_err(e)?;
+                c.set_packet_state(State::Configuration);
                 break p.profile;
             }
             login::Clientbound::Disconnect(p) => {
@@ -552,6 +613,7 @@ fn receive_play(
                     let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
                     configuring.store(true, Ordering::Relaxed);
                 }
+                reader.set_packet_state(State::Configuration);
                 let registries =
                     configure(reader, shared_writer, configuring, lang, send, cookies)?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
@@ -667,6 +729,7 @@ fn configure(
                 w.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
                     .map_err(|e| e.to_string())?;
                 configuring.store(false, Ordering::Relaxed);
+                reader.set_packet_state(State::Play);
                 return Ok(registries);
             }
             _ => {}
@@ -746,9 +809,30 @@ pub fn load_language(resources: &std::path::Path) -> Language {
 /// Ask a server for its status (ServerStatusPinger): MOTD, players and the
 /// round trip time in milliseconds.
 pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128), String> {
+    ping_with_translator(address, timeout, None)
+}
+
+/// Status ping through a packet translator, for a server list that selects a
+/// protocol version per entry. Use a fresh translator for each connection.
+pub fn ping_translated(
+    address: &str,
+    timeout: Duration,
+    translator: Arc<dyn PacketTranslator>,
+) -> Result<(serde_json::Value, u128), String> {
+    ping_with_translator(address, timeout, Some(translator))
+}
+
+fn ping_with_translator(
+    address: &str,
+    timeout: Duration,
+    translator: Option<Arc<dyn PacketTranslator>>,
+) -> Result<(serde_json::Value, u128), String> {
     use horizon_protocol::packets::status;
     let (host, port) = parse_address(address).ok_or("Invalid address")?;
     let mut c = Connection::connect_server(&host, port, timeout).map_err(|e| e.to_string())?;
+    if let Some(translator) = translator {
+        c.set_translator(translator);
+    }
     c.reader
         .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
@@ -763,6 +847,7 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
         .encode(),
     )
     .map_err(e)?;
+    c.set_packet_state(State::Status);
     c.send(&status::Serverbound::StatusRequest(Empty).encode())
         .map_err(e)?;
     let (id, payload) = c.recv().map_err(e)?;
@@ -782,6 +867,70 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translated_status_ping_uses_handshake_then_status_phase() {
+        use horizon_protocol::{Direction, packets::status};
+        use std::net::TcpListener;
+
+        #[derive(Default)]
+        struct Spy(Mutex<Vec<(State, Direction)>>);
+        impl PacketTranslator for Spy {
+            fn translate(
+                &self,
+                state: State,
+                direction: Direction,
+                body: &[u8],
+            ) -> horizon_protocol::Result<Vec<Vec<u8>>> {
+                self.0.lock().unwrap().push((state, direction));
+                Ok(vec![body.to_vec()])
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut conn = Connection::from_stream(stream).unwrap();
+            let (id, body) = conn.recv().unwrap();
+            assert!(matches!(
+                handshake::Serverbound::decode(id, &body).unwrap(),
+                handshake::Serverbound::Intention(_)
+            ));
+            let (id, body) = conn.recv().unwrap();
+            assert!(matches!(
+                status::Serverbound::decode(id, &body).unwrap(),
+                status::Serverbound::StatusRequest(_)
+            ));
+            conn.send(
+                &status::Clientbound::StatusResponse(status::StatusResponse {
+                    json: r#"{"version":{"name":"test"}}"#.into(),
+                })
+                .encode(),
+            )
+            .unwrap();
+            let (id, body) = conn.recv().unwrap();
+            assert!(matches!(
+                status::Serverbound::decode(id, &body).unwrap(),
+                status::Serverbound::PingRequest(_)
+            ));
+            conn.send(&status::Clientbound::PongResponse(status::Ping { time: 1 }).encode())
+                .unwrap();
+        });
+        let spy = Arc::new(Spy::default());
+        let (json, _) = ping_translated(&address, Duration::from_secs(5), spy.clone()).unwrap();
+        server.join().unwrap();
+        assert_eq!(json["version"]["name"], "test");
+        assert_eq!(
+            spy.0.lock().unwrap().as_slice(),
+            &[
+                (State::Handshake, Direction::Serverbound),
+                (State::Status, Direction::Serverbound),
+                (State::Status, Direction::Clientbound),
+                (State::Status, Direction::Serverbound),
+                (State::Status, Direction::Clientbound),
+            ]
+        );
+    }
 
     #[test]
     fn pings_wait_behind_teleports_but_keepalives_do_not_wait_for_the_game() {
