@@ -504,4 +504,43 @@ mod tests {
             }
         }
     }
+    /// The surface-bounded motion-blocking scan (`MobWorld::motion_blocking_height`)
+    /// finds what the full scan does: the cached WORLD_SURFACE height is a
+    /// safe ceiling for a predicate that only accepts non-air blocks.
+    #[test]
+    fn surface_bounded_motion_scan_matches_the_full_scan() {
+        let (air, cave_air, grass, water, stone) = (0, 7, 3, 5, 1);
+        let blocks = |v: u32| v == water || v == stone;
+        let scan = |c: &Chunk, x: i32, z: i32| {
+            let top = c.world_surface(x, z, |v| v != air && v != cave_air);
+            (MIN_Y..top)
+                .rev()
+                .find(|&y| blocks(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let full = |c: &Chunk, x: i32, z: i32| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| blocks(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let mut chunk = Chunk::empty(0, 0);
+        assert_eq!(scan(&chunk, 0, 0), full(&chunk, 0, 0));
+        let mut random = horizon_core::random::LegacyRandom::new(13);
+        use horizon_core::random::RandomSource;
+        for step in 0..4000 {
+            let x = random.next_int_bound(16).unwrap();
+            let z = random.next_int_bound(16).unwrap();
+            let y = MIN_Y + random.next_int_bound(HEIGHT - 1).unwrap();
+            let v =
+                [air, cave_air, grass, water, stone][random.next_int_bound(5).unwrap() as usize];
+            chunk.set(x, y, z, v);
+            if step % 11 == 0 {
+                for i in 0..256 {
+                    let (x, z) = (i & 15, i >> 4);
+                    assert_eq!(scan(&chunk, x, z), full(&chunk, x, z));
+                }
+            }
+        }
+    }
 }

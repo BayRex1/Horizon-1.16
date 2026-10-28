@@ -1168,6 +1168,15 @@ impl Hub {
                 }
             }
         }
+        let dead: Vec<u32> = self
+            .guests
+            .iter()
+            .filter(|g| g.sender.dead() && g.left_reason.is_empty())
+            .map(|g| g.conn)
+            .collect();
+        for conn in dead {
+            self.kick(conn, translatable("disconnect.timeout", &[]));
+        }
         events
     }
 
