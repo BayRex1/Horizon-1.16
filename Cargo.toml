@@ -75,6 +75,13 @@ debug = "line-tables-only"
 lto = "thin"
 codegen-units = 1
 
+# A release build with file:line in profiles and backtraces:
+# cargo build --profile profiling -p horizon-client
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+
 # Optimized but quick-to-link builds for iteration: cargo build --profile fast
 [profile.fast]
 inherits = "release"
