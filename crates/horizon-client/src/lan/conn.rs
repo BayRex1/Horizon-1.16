@@ -1432,6 +1432,7 @@ mod tests {
         tx.send(Out::Packets(bodies.clone())).unwrap();
         tx.send(Out::Close).unwrap();
         handle.join().unwrap();
+        assert_eq!(written.load(std::sync::atomic::Ordering::Relaxed), 0);
         let mut raw = Vec::new();
         b.read_to_end(&mut raw).unwrap();
         let expected: Vec<u8> = bodies
