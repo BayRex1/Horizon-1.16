@@ -119,7 +119,7 @@ pub fn warn(message: &str) {
 macro_rules! export_mod {
     ($t:ty) => {
         const _: () = {
-            use ::std::cell::RefCell;
+            use std::cell::RefCell;
             ::std::thread_local! {
                 static STATE: RefCell<Option<$t>> = const { RefCell::new(None) };
             }
@@ -196,6 +196,8 @@ pub mod server {
         },
     });
 
+    /// G1: `run` / `run-quiet` as the server console (re-export of the shared interface).
+    pub use crate::command;
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
@@ -203,8 +205,6 @@ pub mod server {
     pub use horizon::mods::entities::{self, Aabb as EntityBox, Entity};
     pub use horizon::mods::players::{self, GameMode, Player, PlayerEx};
     pub use horizon::mods::world::{self, BlockChange};
-    /// G1: `run` / `run-quiet` as the server console (re-export of the shared interface).
-    pub use crate::command;
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
     /// for are called; the others may stay as their defaults.
@@ -403,7 +403,7 @@ pub mod server {
 macro_rules! export_server_mod {
     ($t:ty) => {
         const _: () = {
-            use ::std::cell::RefCell;
+            use std::cell::RefCell;
             use $crate::server::{Args, ArgumentValue, BlockPos, Player, Registration, ServerMod};
             ::std::thread_local! {
                 static STATE: RefCell<Option<$t>> = const { RefCell::new(None) };

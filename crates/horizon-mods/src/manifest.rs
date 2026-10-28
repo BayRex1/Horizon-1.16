@@ -264,9 +264,7 @@ impl Manifest {
         }
         // Storage and Command are dual-side (client player-run / server console).
         if let Some(c) = m.capabilities.iter().find(|c| {
-            c.on_server() != server
-                && **c != Capability::Storage
-                && **c != Capability::Command
+            c.on_server() != server && **c != Capability::Storage && **c != Capability::Command
         }) {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
