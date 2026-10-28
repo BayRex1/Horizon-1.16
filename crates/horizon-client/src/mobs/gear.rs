@@ -164,7 +164,12 @@ pub fn protection_points(g: &Gear, kind: DamageKind) -> f32 {
     }
     let fire = matches!(
         kind,
-        DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+        DamageKind::OnFire
+            | DamageKind::InFire
+            | DamageKind::Campfire
+            | DamageKind::HotFloor
+            | DamageKind::Lava
+            | DamageKind::Fireball
     );
     let projectile = matches!(
         kind,

@@ -113,7 +113,9 @@ impl Game<'_> {
             "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
             "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
-            "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
+            "in_fire" => DamageKind::InFire,
+            "hot_floor" => DamageKind::HotFloor,
+            "campfire" => DamageKind::Campfire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
             "dry_out" => DamageKind::DryOut,
@@ -124,6 +126,8 @@ impl Game<'_> {
             "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
+            "cramming" => DamageKind::Cramming,
+            "lightning_bolt" => DamageKind::LightningBolt,
             _ => DamageKind::Generic,
         }
     }
