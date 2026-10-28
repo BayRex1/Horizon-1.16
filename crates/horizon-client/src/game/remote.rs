@@ -278,6 +278,33 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
     }
 }
 
+/// `registries.json` parsed once per file: every join (single player's own
+/// server included) needs it, and parsing it on the render thread each time
+/// held the connecting screen up. Re-read when the file changes (a re-prepare).
+fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>> {
+    type Cached = (
+        std::path::PathBuf,
+        Option<std::time::SystemTime>,
+        Arc<Builtin>,
+    );
+    static CACHE: std::sync::Mutex<Option<Cached>> = std::sync::Mutex::new(None);
+    let path = Builtin::find(root)?;
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached, at, builtin)) = cache.as_ref()
+        && *cached == path
+        && *at == modified
+        && modified.is_some()
+    {
+        return Some(builtin.clone());
+    }
+    let builtin = Arc::new(Builtin::load(&path).ok()?);
+    *cache = Some((path, modified, builtin.clone()));
+    Some(builtin)
+}
+
 impl Game<'_> {
     /// A `Holder<SoundEvent>` off the wire: an inline event's location, or
     /// the name of a registered one.
@@ -347,8 +374,7 @@ impl Game<'_> {
     ) -> Result<()> {
         self.perf.world_opening();
         let root = self.options.resources.clone();
-        let builtin = Builtin::find(&root)
-            .and_then(|p| Builtin::load(&p).ok())
+        let builtin = builtin_registries(&root)
             .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = client_view_distance(self.settings.render_distance);
@@ -453,7 +479,7 @@ impl Game<'_> {
             session,
             brand: "unknown".into(),
             quiet_commands: false,
-            builtin: Arc::new(builtin),
+            builtin,
             lang,
             registries: Arc::new(Dynamic::default()),
             joined: false,

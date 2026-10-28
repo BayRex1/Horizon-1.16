@@ -8,12 +8,102 @@ use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 mod dns;
 
 pub(crate) fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
-    resolve_with(host, port, srv_redirect, |host, port| {
-        (host, port)
-            .to_socket_addrs()
-            .map(|addrs| addrs.collect())
-            .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))
-    })
+    let key = (host.to_ascii_lowercase(), port);
+    if let Some(addrs) = cache::get(&key) {
+        return Ok(addrs);
+    }
+    // The SRV question and the original host's own lookup go out together:
+    // without a record (most servers) the addresses are ready when the SRV
+    // answer is, instead of one lookup after the other.
+    let early =
+        (port == 25565 && host.parse::<IpAddr>().is_err() && host != "localhost").then(|| {
+            let (host, (send, receive)) = (host.to_owned(), std::sync::mpsc::channel());
+            let spawned = std::thread::Builder::new()
+                .name("horizon-resolve".into())
+                .spawn(move || {
+                    let _ = send.send(lookup(&host, port));
+                });
+            spawned.ok().map(|_| receive)
+        });
+    let mut early = early.flatten();
+    let addrs = resolve_with(host, port, srv_redirect, |name, at| match early.take() {
+        Some(receive) if name == host && at == port => {
+            receive.recv().unwrap_or_else(|_| lookup(name, at))
+        }
+        _ => lookup(name, at),
+    })?;
+    cache::put(key, &addrs);
+    Ok(addrs)
+}
+
+fn lookup(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    (host, port)
+        .to_socket_addrs()
+        .map(|addrs| addrs.collect())
+        .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))
+}
+
+/// The addresses a server name resolved to, kept for a minute: the server
+/// list's ping resolves the name, and joining a moment later connects at
+/// once instead of asking DNS again. The address that last took a
+/// connection goes first.
+pub(crate) mod cache {
+    use std::{
+        collections::HashMap,
+        net::SocketAddr,
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
+
+    const TTL: Duration = Duration::from_secs(60);
+    type Key = (String, u16);
+    static CACHE: Mutex<Option<HashMap<Key, (Instant, Vec<SocketAddr>)>>> = Mutex::new(None);
+
+    pub(crate) fn get(key: &Key) -> Option<Vec<SocketAddr>> {
+        let mut cache = CACHE.lock().ok()?;
+        let map = cache.get_or_insert_with(HashMap::new);
+        match map.get(key) {
+            Some((at, addrs)) if at.elapsed() < TTL => Some(addrs.clone()),
+            Some(_) => {
+                map.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+    pub(crate) fn put(key: Key, addrs: &[SocketAddr]) {
+        if addrs.is_empty() {
+            return;
+        }
+        if let Ok(mut cache) = CACHE.lock() {
+            let map = cache.get_or_insert_with(HashMap::new);
+            // Keep it small: a server list is tens of names.
+            if map.len() > 256 {
+                map.retain(|_, (at, _)| at.elapsed() < TTL);
+            }
+            map.insert(key, (Instant::now(), addrs.to_vec()));
+        }
+    }
+    /// `address` took a connection: try it first next time.
+    pub(crate) fn connected(host: &str, port: u16, address: SocketAddr) {
+        if let Ok(mut cache) = CACHE.lock()
+            && let Some((_, addrs)) = cache
+                .get_or_insert_with(HashMap::new)
+                .get_mut(&(host.to_ascii_lowercase(), port))
+            && let Some(i) = addrs.iter().position(|a| *a == address)
+        {
+            let address = addrs.remove(i);
+            addrs.insert(0, address);
+        }
+    }
+    /// A connection to every address failed: resolve again next time.
+    pub(crate) fn forget(host: &str, port: u16) {
+        if let Ok(mut cache) = CACHE.lock() {
+            cache
+                .get_or_insert_with(HashMap::new)
+                .remove(&(host.to_ascii_lowercase(), port));
+        }
+    }
 }
 
 fn resolve_with(
@@ -127,6 +217,21 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err().to_string(), "unknown redirected host");
+    }
+
+    #[test]
+    fn resolved_names_are_reused_with_the_connected_address_first() {
+        let (a, b): (SocketAddr, SocketAddr) = (
+            "10.0.0.1:25565".parse().unwrap(),
+            "10.0.0.2:25565".parse().unwrap(),
+        );
+        let key = ("cache-test.example.org".to_owned(), 25565);
+        cache::put(key.clone(), &[a, b]);
+        assert_eq!(resolve("Cache-Test.example.org", 25565).unwrap(), [a, b]);
+        cache::connected("cache-test.example.org", 25565, b);
+        assert_eq!(cache::get(&key).unwrap(), [b, a]);
+        cache::forget("cache-test.example.org", 25565);
+        assert!(cache::get(&key).is_none());
     }
 
     #[test]
