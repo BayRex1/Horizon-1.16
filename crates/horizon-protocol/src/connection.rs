@@ -606,10 +606,7 @@ mod tests {
         b.read_to_end(&mut raw).unwrap();
         for body in &bodies {
             let frame = frame::split(&mut raw).unwrap().unwrap();
-            assert_eq!(
-                &frame[..],
-                &frame::contents(body, Some(64)).unwrap()[..]
-            );
+            assert_eq!(&frame[..], &frame::contents(body, Some(64)).unwrap()[..]);
         }
         assert!(raw.is_empty());
     }
