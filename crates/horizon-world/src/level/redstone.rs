@@ -49,7 +49,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let data = b.data(state);
         match data.class {
-            Class::RedstoneWire => self.wire_signal(state, pos, direction),
+            Class::RedstoneWire => self.wire_signal(state, direction),
             Class::Comparator => {
                 if b.facing(state) == direction && b.table.bool(state, b.props.powered) {
                     self.comparator_output(pos)
@@ -79,7 +79,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if self.wire_signal_off.get() {
                     0
                 } else {
-                    self.wire_signal(state, pos, direction)
+                    self.wire_signal(state, direction)
                 }
             }
             Class::Comparator => self.state_signal(state, pos, direction),
@@ -100,7 +100,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             .copied()
             .unwrap_or(0)
     }
-    fn wire_signal(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
+    fn wire_signal(&self, state: BlockStateId, direction: Direction) -> i32 {
         if self.wire_signal_off.get() || direction == Direction::Down {
             return 0;
         }
@@ -108,16 +108,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if power == 0 {
             return 0;
         }
-        if direction != Direction::Up {
-            let connected = self.wire_connection_state(state, pos);
-            if self
-                .b
-                .table
-                .text(connected, self.direction_prop(direction.opposite()))
-                == "none"
-            {
-                return 0;
-            }
+        // RedstoneWireBlock.getSignal reads the stored side property: the
+        // shape is only recomputed on a neighbour change, not per query.
+        if direction != Direction::Up && !self.wire_connected(state, direction.opposite()) {
+            return 0;
         }
         power
     }
@@ -392,14 +386,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn wire_incoming_signal(&self, pos: BlockPos) -> i32 {
         let mut signal = 0;
+        let above_pos = above(pos);
+        let above_open = !self.is_redstone_conductor(self.state(above_pos), above_pos);
         for direction in HORIZONTAL {
             let neighbour_pos = rel(pos, direction);
             let neighbour = self.state(neighbour_pos);
             signal = signal.max(self.wire_power_of(neighbour));
-            let above_pos = above(pos);
-            if self.is_redstone_conductor(neighbour, neighbour_pos)
-                && !self.is_redstone_conductor(self.state(above_pos), above_pos)
-            {
+            if self.is_redstone_conductor(neighbour, neighbour_pos) && above_open {
                 signal = signal.max(self.wire_power_of(self.state(above(neighbour_pos))));
             } else if !self.is_redstone_conductor(neighbour, neighbour_pos) {
                 signal = signal.max(self.wire_power_of(self.state(below(neighbour_pos))));

@@ -5,7 +5,10 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
+    light::{
+        LightChanges, LightScratch, LightTables, apply_lighting, apply_relighting_masked,
+        light_chunk_masked_with,
+    },
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
@@ -164,7 +167,7 @@ enum Job {
     Decorate(i32, i32, Box<[Proto; 9]>),
     Finish(Proto),
     Light(i32, i32, Box<Region>, u64, bool),
-    Mesh(i32, i32, i32, Box<Region>, u64, MeshSettings),
+    Mesh(i32, i32, i32, Arc<Region>, u64, MeshSettings),
     /// Proto chunks checked out to be saved (`ChunkGenerator::save_protos`),
     /// off the main thread like vanilla's IOWorker.
     Save(Vec<((i32, i32), Proto)>),
@@ -174,7 +177,7 @@ pub enum Done {
     /// A proto chunk, and whether it was decorated (loaded so from the save).
     Proto(i32, i32, Proto, bool),
     Decorated(i32, i32, Box<[Proto; 9]>),
-    Lit(i32, i32, Vec<crate::chunk::Light>, u64),
+    Lit(i32, i32, Vec<crate::chunk::Light>, u32, u64),
     Meshed(i32, i32, i32, SectionMesh, u64),
     Saved(Vec<((i32, i32), Proto)>),
 }
@@ -258,6 +261,9 @@ pub struct Streaming {
     pub radius: i32,
     /// `/forceload`ed chunks: kept loaded whatever the distance.
     pub forced: HashSet<(i32, i32)>,
+    /// `forced`'s bounding box, refreshed each `update`: one compare rejects
+    /// most columns before the per-forced-chunk scan.
+    forced_bounds: Option<(i32, i32, i32, i32)>,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
     /// The level loading screen is up: work goes ring by ring (`Ranges::rings`).
@@ -417,6 +423,7 @@ impl GenerationScan {
                     radius: input.ranges.radius,
                     extra: input.ranges.extra,
                     forced: input.ranges.forced,
+                    forced_bounds: input.ranges.forced_bounds,
                     cover: input.ranges.cover,
                     band: input.ranges.band,
                 };
@@ -471,6 +478,8 @@ impl Streaming {
                         // the worker across mesh jobs, like vanilla's per-thread cache:
                         // cloning it per job copied every state and face shape.
                         let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
+                        // Light scratch stays with the worker across jobs.
+                        let mut light_scratch = LightScratch::default();
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
@@ -507,7 +516,13 @@ impl Streaming {
                                     Done::Saved(protos)
                                 }
                                 Job::Light(x, z, region, seq, sky) => {
-                                    Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
+                                    let (sections, changed) = light_chunk_masked_with(
+                                        &borrow(&region),
+                                        &light,
+                                        sky,
+                                        &mut light_scratch,
+                                    );
+                                    Done::Lit(x, z, sections, changed, seq)
                                 }
                                 Job::Mesh(x, sy, z, region, seq, settings) => {
                                     let context = shared.context.read().unwrap().clone();
@@ -579,6 +594,7 @@ impl Streaming {
             center: (0, 0),
             radius: 8,
             forced: HashSet::new(),
+            forced_bounds: None,
             paused: false,
             loading: false,
             sky_light: true,
@@ -694,12 +710,14 @@ impl Streaming {
     /// been generated.
     fn requeue(&mut self) {
         let basis = (self.center, self.loading, self.band);
-        if self.queue_basis.0 == basis && self.queue_basis.1 == self.extra {
+        if self.queue_basis.0 == basis && same_areas(&self.queue_basis.1, &self.extra) {
             return;
         }
-        self.queue_basis = (basis, self.extra.clone());
-        let mut queue = self.shared.queue.lock().unwrap();
-        rank_again(&mut queue, |x, z| self.distance(x, z));
+        self.queue_basis = (basis, canonical_areas(&self.extra));
+        rerank_queue(&self.shared.queue, |x, z| self.distance(x, z));
+        // Workers that found the heap empty while it was swapped out must
+        // pick the restored jobs up even if nothing new is submitted.
+        self.shared.ready.notify_all();
     }
     fn receive_decorated(&mut self, x: i32, z: i32, region: [Proto; 9]) {
         self.generation_scan.exhausted = false;
@@ -777,14 +795,7 @@ impl Streaming {
                 world.dirty_sections.insert((key.0, sy, key.1));
             }
         }
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let n = (key.0 + dx, key.1 + dz);
-                if !loaded || world.chunks.get(&n).is_some_and(|c| !c.light_loaded) {
-                    world.dirty_light.insert(n);
-                }
-            }
-        }
+        mark_dirty_light(world, key, loaded, &self.lit);
     }
     /// The order jobs around the player run in, lowest first.
     fn distance(&self, x: i32, z: i32) -> i64 {
@@ -810,7 +821,7 @@ impl Streaming {
         }
         Some(Box::new(region))
     }
-    fn region(world: &World, x: i32, z: i32) -> Option<Box<Region>> {
+    fn region(world: &World, x: i32, z: i32) -> Option<Arc<Region>> {
         let mut region: Region = Default::default();
         for dz in 0..3 {
             for dx in 0..3 {
@@ -822,10 +833,15 @@ impl Streaming {
                 );
             }
         }
-        Some(Box::new(region))
+        Some(Arc::new(region))
     }
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// How many chunks have their light: it grows as chunks are lit and falls
+    /// only when a column unloads, so a cache of what ticks sees every change.
+    pub fn lit_count(&self) -> usize {
+        self.lit.len()
     }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
@@ -892,6 +908,7 @@ impl Streaming {
         if self.paused {
             return (uploads, Vec::new());
         }
+        self.forced_bounds = forced_bounds(&self.forced);
         ExtraCover::refresh(&mut self.cover, &self.extra);
         self.requeue();
         self.relight_edits(world);
@@ -912,7 +929,7 @@ impl Streaming {
                 Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Saved(protos) => self.receive_saved(protos),
-                Done::Lit(x, z, sections, seq) => {
+                Done::Lit(x, z, sections, mask, seq) => {
                     if self.lighting.get(&(x, z)) != Some(&seq) {
                         continue;
                     }
@@ -929,7 +946,7 @@ impl Streaming {
                         if first {
                             apply_lighting(chunk, sections);
                         } else {
-                            apply_relighting(chunk, sections, &mut changed);
+                            apply_relighting_masked(chunk, sections, mask, &mut changed);
                         }
                         // Saved unlit (at the edge of what was loaded), or its light
                         // changed: saved again.
@@ -1061,7 +1078,10 @@ impl Streaming {
         // vanilla's order: decoration is order dependent where write regions
         // overlap (see `DecorationOrder`).
         let workers = self.threads.len();
-        if self.decorates && self.order_area != Some((self.center, self.radius)) {
+        // Re-ranking thousands of chunks buys nothing while no proto can be
+        // decorated: the next proto triggers it.
+        let may_decorate = !self.protos.is_empty() || self.decorating > 0;
+        if self.decorates && may_decorate && self.order_area != Some((self.center, self.radius)) {
             let (decorated, chunks) = (&self.decorated, &world.chunks);
             // The render distance is the server view distance in singleplayer.
             self.decoration_order
@@ -1074,6 +1094,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                forced_bounds: self.forced_bounds,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
                 band: self.band.as_ref(),
             };
@@ -1086,36 +1107,30 @@ impl Streaming {
             });
         }
         if self.decorates && self.decorating < workers * 2 {
-            let wants = |s: &Self, x: i32, z: i32| {
-                !s.decorated.contains(&(x, z))
-                    && !world.chunks.contains_key(&(x, z))
-                    && (s.in_range(x, z, 2) || s.near_finished(x, z, 1))
-            };
             // A wanted chunk holds back higher-ranked ones only if it can be
             // decorated: its 3x3 neighbourhood is (or will be) generated as
             // protos, none of them already final.
-            let waits_for = |s: &Self, x: i32, z: i32| {
-                wants(s, x, z)
-                    && (-1..=1).all(|dz| {
-                        (-1..=1).all(|dx| {
-                            let n = (x + dx, z + dz);
-                            !world.chunks.contains_key(&n)
-                                && (s.protos.contains_key(&n)
-                                    || s.generating.contains(&n)
-                                    || s.ranges().requested(n.0, n.1, true))
-                        })
+            let mut wanted: Vec<(u64, i64, i32, i32)> = {
+                let ranges = Ranges {
+                    center: self.center,
+                    radius: self.radius,
+                    extra: &self.extra,
+                    forced: &self.forced,
+                    forced_bounds: self.forced_bounds,
+                    cover: ExtraCover::matching(&self.cover, &self.extra),
+                    band: self.band.as_ref(),
+                };
+                self.protos
+                    .iter()
+                    .filter(|(k, p)| {
+                        p.is_some()
+                            && !self.decorated.contains(k)
+                            && !world.chunks.contains_key(k)
+                            && (ranges.in_range(k.0, k.1, 2) || ranges.near_finished(k.0, k.1, 1))
                     })
+                    .map(|(k, _)| (0, ranges.priority(k.0, k.1, self.loading), k.0, k.1))
+                    .collect()
             };
-            let keys: Vec<(i32, i32)> = self
-                .protos
-                .iter()
-                .filter(|(k, p)| p.is_some() && wants(self, k.0, k.1))
-                .map(|(k, _)| *k)
-                .collect();
-            let mut wanted: Vec<(u64, i64, i32, i32)> = keys
-                .into_iter()
-                .map(|(x, z)| (0, self.distance(x, z), x, z))
-                .collect();
             // Chunks no ticket reached (forced and extra areas) go last, nearest first.
             wanted.sort_unstable_by_key(|w| w.1);
             for w in &mut wanted {
@@ -1126,10 +1141,32 @@ impl Streaming {
                 if self.decorating >= workers * 2 {
                     break;
                 }
-                if self
-                    .decoration_order
-                    .blocked(x, z, |nx, nz| waits_for(self, nx, nz))
-                {
+                // One `Ranges` per candidate: `blocked` asks about up to 24
+                // neighbours, each of their 3x3.
+                let ranges = Ranges {
+                    center: self.center,
+                    radius: self.radius,
+                    extra: &self.extra,
+                    forced: &self.forced,
+                    forced_bounds: self.forced_bounds,
+                    cover: ExtraCover::matching(&self.cover, &self.extra),
+                    band: self.band.as_ref(),
+                };
+                let waits_for = |nx: i32, nz: i32| {
+                    !self.decorated.contains(&(nx, nz))
+                        && !world.chunks.contains_key(&(nx, nz))
+                        && (ranges.in_range(nx, nz, 2) || ranges.near_finished(nx, nz, 1))
+                        && (-1..=1).all(|dz| {
+                            (-1..=1).all(|dx| {
+                                let n = (nx + dx, nz + dz);
+                                !world.chunks.contains_key(&n)
+                                    && (self.protos.contains_key(&n)
+                                        || self.generating.contains(&n)
+                                        || ranges.requested(n.0, n.1, true))
+                            })
+                        })
+                };
+                if self.decoration_order.blocked(x, z, waits_for) {
                     continue;
                 }
                 let keys: Vec<(i32, i32)> =
@@ -1204,6 +1241,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                forced_bounds: self.forced_bounds,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
                 band: self.band.as_ref(),
             };
@@ -1282,6 +1320,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                forced_bounds: self.forced_bounds,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
                 band: self.band.as_ref(),
             },
@@ -1379,6 +1418,7 @@ impl Streaming {
             radius: self.radius,
             extra: &self.extra,
             forced: &self.forced,
+            forced_bounds: self.forced_bounds,
             cover: ExtraCover::matching(&self.cover, &self.extra),
             band: self.band.as_ref(),
         }
@@ -1534,6 +1574,8 @@ struct Ranges<'a> {
     radius: i32,
     extra: &'a [((i32, i32), i32)],
     forced: &'a HashSet<(i32, i32)>,
+    /// `forced`'s bounding box, when known.
+    forced_bounds: Option<(i32, i32, i32, i32)>,
     /// `extra` as a grid, when one was made for it: `in_extra` without a
     /// scan of every area.
     cover: Option<&'a ExtraCover>,
@@ -1607,12 +1649,17 @@ impl ExtraCover {
         cover: &'a Option<ExtraCover>,
         extra: &[((i32, i32), i32)],
     ) -> Option<&'a ExtraCover> {
-        cover.as_ref().filter(|c| c.extra == extra)
+        cover
+            .as_ref()
+            .filter(|c| c.extra == extra || same_areas(&c.extra, extra))
     }
     /// Make the grid again if `extra` changed; none for one area or none
     /// (a scan is as quick), or areas too far apart.
     fn refresh(cover: &mut Option<ExtraCover>, extra: &[((i32, i32), i32)]) {
-        if cover.as_ref().is_some_and(|c| c.extra == extra) {
+        if cover
+            .as_ref()
+            .is_some_and(|c| c.extra == extra || same_areas(&c.extra, extra))
+        {
             return;
         }
         *cover = Self::new(extra);
@@ -1656,7 +1703,7 @@ impl ExtraCover {
             }
         }
         Some(Self {
-            extra: extra.to_vec(),
+            extra: canonical_areas(extra),
             x0,
             z0,
             width,
@@ -1784,6 +1831,15 @@ impl Ranges<'_> {
             return true;
         }
         let reach = (margin - 1).max(0);
+        // Outside the forced box, no scan can find a forced chunk near enough.
+        if let Some((x0, z0, x1, z1)) = self.forced_bounds
+            && (x.saturating_add(reach) < x0
+                || x.saturating_sub(reach) > x1
+                || z.saturating_add(reach) < z0
+                || z.saturating_sub(reach) > z1)
+        {
+            return false;
+        }
         self.forced
             .iter()
             .any(|f| (x - f.0).abs() <= reach && (z - f.1).abs() <= reach)
@@ -1805,6 +1861,20 @@ impl Drop for Streaming {
         self.shared.ready.notify_all();
         for t in self.threads.drain(..) {
             let _ = t.join();
+        }
+    }
+}
+/// Mark the columns whose light a newly resident column at `key` can change:
+/// itself and its face neighbours, plus any neighbour still unlit. A diagonal
+/// column's light can only change through a face neighbour, and a lit diagonal
+/// had all nine columns around it, this one included, so it is not relit.
+fn mark_dirty_light(world: &mut World, key: (i32, i32), loaded: bool, lit: &FxHashSet<(i32, i32)>) {
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let n = (key.0 + dx, key.1 + dz);
+            if !lit.contains(&n) || (!loaded && (dx == 0 || dz == 0)) {
+                world.dirty_light.insert(n);
+            }
         }
     }
 }
@@ -1832,6 +1902,36 @@ fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64
     }
     *queue = BinaryHeap::from(jobs);
 }
+/// Re-rank the queue without holding its mutex while distances are computed:
+/// workers block on that mutex before every pop. Jobs pushed meanwhile keep
+/// their own priorities and are merged back in.
+fn rerank_queue(queue: &Mutex<BinaryHeap<Queued>>, distance: impl Fn(i32, i32) -> i64) {
+    let mut heap = std::mem::take(&mut *queue.lock().unwrap());
+    rank_again(&mut heap, distance);
+    let mut queue = queue.lock().unwrap();
+    while let Some(job) = queue.pop() {
+        heap.push(job);
+    }
+    *queue = heap;
+}
+/// `extra` as a set: the order areas are stored in must not matter.
+fn canonical_areas(areas: &[((i32, i32), i32)]) -> Vec<((i32, i32), i32)> {
+    let mut areas = areas.to_vec();
+    areas.sort_unstable();
+    areas.dedup();
+    areas
+}
+fn same_areas(canonical: &[((i32, i32), i32)], areas: &[((i32, i32), i32)]) -> bool {
+    canonical == areas || canonical_areas(areas) == canonical
+}
+/// The bounding box of the forced chunks, or `None` when there are none.
+fn forced_bounds(forced: &HashSet<(i32, i32)>) -> Option<(i32, i32, i32, i32)> {
+    let mut forced = forced.iter();
+    let &(x, z) = forced.next()?;
+    Some(forced.fold((x, z, x, z), |(x0, z0, x1, z1), &(x, z)| {
+        (x0.min(x), z0.min(z), x1.max(x), z1.max(z))
+    }))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1844,6 +1944,7 @@ mod tests {
             radius: 32,
             extra: &[],
             forced: &forced,
+            forced_bounds: None,
             cover: None,
             band: None,
         };
@@ -1888,6 +1989,115 @@ mod tests {
         let moved = ranges((19, 0));
         rank_again(&mut queue, |x, z| moved.priority(x, z, false));
         assert_eq!(queue.pop().and_then(|q| q.at), Some((20, 0)));
+    }
+
+    #[test]
+    fn a_new_column_relights_itself_and_its_faces_not_lit_diagonals() {
+        let mut world = World::new(horizon_world::registry::BlockStateId(0), 0);
+        let mut lit = FxHashSet::default();
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let key = (dx, dz);
+                world.chunks.insert(key, Arc::new(Chunk::empty(dx, dz)));
+                lit.insert(key);
+            }
+        }
+        // A fresh column queued every lit face and itself, but no lit diagonal.
+        mark_dirty_light(&mut world, (0, 0), false, &lit);
+        let expected = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)]
+            .into_iter()
+            .collect::<FxHashSet<_>>();
+        assert_eq!(world.dirty_light, expected);
+
+        // A diagonal still unlit stays queued.
+        lit.remove(&(1, 1));
+        world.dirty_light.clear();
+        mark_dirty_light(&mut world, (0, 0), false, &lit);
+        assert!(world.dirty_light.contains(&(1, 1)));
+        assert!(!world.dirty_light.contains(&(-1, -1)));
+
+        // A column loaded with light only queues its unlit neighbours.
+        lit.remove(&(0, -1));
+        world.dirty_light.clear();
+        mark_dirty_light(&mut world, (0, 0), true, &lit);
+        assert_eq!(
+            world.dirty_light,
+            [(0, -1), (1, 1)].into_iter().collect::<FxHashSet<_>>()
+        );
+    }
+
+    #[test]
+    fn reranking_keeps_jobs_submitted_meanwhile() {
+        let generate = |x, z, priority, order| Queued {
+            priority,
+            at: Some((x, z)),
+            bias: 0,
+            order,
+            job: Job::Generate(x, z),
+        };
+        let queue = Mutex::new(BinaryHeap::from(vec![
+            generate(5, 0, 500, 1),
+            generate(20, 0, 100, 2),
+        ]));
+        let late = AtomicBool::new(false);
+        rerank_queue(&queue, |x, z| {
+            if !late.swap(true, Ordering::Relaxed) {
+                // `submit` pushes while the re-rank runs.
+                queue.lock().unwrap().push(generate(9, 0, 324, 3));
+            }
+            i64::from(x * x + z * z)
+        });
+        let pops: Vec<_> = std::iter::from_fn(|| queue.lock().unwrap().pop())
+            .map(|q| q.at)
+            .collect();
+        assert_eq!(pops, [Some((5, 0)), Some((9, 0)), Some((20, 0))]);
+        assert!(same_areas(&[], &[]));
+        let canonical = canonical_areas(&[((1, 2), 3), ((0, 0), 1), ((1, 2), 3)]);
+        assert_eq!(canonical, [((0, 0), 1), ((1, 2), 3)]);
+        assert!(same_areas(&canonical, &[((1, 2), 3), ((0, 0), 1)]));
+        assert!(!same_areas(&canonical, &[((1, 2), 3), ((0, 0), 2)]));
+    }
+
+    #[test]
+    fn forced_bounds_answers_as_the_scan() {
+        for forced in [
+            HashSet::new(),
+            [(40, -40)].into(),
+            [(40, -40), (-10, 5), (41, -39)].into(),
+            [(-500, 200), (500, -200)].into(),
+        ] {
+            let bounds = forced_bounds(&forced);
+            let ranges = |bounds| Ranges {
+                center: (3, -2),
+                radius: 10,
+                extra: &[],
+                forced: &forced,
+                forced_bounds: bounds,
+                cover: None,
+                band: None,
+            };
+            let (scan, quick) = (ranges(None), ranges(bounds));
+            for x in -520..=520 {
+                for z in -220..=220 {
+                    for margin in 0..5 {
+                        assert_eq!(
+                            scan.in_main_range(x, z, margin),
+                            quick.in_main_range(x, z, margin),
+                            "({x}, {z}) margin {margin}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_reordered_area_set_keeps_the_grid() {
+        let extra = [((0, 0), 5), ((30, 30), 5)];
+        let mut cover = None;
+        ExtraCover::refresh(&mut cover, &extra);
+        assert!(ExtraCover::matching(&cover, &[((30, 30), 5), ((0, 0), 5)]).is_some());
+        assert!(ExtraCover::matching(&cover, &[((30, 30), 5), ((0, 1), 5)]).is_none());
     }
 
     #[test]
@@ -1949,6 +2159,7 @@ mod tests {
                     radius: self.radius,
                     extra: &self.extra,
                     forced: &self.forced,
+                    forced_bounds: None,
                     cover: None,
                     band: None,
                 },
@@ -2263,6 +2474,7 @@ mod tests {
                     radius,
                     extra: &[],
                     forced: &forced,
+                    forced_bounds: None,
                     cover: None,
                     band: None,
                 };
@@ -2319,6 +2531,7 @@ mod tests {
             radius: 12,
             extra: &[],
             forced: &forced,
+            forced_bounds: None,
             cover: None,
             band: None,
         };
@@ -2346,6 +2559,7 @@ mod tests {
                     radius,
                     extra: &[((radius * 2 + 9, 3), 4)],
                     forced: &forced,
+                    forced_bounds: None,
                     cover: None,
                     band: None,
                 };
@@ -2387,6 +2601,7 @@ mod tests {
                 radius: 2,
                 extra: &extra,
                 forced: &forced,
+                forced_bounds: None,
                 cover: None,
                 band: None,
             };
@@ -2461,6 +2676,7 @@ mod cover_tests {
                 radius: 10,
                 extra: &extra,
                 forced: &forced,
+                forced_bounds: None,
                 cover,
                 band: None,
             };
@@ -2520,6 +2736,7 @@ mod cover_tests {
                 radius: 10,
                 extra: &extra,
                 forced: &forced,
+                forced_bounds: None,
                 cover,
                 band: None,
             };

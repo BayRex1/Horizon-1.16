@@ -488,6 +488,65 @@ fn waterlogged_blocks_schedule_water() {
 }
 
 #[test]
+fn wire_signal_reads_the_stored_shape() {
+    let mut w = world!();
+    w.floor(0, 4, "stone");
+    let at = BlockPos::new(0, 1, 0);
+    // Power 15 whose north side cannot connect and whose south side can. The
+    // block north of it is a wire: a recomputed shape would connect north, but
+    // getSignal reads the stored property, as vanilla does.
+    let wire = w.id(
+        "redstone_wire",
+        &[
+            ("power", "15"),
+            ("north", "none"),
+            ("south", "side"),
+            ("west", "side"),
+            ("east", "side"),
+        ],
+    );
+    w.put(at, wire);
+    let neighbour = w.id(
+        "redstone_wire",
+        &[
+            ("power", "0"),
+            ("north", "none"),
+            ("south", "side"),
+            ("west", "none"),
+            ("east", "none"),
+        ],
+    );
+    w.put(BlockPos::new(0, 1, -1), neighbour);
+    let sim = w.b().sim(&mut w.level, &mut w.ticks);
+    // An asker south of the wire passes North: the wire's south side answers.
+    assert_eq!(sim.direct_signal(at, Direction::North), 15);
+    // An asker north of the wire passes South: its stored north side is "none".
+    assert_eq!(sim.direct_signal(at, Direction::South), 0);
+    assert_eq!(sim.direct_signal(at, Direction::Up), 15);
+}
+
+#[test]
+fn water_spread_keeps_enum_order() {
+    let mut w = world!();
+    w.floor(0, 4, "stone");
+    let at = BlockPos::new(0, 1, 0);
+    let water = w.id("water", &[("level", "0")]);
+    w.put(at, water);
+    // `getSpread` returns an EnumMap: Direction declaration order, not the
+    // order the sides are searched in.
+    let sim = w.b().sim(&mut w.level, &mut w.ticks);
+    assert_eq!(
+        sim.spread_target_directions(at),
+        vec![
+            Direction::North,
+            Direction::South,
+            Direction::West,
+            Direction::East
+        ]
+    );
+}
+
+#[test]
 fn redstone_lever_wire_and_lamp() {
     let mut w = world!();
     w.floor(0, 20, "stone");

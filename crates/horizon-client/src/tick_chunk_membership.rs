@@ -13,6 +13,8 @@ pub struct TickChunkMembership {
     /// Loaded chunks with saved ticks that have not started ticking yet
     /// (`LevelChunkTicks.pendingTicks`, unpacked by `startTickingChunk`).
     waiting: HashSet<Key>,
+    /// The chunks the last `start_ticking` found, reused across ticks.
+    started: Vec<Key>,
 }
 
 impl TickChunkMembership {
@@ -24,6 +26,7 @@ impl TickChunkMembership {
         self.added.clear();
         self.removed.clear();
         self.waiting.clear();
+        self.started.clear();
     }
 
     /// Returns false in O(1) when resident membership is unchanged. On change,
@@ -74,20 +77,17 @@ impl TickChunkMembership {
     }
 
     /// The waiting chunks that `ticking` says now tick, no longer waiting.
-    pub fn start_ticking(&mut self, mut ticking: impl FnMut(Key) -> bool) -> Vec<Key> {
-        if self.waiting.is_empty() {
-            return Vec::new();
+    /// Usually empty: the list is reused rather than collected afresh.
+    pub fn start_ticking(&mut self, mut ticking: impl FnMut(Key) -> bool) -> &[Key] {
+        self.started.clear();
+        if !self.waiting.is_empty() {
+            self.started
+                .extend(self.waiting.iter().copied().filter(|&k| ticking(k)));
+            for key in &self.started {
+                self.waiting.remove(key);
+            }
         }
-        let started: Vec<Key> = self
-            .waiting
-            .iter()
-            .copied()
-            .filter(|&k| ticking(k))
-            .collect();
-        for key in &started {
-            self.waiting.remove(key);
-        }
-        started
+        &self.started
     }
 }
 
@@ -160,11 +160,11 @@ mod tests {
             cache.wait(key);
         }
         cache.synchronize(&map);
-        assert_eq!(cache.start_ticking(|k| k == (0, 0)), vec![(0, 0)]);
+        assert_eq!(cache.start_ticking(|k| k == (0, 0)), &[(0, 0)]);
         assert!(cache.start_ticking(|k| k == (0, 0)).is_empty());
         map.remove(&(1, 0));
         cache.synchronize(&map);
-        let mut started = cache.start_ticking(|_| true);
+        let mut started = cache.start_ticking(|_| true).to_vec();
         started.sort_unstable();
         assert_eq!(started, vec![(2, 0)]);
     }
