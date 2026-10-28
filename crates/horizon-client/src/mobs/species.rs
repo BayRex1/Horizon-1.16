@@ -1481,6 +1481,7 @@ impl Def {
                     | S::Parched
                     | S::Phantom
                     | S::ZombieNautilus
+                    | S::ZombieHorse
             ),
             undead,
             breathes_water: aquatic

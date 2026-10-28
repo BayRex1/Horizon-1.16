@@ -1043,7 +1043,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             }
         }
     }
-    // Mob.aiStep: undead burn in daylight.
+    // Mob.aiStep: undead burn in daylight. `burnUndead` spares a mob that wears
+    // something in its `sunProtectionSlot`: the head, or for a zombie horse the
+    // body, which Horizon keeps in `extra.head` for equines too.
     if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
         m.ignite_for_ticks(160);
     }
@@ -2260,5 +2262,18 @@ mod frog_tests {
                 gravity: true,
             }
         );
+    }
+}
+#[cfg(test)]
+mod sun_burn_tests {
+    use crate::mobs::species::{Species, def};
+
+    /// `EntityTypeTags.BURN_IN_DAYLIGHT` lists `minecraft:zombie_horse`, so
+    /// `Mob.aiStep` runs `burnUndead` for it (#3301).
+    #[test]
+    fn a_zombie_horse_burns_in_daylight() {
+        assert!(def(Species::ZombieHorse).flags(false).burns_in_day);
+        assert!(!def(Species::SkeletonHorse).flags(false).burns_in_day);
+        assert!(!def(Species::Horse).flags(false).burns_in_day);
     }
 }
