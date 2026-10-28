@@ -55,6 +55,9 @@ fn env_flag(name: &str, default: bool) -> bool {
 impl Game<'_> {
     /// Start sharing the open world.
     pub(super) fn friends_start(&mut self) -> Result<()> {
+        if self.options.singleplayer_only {
+            return Err("Play with Friends is disabled for this local profile.".into());
+        }
         if self.friends.is_some() {
             return Ok(());
         }
@@ -225,7 +228,8 @@ impl Game<'_> {
         };
         let Some(s) = &self.friends else {
             return FriendsView {
-                shown: self.remote.is_none() || self.integrated.is_some(),
+                shown: !self.options.singleplayer_only
+                    && (self.remote.is_none() || self.integrated.is_some()),
                 ..FriendsView::default()
             };
         };

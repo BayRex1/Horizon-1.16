@@ -79,8 +79,8 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
-    /// Minecraft: Java Edition
+    /// Sign in with a Microsoft account in your browser (device code). Multiplayer needs one that
+    /// owns Minecraft: Java Edition
     SignIn,
     /// Sign out: the account's tokens leave the keychain
     SignOut {
@@ -89,7 +89,7 @@ enum AccountCmd {
     },
     /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
+    /// Select a local profile for single-player without Microsoft sign-in (multiplayer is disabled):
     /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
     /// made up
     Offline { name: Option<String> },
@@ -562,7 +562,7 @@ enum Cmd {
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
+    /// Start the client as the selected Microsoft account or local single-player profile
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -1331,8 +1331,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 }));
             } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
                 println!(
-                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
-                     Edition: horizon-launcher account sign-in"
+                    "No Microsoft account signed in. Local single-player is available with `horizon-launcher account offline`; multiplayer needs a licensed Microsoft account."
                 );
             } else {
                 for a in &accounts.accounts {
@@ -1352,7 +1351,9 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "Playing offline as the game's own name (`account select NAME` to switch)."
                     );
                 }
-                if !accounts.has_owner(account::store()) {
+                if !accounts.has_owner(account::store())
+                    && matches!(accounts.player(), account::Player::Microsoft(_))
+                {
                     println!("{}.", account::NEEDS_OWNER);
                 }
             }

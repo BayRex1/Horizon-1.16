@@ -312,6 +312,8 @@ struct Options {
     window_size: [u32; 2],
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
+    /// `--singleplayer-only`: local profiles cannot join servers or host/share a world.
+    singleplayer_only: bool,
     /// `--name`, `HORIZON_PLAYER_NAME` or the signed-in account's name; else
     /// [`Options::player_name`] uses the kept offline name.
     player_name: Option<String>,
@@ -374,6 +376,7 @@ impl Options {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             server: None,
+            singleplayer_only: false,
             player_name: std::env::var("HORIZON_PLAYER_NAME")
                 .ok()
                 .filter(|n| !n.is_empty()),
@@ -403,6 +406,7 @@ impl Options {
                 "--test-terrain" => o.test_terrain = true,
                 "--no-pause" => o.no_pause = true,
                 "--offscreen" => o.offscreen = true,
+                "--singleplayer-only" => o.singleplayer_only = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 "--server-thread" => o.server_thread = true,
                 "--in-frame" | "--no-server-thread" => o.server_thread = false,
@@ -485,6 +489,12 @@ impl Options {
                     }
                 }
             }
+        }
+        if o.singleplayer_only && (o.server.is_some() || o.dedicated.is_some()) {
+            return Err(
+                "This local profile is restricted to single-player; server mode is disabled."
+                    .into(),
+            );
         }
         // The launcher's account: online-mode servers need it. A bad file
         // only leaves the game offline.
@@ -2040,6 +2050,17 @@ fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     [-y.sin() * p.cos(), -p.sin(), y.cos() * p.cos()]
 }
 impl Game<'_> {
+    fn new_title(&self) -> Result<Title> {
+        let mut title = Title::new(
+            std::env::current_dir()?.join("saves"),
+            &self.options.resources,
+        );
+        title.last_server = self.settings.file.string("lastServer");
+        if self.options.singleplayer_only {
+            title.restrict_to_singleplayer();
+        }
+        Ok(title)
+    }
     fn eye_position(&self) -> Option<[f64; 3]> {
         let p = self.player.as_ref()?;
         Some([
@@ -8937,10 +8958,7 @@ impl Game<'_> {
         if self.window.is_some() {
             self.perf.world_opening();
             if self.title.is_none() {
-                self.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &self.options.resources,
-                ));
+                self.title = Some(self.new_title()?);
             }
             self.world_loader = Some(world_loading::WorldLoader::start(
                 request,
@@ -9399,13 +9417,7 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
-        self.title = Some(Title::new(
-            std::env::current_dir()?.join("saves"),
-            &self.options.resources,
-        ));
-        if let Some(title) = &mut self.title {
-            title.last_server = self.settings.file.string("lastServer");
-        }
+        self.title = Some(self.new_title()?);
         self.capture(false);
         Ok(())
     }
@@ -14114,10 +14126,7 @@ impl Game<'_> {
         }
         self.perf.world_opening();
         if self.title.is_none() {
-            self.title = Some(Title::new(
-                std::env::current_dir()?.join("saves"),
-                &self.options.resources,
-            ));
+            self.title = Some(self.new_title()?);
         }
         self.pending_entry = Some(entry);
         log::info!("Horizon: world entry waiting for world resources");
@@ -14891,10 +14900,7 @@ fn start_game<'a>(
             } else {
                 // Start after the window is handed over, so --world uses the
                 // same responsive initialization path as the title screen.
-                game.title = Some(Title::new(
-                    std::env::current_dir()?.join("saves"),
-                    &game.options.resources,
-                ));
+                game.title = Some(game.new_title()?);
                 game.pending_entry = Some(PendingWorldEntry::Local {
                     folder,
                     name: None,
@@ -14906,12 +14912,7 @@ fn start_game<'a>(
         }
         None if handoff => {}
         None => {
-            let mut title = Title::new(
-                std::env::current_dir()?.join("saves"),
-                &game.options.resources,
-            );
-            title.last_server = game.settings.file.string("lastServer");
-            game.title = Some(title);
+            game.title = Some(game.new_title()?);
         }
     }
     if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
@@ -15037,7 +15038,13 @@ impl Loading {
             "Horizon: loading the title artwork after {} ms",
             self.started.elapsed().as_millis()
         );
-        self.menu.set_root(root, &self.settings);
+        self.menu.set_root(
+            root,
+            &self.settings,
+            self.options
+                .as_ref()
+                .is_some_and(|options| options.singleplayer_only),
+        );
         self.gui = Some(gui);
         horizon_client::ui_theme::reset_atlas();
         self.apply_menu_settings();

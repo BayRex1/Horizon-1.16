@@ -63,7 +63,7 @@ impl StartupMenu {
         Ok(menu)
     }
 
-    pub(super) fn set_root(&mut self, root: PathBuf, settings: &Settings) {
+    pub(super) fn set_root(&mut self, root: PathBuf, settings: &Settings, singleplayer_only: bool) {
         horizon_client::ui::load_metadata(&root);
         horizon_client::lang::set(horizon_client::lang::Language::load(
             &[&root],
@@ -76,6 +76,9 @@ impl StartupMenu {
                 &self.root,
             );
             title.last_server = settings.file.string("lastServer");
+            if singleplayer_only {
+                title.restrict_to_singleplayer();
+            }
             self.title = Some(title);
         }
     }

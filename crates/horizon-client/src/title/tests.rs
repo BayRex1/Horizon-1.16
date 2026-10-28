@@ -118,6 +118,24 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
 }
 
 #[test]
+fn local_profile_cannot_open_multiplayer_or_friends_menus() {
+    let mut f = Fixture::new();
+    f.title.restrict_to_singleplayer();
+    assert!(
+        !f.title
+            .buttons(480.0, 262.0)
+            .into_iter()
+            .find(|button| button.label == "Multiplayer")
+            .unwrap()
+            .enabled
+    );
+    f.click("Multiplayer");
+    assert!(matches!(f.title.mode, Mode::Main));
+    f.click("Friends");
+    assert!(matches!(f.title.mode, Mode::Main));
+}
+
+#[test]
 fn empty_singleplayer_opens_creation_and_cancel_returns_to_title() {
     let mut f = Fixture::new();
     f.click("Singleplayer");

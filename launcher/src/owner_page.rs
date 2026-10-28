@@ -9,6 +9,7 @@ impl Launcher {
     /// hasn't read it yet. The data question comes first.
     pub(crate) fn asking_owner(&self) -> bool {
         self.owner == Some(false)
+            && self.accounts.selected().is_some()
             && (self.owner_screen_open || !self.settings.owner_notice_seen)
             && !self.asking_consent()
             && self.opening.is_none()
@@ -48,7 +49,7 @@ impl Launcher {
                     .child(format!("{}.", tr(account::NEEDS_OWNER))),
             )
             .child(text(theme::UI).text_color(t.muted).child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
+                "A licensed Microsoft account is required for multiplayer. Local profiles can play single-player without signing in.",
             )))
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Your worlds, offline names and settings stay where they are.",

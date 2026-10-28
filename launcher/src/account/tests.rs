@@ -347,10 +347,7 @@ fn a_no_from_the_services_blocks_at_once() {
         launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
         NoOwner
     );
-    assert_eq!(
-        NoOwner.to_string(),
-        "Sign in with a Microsoft account that owns Minecraft: Java Edition to play."
-    );
+    assert_eq!(NoOwner.to_string(), format!("{}.", NEEDS_OWNER));
 }
 
 #[test]
@@ -400,37 +397,40 @@ fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
         .unwrap()
         .starts_with("Alex is no longer signed in"));
     assert_eq!(pass.owner.unwrap().0.name, "Notch");
-    // An offline name plays: Notch is asked, and no session goes to the game.
+    // An offline name plays with no session or Microsoft requests.
     accounts.selected = None;
     m.lock().unwrap().log.clear();
     let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
     assert!(pass.session.is_none() && pass.offline.is_none());
-    assert_eq!(m.lock().unwrap().log.len(), 2);
-    // No account at all.
-    assert!(launch(&ep, Some("test-client"), &store, &mut Accounts::default()).is_err());
+    assert!(m.lock().unwrap().log.is_empty());
+    // A fresh local profile also starts without a Microsoft identity.
+    assert!(launch(&ep, None, &store, &mut Accounts::default()).is_ok());
+    assert!(m.lock().unwrap().log.is_empty());
 }
 
 #[test]
-fn offline_names_play_only_beside_an_owner() {
+fn offline_names_can_be_added_and_play_without_an_owner() {
     let store = MemoryStore::default();
     let mut accounts = Accounts::default();
-    let refused = accounts.play_as(&store, Player::Offline("Builder_1".into()));
-    assert_eq!(refused.unwrap_err(), OFFLINE_NEEDS_OWNER);
-    assert!(accounts.offline.is_empty());
+    accounts
+        .play_as(&store, Player::Offline("Builder_1".into()))
+        .unwrap();
+    assert_eq!(accounts.name_arg(), Some("Builder_1"));
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
     accounts
         .play_as(&store, Player::Offline("Builder_1".into()))
         .unwrap();
-    // Signing the last owner out keeps the name, which no longer plays.
+    // Signing the last owner out keeps the name, which still plays locally.
     accounts.remove(&store, UUID).unwrap();
     assert_eq!(accounts.offline, ["Builder_1"]);
     assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
     assert!(!accounts.has_owner(&store));
-    let (_, ep) = mock(|_| {});
-    assert!(launch(&ep, Some("test-client"), &store, &mut accounts).is_err());
+    let (m, ep) = mock(|_| {});
+    assert!(launch(&ep, Some("test-client"), &store, &mut accounts).is_ok());
+    assert!(m.lock().unwrap().log.is_empty());
     assert!(accounts
         .play_as(&store, Player::Offline("Builder_2".into()))
-        .is_err());
+        .is_ok());
 }
 
 #[test]

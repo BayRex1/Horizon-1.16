@@ -144,6 +144,7 @@ pub struct Title {
     /// The prepared resource root: the flat preset list and block registry.
     resources: PathBuf,
     pub started: std::time::Instant,
+    singleplayer_only: bool,
     search: String,
     search_focused: bool,
     /// The focused text field's cursor, selection and scroll.
@@ -250,6 +251,7 @@ impl Title {
             saves,
             resources: resources.to_owned(),
             started: now,
+            singleplayer_only: false,
             search: String::new(),
             search_focused: false,
             caret: RefCell::default(),
@@ -272,6 +274,10 @@ impl Title {
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
         }
+    }
+    /// Disable server and friend menus for a local offline profile.
+    pub fn restrict_to_singleplayer(&mut self) {
+        self.singleplayer_only = true;
     }
     /// Vanilla bypasses the selector when there are no saves.
     pub fn enter_singleplayer(&mut self) {
@@ -695,7 +701,7 @@ impl Title {
                         y + 24.0,
                         200.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
-                        true,
+                        !self.singleplayer_only,
                         4,
                     ),
                     b(
@@ -743,7 +749,7 @@ impl Title {
                         y + 72.0,
                         20.0,
                         &lang::get_or(key, plain),
-                        true,
+                        !self.singleplayer_only || id != 5,
                         id,
                     );
                     button.icon = Some((icon, 15.0));
@@ -1355,7 +1361,7 @@ impl Title {
                 Action::None
             }
             (Mode::Main, Some(2)) => Action::Quit,
-            (Mode::Main, Some(4)) => {
+            (Mode::Main, Some(4)) if !self.singleplayer_only => {
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::list(&self.saves));
                 Action::None
             }
@@ -1367,7 +1373,7 @@ impl Title {
                 crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
                 crate::multiplayer::Outcome::None => Action::None,
             },
-            (Mode::Main, Some(5)) => {
+            (Mode::Main, Some(5)) if !self.singleplayer_only => {
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
                 Action::None
             }

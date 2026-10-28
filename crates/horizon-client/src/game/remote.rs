@@ -303,6 +303,16 @@ impl Game<'_> {
         name: &str,
         cookies: Option<horizon_client::net::Cookies>,
     ) -> Result<()> {
+        if self.options.singleplayer_only {
+            let message = "Multiplayer is disabled for this local profile. Sign in with Microsoft to play online.";
+            if let Some(title) = &mut self.title {
+                title.failed(message.to_owned());
+                self.capture(false);
+            } else {
+                self.system_message(horizon_client::text::Text::literal(message));
+            }
+            return Ok(());
+        }
         if self.defer_world_entry(super::PendingWorldEntry::Server {
             address: address.to_owned(),
             name: name.to_owned(),

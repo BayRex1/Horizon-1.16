@@ -230,8 +230,8 @@ impl Launcher {
             Some(
                 div()
                     .child(tr(
-                        "Play offline under another name, and switch from the top bar. Online \
-                         servers don't take offline names.",
+                        "Create a local profile for single-player without a Microsoft account. \
+                         Multiplayer, LAN and Friends are disabled for local profiles.",
                     ))
                     .into_any_element(),
             ),

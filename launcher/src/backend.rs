@@ -1910,10 +1910,10 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
     }
 }
 
-/// The client's command, once the owner gate lets it start and its resources are prepared. Past
-/// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
-/// offline.
+/// The client's command after resource preparation. A selected Microsoft account needs a valid
+/// ownership check; a local profile starts without an online session and is single-player-only.
 pub fn client(tag: &str) -> Result<Command, String> {
+    let local_profile = account::Accounts::load().selected.is_none();
     let (session, offline) = account::session_for_game(&game_home())
         .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
     need_prepared(tag)?;
@@ -1922,6 +1922,9 @@ pub fn client(tag: &str) -> Result<Command, String> {
     let mut cmd = client_command(tag);
     if let Some(file) = session {
         cmd.arg("--session-file").arg(file);
+    }
+    if local_profile {
+        cmd.arg("--singleplayer-only");
     }
     if let Some(e) = offline {
         eprintln!("Playing offline: {e}");

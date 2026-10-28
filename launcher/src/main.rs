@@ -673,6 +673,9 @@ impl Launcher {
                         if let Some(name) = self.accounts.name_arg() {
                             cmd.arg("--name").arg(name);
                         }
+                        if self.accounts.selected.is_none() {
+                            cmd.arg("--singleplayer-only");
+                        }
                         cmd.envs(self.accounts.look_env());
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
@@ -2345,10 +2348,12 @@ impl Launcher {
                 &t,
             ));
         {
-            rows = rows.child(self.join_friend_row(prepared && !running, cx));
-            // The top bar shows who plays; a row only when there is something to do about it:
-            // no account that owns the game (Play needs one), or offline.
-            if self.owner == Some(false) {
+            if self.accounts.selected().is_some() {
+                rows = rows.child(self.join_friend_row(prepared && !running, cx));
+            }
+            // Ownership applies only to a selected Microsoft account. Local profiles launch
+            // single-player without a Microsoft session.
+            if self.owner == Some(false) && self.accounts.selected().is_some() {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
@@ -3293,7 +3298,7 @@ impl Launcher {
             Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
             None if self.accounts.accounts.is_empty() => div().child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+                "Microsoft sign-in is optional for single-player. Multiplayer needs a licensed Minecraft: Java Edition account.",
             )),
             None => div().child(tr("Add another account.")),
         };

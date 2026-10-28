@@ -1054,6 +1054,9 @@ impl Game<'_> {
     }
 
     pub(super) fn lan_open(&mut self, settings: LanSettings) -> Result<()> {
+        if self.options.singleplayer_only {
+            return Err("LAN hosting is disabled for this local profile.".into());
+        }
         let port = if let Some(server) = &self.integrated {
             // ShareToLanScreen: IntegratedServer.publishServer.
             server
