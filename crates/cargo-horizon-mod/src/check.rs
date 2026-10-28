@@ -259,6 +259,14 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
     mods.player_left(&steve);
     for out in mods.drain() {
         report.output.push(match out {
+            Output::Payload {
+                player,
+                channel,
+                data,
+            } => {
+                let target = player.as_deref().unwrap_or("server");
+                format!("payload: {} byte(s) on {channel} to {target}", data.len())
+            }
             Output::Chat { text, .. } => format!("chat: {text}"),
             Output::Tell { text, .. } => format!("tell: {text}"),
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),
