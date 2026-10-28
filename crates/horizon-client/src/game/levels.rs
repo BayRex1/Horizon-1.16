@@ -395,6 +395,12 @@ impl Game<'_> {
     /// the next tick starts one tick length after this one, or straight away
     /// while the sprint runs (`checkShouldSprintThisTick`).
     pub(super) fn wait_for_next_server_tick(&mut self, next: &mut Instant, paused: bool) {
+        // Windows rounds `sleep` to its ~15.6 ms tick unless the process asks
+        // for 1 ms, as vanilla's JVM does. Once, before the first wait.
+        static TIMER_RESOLUTION: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        TIMER_RESOLUTION.get_or_init(|| {
+            horizon_threads::raise_timer_resolution();
+        });
         if let Some(report) = self.clock.take_sprint_report() {
             // ServerTickRateManager.finishTickSprint: the server's sendSuccess.
             self.console_broadcast = Some(true);
