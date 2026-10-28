@@ -896,10 +896,10 @@ fn login_and_configure(
             }),
         )?;
     }
-    for packet in sync.registry_packets(known_pack) {
-        send(c, cfg::Clientbound::RegistryData(packet))?;
+    for body in sync.registry_packets(known_pack) {
+        c.send(body).map_err(e)?;
     }
-    send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    c.send(sync.tags_packet()).map_err(e)?;
     if let Some(pack) = &shared.config.resource_pack
         && let Some(rejected) = offer_pack(c, pack, &mut info)?
     {
