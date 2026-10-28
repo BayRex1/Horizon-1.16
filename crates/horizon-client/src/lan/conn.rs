@@ -26,7 +26,7 @@ use std::{
     net::TcpStream,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     time::{Duration, Instant},
@@ -35,8 +35,12 @@ use std::{
 /// ServerCommonPacketListenerImpl.KEEPALIVE_TIME and the disconnect timeout.
 const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Packets queued for one client beyond this many bytes disconnect it.
-const MAX_PENDING: usize = 96 << 20;
+/// A write that cannot finish in this long disconnects the client.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bytes queued for one client beyond this disconnect it. Far above any
+/// real burst (a 1 Mbit/s uplink needs minutes to drain 16 MiB), and it
+/// bounds the memory a client that stops reading can pin.
+const MAX_PENDING: usize = 16 << 20;
 /// Vanilla's server-side disconnect during login is a JSON component.
 fn login_disconnect(c: &mut Connection, reason: &horizon_world::nbt::Tag) {
     let json = component_json(reason);
@@ -231,6 +235,9 @@ impl Drop for Holding {
 pub struct PlayerSender {
     pub tx: Sender<Out>,
     pub pending: Arc<AtomicUsize>,
+    /// Set when a reservation would pass [`MAX_PENDING`]: no more packets are
+    /// queued for this client and the hub disconnects it.
+    dead: Arc<AtomicBool>,
     held: Arc<Mutex<Vec<Vec<u8>>>>,
     /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
     posted: Arc<AtomicUsize>,
@@ -240,6 +247,7 @@ impl PlayerSender {
         Self {
             tx,
             pending,
+            dead: Arc::default(),
             held: Arc::default(),
             posted: Arc::default(),
         }
@@ -247,8 +255,34 @@ impl PlayerSender {
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
+    /// Reserve `len` queued bytes before the body is kept: over the cap the
+    /// sender is marked dead and the body dropped.
+    fn reserve(&self, len: usize) -> bool {
+        let mut pending = self.pending.load(Ordering::Relaxed);
+        loop {
+            if pending + len > MAX_PENDING {
+                self.dead.store(true, Ordering::Relaxed);
+                return false;
+            }
+            match self.pending.compare_exchange_weak(
+                pending,
+                pending + len,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => pending = now,
+            }
+        }
+    }
+    /// Whether a reservation was refused: the writer exits and the hub kicks.
+    pub fn dead(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
+    }
     pub fn send(&self, body: Vec<u8>) {
-        self.pending.fetch_add(body.len(), Ordering::Relaxed);
+        if !self.reserve(body.len()) {
+            return;
+        }
         if HOLDING.get() {
             self.held().push(body);
         } else {
@@ -265,7 +299,9 @@ impl PlayerSender {
         }
         let mut held = self.held();
         for body in bodies {
-            self.pending.fetch_add(body.len(), Ordering::Relaxed);
+            if !self.reserve(body.len()) {
+                break;
+            }
             held.push(body);
         }
     }
@@ -952,6 +988,8 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     let events = shared.events.clone();
     let _ = c.reader.set_read_timeout(Some(KEEP_ALIVE_TIMEOUT));
     let (mut reader, writer) = c.split();
+    // A peer that stops reading must not pin the writer in write_all forever.
+    let _ = writer.set_write_timeout(Some(WRITE_TIMEOUT));
     let (tx, rx) = channel();
     let pending = Arc::new(AtomicUsize::new(0));
     let latency = Arc::new(AtomicI32::new(0));
@@ -1187,9 +1225,6 @@ fn write_loop(
         if writer.write_batch(&mut batch).is_err() {
             stop = true;
         }
-        if pending.load(Ordering::Relaxed) > MAX_PENDING {
-            stop = true;
-        }
         if let Some(reason) = closing {
             let _ =
                 writer.send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
@@ -1339,6 +1374,38 @@ mod tests {
         assert!(cache.bytes <= first * 2);
     }
 
+    /// Reservations stop at the per-connection cap, and are released as the
+    /// writer hands the bytes to the socket.
+    #[test]
+    fn outbound_reservations_stop_at_the_cap_and_release() {
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let body = vec![0u8; 1 << 20];
+        while !sender.dead() {
+            sender.send(body.clone());
+        }
+        assert_eq!(sender.pending.load(Ordering::Relaxed), MAX_PENDING);
+        let mut queued = 0;
+        while let Ok(out) = rx.try_recv() {
+            let len = match out {
+                Out::Packet(body) => body.len(),
+                Out::Packets(bodies) => bodies.iter().map(Vec::len).sum(),
+                _ => 0,
+            };
+            sender.pending.fetch_sub(len, Ordering::Relaxed);
+            queued += len;
+        }
+        assert_eq!(queued, MAX_PENDING);
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        // One body larger than the cap is refused outright.
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        sender.send(vec![0u8; MAX_PENDING + 1]);
+        assert!(sender.dead());
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
     /// A queue drained by the writer thread leaves as one batch, in order and
     /// byte-identical to encoding each packet on its own.
     #[test]
@@ -1352,8 +1419,6 @@ mod tests {
         let (tx, rx) = channel();
         let alive = Arc::new(AtomicI64::new(-1));
         let latency = Arc::new(AtomicI32::new(0));
-        let pending = Arc::new(AtomicUsize::new(0));
-        let handle = std::thread::spawn(move || write_loop(writer, rx, alive, latency, pending));
         let bodies: Vec<Vec<u8>> = (0..40u8)
             .map(|i| {
                 let mut body = vec![5u8];
@@ -1361,6 +1426,9 @@ mod tests {
                 body
             })
             .collect();
+        let pending = Arc::new(AtomicUsize::new(bodies.iter().map(Vec::len).sum()));
+        let written = pending.clone();
+        let handle = std::thread::spawn(move || write_loop(writer, rx, alive, latency, pending));
         tx.send(Out::Packets(bodies.clone())).unwrap();
         tx.send(Out::Close).unwrap();
         handle.join().unwrap();

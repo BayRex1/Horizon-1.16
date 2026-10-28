@@ -147,6 +147,14 @@ impl Stream {
             Self::Sink { .. } => Ok(()),
         }
     }
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(s) => s.set_write_timeout(timeout),
+            Self::Memory(_) => Ok(()),
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(()),
+        }
+    }
     fn shutdown(&self) {
         match self {
             Self::Tcp(s) => {
@@ -459,6 +467,10 @@ impl ConnWriter {
             .bytes_out
             .fetch_add((out.len() - start) as i64, Ordering::Relaxed);
         Ok(())
+    }
+    /// Bound how long a write may block on a peer that stopped reading.
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<()> {
+        Ok(self.stream.set_write_timeout(timeout)?)
     }
     /// Write the frames [`ConnWriter::append`] added to `batch` in one call.
     pub fn write_batch(&mut self, batch: &mut Vec<u8>) -> Result<()> {
