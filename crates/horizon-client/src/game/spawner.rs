@@ -47,8 +47,7 @@ impl Game<'_> {
             alive
                 && !spectator
                 && (range < 0.0
-                    || (p.x - x).powi(2) + (p.y - y).powi(2) + (p.z - z).powi(2)
-                        < range * range)
+                    || (p.x - x).powi(2) + (p.y - y).powi(2) + (p.z - z).powi(2) < range * range)
         };
         if self
             .player_view()

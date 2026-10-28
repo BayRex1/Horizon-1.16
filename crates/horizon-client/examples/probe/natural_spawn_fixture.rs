@@ -33,8 +33,7 @@ use horizon_client::{
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Event, GenEvent, Heightmap, NaturalLevel, SpawnCost,
-            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureSpawns,
-            spawn_box,
+            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureSpawns, spawn_box,
         },
         spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
         species::{self, Baby},
@@ -381,26 +380,26 @@ impl TrialSpawnerLevel for World<'_> {
     fn players(&self) -> &[TrialPlayer] {
         self.trial_players.get_or_init(|| {
             self.players
-            .iter()
-            .enumerate()
-            .map(|(i, (p, mode))| TrialPlayer {
-                uuid: [0, 0, 0, i as i32 + 1],
-                block: p.map(|v| v.floor() as i32),
-                eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
-                creative: mode == "creative",
-                spectator: mode == "spectator",
-                position: *p,
-                height: 1.8,
-                alive: true,
-                omen: self
-                    .omens
-                    .borrow()
-                    .get(i)
-                    .copied()
-                    .flatten()
-                    .map(|(o, _)| o),
-            })
-            .collect()
+                .iter()
+                .enumerate()
+                .map(|(i, (p, mode))| TrialPlayer {
+                    uuid: [0, 0, 0, i as i32 + 1],
+                    block: p.map(|v| v.floor() as i32),
+                    eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
+                    creative: mode == "creative",
+                    spectator: mode == "spectator",
+                    position: *p,
+                    height: 1.8,
+                    alive: true,
+                    omen: self
+                        .omens
+                        .borrow()
+                        .get(i)
+                        .copied()
+                        .flatten()
+                        .map(|(o, _)| o),
+                })
+                .collect()
         })
     }
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {

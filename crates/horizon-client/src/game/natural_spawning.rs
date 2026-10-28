@@ -224,12 +224,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
     }
     fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
         let t = self.game.res.mob_types().get(entity)?;
-        Some((
-            t.species,
-            t.width as f32,
-            t.height as f32,
-            t.spawn_category,
-        ))
+        Some((t.species, t.width as f32, t.height as f32, t.spawn_category))
     }
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
         self.biome(x, y, z).map(|b| &b.spawns)
@@ -248,11 +243,10 @@ impl NaturalLevel for GameLevel<'_, '_> {
         wanted: &dyn Fn(&str) -> bool,
         found: &mut dyn FnMut(&str, bool, bool),
     ) {
-        self.game.for_each_structure_reaching(
-            [x, y, z],
-            wanted,
-            &mut |id, in_piece| found(id, in_piece, true),
-        )
+        self.game
+            .for_each_structure_reaching([x, y, z], wanted, &mut |id, in_piece| {
+                found(id, in_piece, true)
+            })
     }
     fn structure_spawns(&self) -> &StructureSpawns {
         StructureSpawns::shared(&self.game.options.resources)

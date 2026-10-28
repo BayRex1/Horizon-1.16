@@ -679,15 +679,16 @@ pub fn mobs_at<L: NaturalLevel>(
     // most chunks are mineshafts, which override nothing).
     let overrides = l.structure_spawns();
     let monster = category == Category::Monster;
-    let fortress_floor =
-        monster && name_at(l, x, y - 1, z) == "minecraft:nether_bricks";
+    let fortress_floor = monster && name_at(l, x, y - 1, z) == "minecraft:nether_bricks";
     let mut fortress = false;
     let mut chosen: Option<&[SpawnEntry]> = None;
     l.for_each_structure_at(
         x,
         y,
         z,
-        &|id| (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some(),
+        &|id| {
+            (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some()
+        },
         &mut |id, in_piece, in_bounds| {
             if fortress_floor && id == "minecraft:fortress" && in_bounds {
                 fortress = true;

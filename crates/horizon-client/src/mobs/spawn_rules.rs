@@ -491,9 +491,7 @@ pub fn check_spawn_rules<L: SpawnLevel>(
             y < l.sea_level() + 4 && tag(l, "minecraft:sand", x, y - 1, z) && bright(l, x, y, z)
         }
         S::Wolf => tag(l, "minecraft:wolves_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
-        S::ZombifiedPiglin => {
-            !l.peaceful() && below(l, x, y, z) != "minecraft:nether_wart_block"
-        }
+        S::ZombifiedPiglin => !l.peaceful() && below(l, x, y, z) != "minecraft:nether_wart_block",
         S::Fox => tag(l, "minecraft:foxes_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
         S::Bogged
         | S::CaveSpider

@@ -17,11 +17,12 @@ impl Game<'_> {
         wanted: &dyn Fn(&str) -> bool,
     ) -> Vec<(String, bool)> {
         let mut out: Vec<(String, bool)> = Vec::new();
-        self.for_each_structure_reaching(pos, wanted, &mut |id, piece| {
-            match out.iter_mut().find(|(name, _)| name == id) {
-                Some(e) => e.1 |= piece,
-                None => out.push((id.to_owned(), piece)),
-            }
+        self.for_each_structure_reaching(pos, wanted, &mut |id, piece| match out
+            .iter_mut()
+            .find(|(name, _)| name == id)
+        {
+            Some(e) => e.1 |= piece,
+            None => out.push((id.to_owned(), piece)),
         });
         out
     }
