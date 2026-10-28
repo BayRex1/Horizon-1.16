@@ -3,7 +3,13 @@
 //! splits into a reader (for a receive thread) and a shareable writer. It runs
 //! over TCP, or over an in-memory pipe between two threads of one process
 //! (vanilla's `LocalChannel`, which an integrated server's player uses).
-use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
+use crate::{
+    Error, Result,
+    buf::{Reader, varint_size, write_varint},
+    crypto::Cfb8,
+    frame::{self, MAX_FRAME},
+};
+use flate2::{Compress, Compression, FlushCompress, Status};
 use std::{
     io::{Read, Write},
     net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
@@ -109,12 +115,25 @@ impl Write for Pipe {
 enum Stream {
     Tcp(TcpStream),
     Memory(Pipe),
+    /// A byte sink that counts its writes, for the batching test.
+    #[cfg(test)]
+    Sink {
+        bytes: Vec<u8>,
+        writes: usize,
+    },
 }
 impl Stream {
     fn try_clone(&self) -> std::io::Result<Self> {
         Ok(match self {
             Self::Tcp(s) => Self::Tcp(s.try_clone()?),
             Self::Memory(p) => Self::Memory(p.try_clone()),
+            #[cfg(test)]
+            Self::Sink { .. } => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "a test sink cannot be cloned",
+                ));
+            }
         })
     }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
@@ -124,6 +143,8 @@ impl Stream {
                 *p.timeout.lock().unwrap() = timeout;
                 Ok(())
             }
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(()),
         }
     }
     fn shutdown(&self) {
@@ -132,6 +153,8 @@ impl Stream {
                 let _ = s.shutdown(Shutdown::Both);
             }
             Self::Memory(p) => p.shutdown(),
+            #[cfg(test)]
+            Self::Sink { .. } => {}
         }
     }
 }
@@ -140,6 +163,8 @@ impl Read for Stream {
         match self {
             Self::Tcp(s) => s.read(out),
             Self::Memory(p) => p.read(out),
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(0),
         }
     }
 }
@@ -148,12 +173,20 @@ impl Write for Stream {
         match self {
             Self::Tcp(s) => s.write(data),
             Self::Memory(p) => p.write(data),
+            #[cfg(test)]
+            Self::Sink { bytes, writes } => {
+                *writes += 1;
+                bytes.extend_from_slice(data);
+                Ok(data.len())
+            }
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Tcp(s) => s.flush(),
             Self::Memory(p) => p.flush(),
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(()),
         }
     }
 }
@@ -179,6 +212,13 @@ pub struct ConnWriter {
     encrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     counters: Arc<Counters>,
+    /// One frame for [`ConnWriter::send`]; batching appends to the caller's
+    /// buffer instead.
+    frame: Vec<u8>,
+    /// The zlib stream and its output, reused for every compressed frame: a
+    /// fresh stream would allocate and touch ~150 KiB of window per packet.
+    compressor: Option<Compress>,
+    scratch: Vec<u8>,
 }
 /// `InetAddress.getByName` under Java's default `java.net.preferIPv6Addresses=false`: IPv4
 /// addresses first, whatever order the system resolver gives (macOS lists IPv6 first). Vanilla
@@ -244,6 +284,9 @@ impl Connection {
                 encrypt: None,
                 threshold: None,
                 counters,
+                frame: Vec::new(),
+                compressor: None,
+                scratch: Vec::new(),
             },
         })
     }
@@ -309,21 +352,108 @@ impl ConnReader {
 impl ConnWriter {
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
-        self.send_contents(&frame::contents(body, self.threshold)?)
+        let mut frame = std::mem::take(&mut self.frame);
+        frame.clear();
+        let result = match self.append(body, &mut frame) {
+            Ok(()) => self.stream.write_all(&frame).map_err(Error::from),
+            Err(e) => Err(e),
+        };
+        self.frame = frame;
+        result
     }
     /// Send a frame whose contents [`frame::contents`] made with this
     /// writer's threshold.
     pub fn send_contents(&mut self, contents: &[u8]) -> Result<()> {
-        let mut framed = frame::prefixed(contents);
-        if let Some(c) = &mut self.encrypt {
-            c.encrypt(&mut framed);
+        let mut frame = std::mem::take(&mut self.frame);
+        frame.clear();
+        let result = match self.append_contents(contents, &mut frame) {
+            Ok(()) => self.stream.write_all(&frame).map_err(Error::from),
+            Err(e) => Err(e),
+        };
+        self.frame = frame;
+        result
+    }
+    /// Append the frame for a packet body to `out`: length prefix, contents
+    /// (compressed with the reused stream above the threshold), encrypted.
+    pub fn append(&mut self, body: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        let start = out.len();
+        let contents_len = match self.threshold {
+            None => {
+                write_varint(out, body.len() as i32);
+                out.extend_from_slice(body);
+                body.len()
+            }
+            Some(t) if body.len() < t => {
+                write_varint(out, (body.len() + 1) as i32);
+                out.push(0);
+                out.extend_from_slice(body);
+                body.len() + 1
+            }
+            Some(_) => {
+                let Self {
+                    compressor,
+                    scratch,
+                    ..
+                } = self;
+                scratch.clear();
+                // zlib's deflateBound is ~input + 0.03% + 13 bytes; this
+                // leaves room for the whole stream in one call.
+                scratch.reserve(body.len() + body.len() / 16 + 64);
+                let compressor =
+                    compressor.get_or_insert_with(|| Compress::new(Compression::default(), true));
+                compressor.reset();
+                let mut at = 0;
+                loop {
+                    let before = compressor.total_in();
+                    let status = compressor
+                        .compress_vec(&body[at..], scratch, FlushCompress::Finish)
+                        .map_err(|e| Error::new(format!("compression failed: {e}")))?;
+                    at += usize::try_from(compressor.total_in() - before).unwrap_or(0);
+                    if status == Status::StreamEnd {
+                        break;
+                    }
+                    scratch.reserve(body.len() / 8 + 256);
+                }
+                let len = varint_size(body.len() as i32) + scratch.len();
+                write_varint(out, len as i32);
+                write_varint(out, body.len() as i32);
+                out.extend_from_slice(scratch);
+                len
+            }
+        };
+        self.finish_frame(start, contents_len, out)
+    }
+    /// Append a frame whose contents were made for this writer's threshold.
+    pub fn append_contents(&mut self, contents: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        let start = out.len();
+        write_varint(out, contents.len() as i32);
+        out.extend_from_slice(contents);
+        self.finish_frame(start, contents.len(), out)
+    }
+    fn finish_frame(&mut self, start: usize, contents_len: usize, out: &mut Vec<u8>) -> Result<()> {
+        if contents_len > MAX_FRAME {
+            out.truncate(start);
+            return Err(Error::new(format!(
+                "packet too large: {contents_len} bytes"
+            )));
         }
-        self.stream.write_all(&framed)?;
+        if let Some(c) = &mut self.encrypt {
+            c.encrypt(&mut out[start..]);
+        }
         self.counters.sent.fetch_add(1, Ordering::Relaxed);
         self.counters
             .bytes_out
-            .fetch_add(framed.len() as i64, Ordering::Relaxed);
+            .fetch_add((out.len() - start) as i64, Ordering::Relaxed);
         Ok(())
+    }
+    /// Write the frames [`ConnWriter::append`] added to `batch` in one call.
+    pub fn write_batch(&mut self, batch: &mut Vec<u8>) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let result = self.stream.write_all(batch).map_err(Error::from);
+        batch.clear();
+        result
     }
     pub fn shutdown(&self) {
         self.stream.shutdown();
@@ -359,6 +489,8 @@ mod tests {
         match &c.reader.stream {
             Stream::Tcp(s) => s.peer_addr().unwrap(),
             Stream::Memory(_) => panic!("not a socket"),
+            #[cfg(test)]
+            Stream::Sink { .. } => panic!("not a socket"),
         }
     }
 
@@ -453,6 +585,64 @@ mod tests {
         assert_eq!(c.reader.counters.received.load(Ordering::Relaxed), 1);
         server.join().unwrap();
         assert!(c.recv().is_err());
+    }
+
+    /// The reused zlib stream gives exactly the bytes `frame::contents` makes
+    /// with a fresh encoder, for a second, different body too.
+    #[test]
+    fn reused_compression_matches_frame_contents() {
+        let (a, mut b) = Pipe::pair();
+        let mut c = Connection::local(a);
+        c.set_compression(64);
+        let bodies = [
+            (0..5000u32).map(|i| (i % 7) as u8).collect::<Vec<u8>>(),
+            (0..3000u32).map(|i| (i % 13) as u8 ^ 0x5A).collect(),
+        ];
+        for body in &bodies {
+            c.send(body).unwrap();
+        }
+        drop(c);
+        let mut raw = Vec::new();
+        b.read_to_end(&mut raw).unwrap();
+        for body in &bodies {
+            let frame = frame::split(&mut raw).unwrap().unwrap();
+            assert_eq!(&frame[..], &frame::contents(body, Some(64)).unwrap()[..]);
+        }
+        assert!(raw.is_empty());
+    }
+
+    /// Frames appended for several bodies leave as one write, in order and
+    /// byte-identical to encoding each on its own.
+    #[test]
+    fn a_batch_of_bodies_is_one_write() {
+        let mut writer = ConnWriter {
+            stream: Stream::Sink {
+                bytes: Vec::new(),
+                writes: 0,
+            },
+            encrypt: None,
+            threshold: None,
+            counters: Arc::new(Counters::default()),
+            frame: Vec::new(),
+            compressor: None,
+            scratch: Vec::new(),
+        };
+        let bodies = [vec![1u8; 12], vec![2u8; 5000], vec![3u8; 40]];
+        let mut batch = Vec::new();
+        for body in &bodies {
+            writer.append(body, &mut batch).unwrap();
+        }
+        writer.write_batch(&mut batch).unwrap();
+        assert!(batch.is_empty());
+        let Stream::Sink { bytes, writes } = &writer.stream else {
+            panic!("not a test sink");
+        };
+        assert_eq!(*writes, 1);
+        let expected: Vec<u8> = bodies
+            .iter()
+            .flat_map(|body| frame::encode(body, None).unwrap())
+            .collect();
+        assert_eq!(bytes, &expected);
     }
 
     #[test]

@@ -19,9 +19,10 @@ use super::{
     ominous_item_spawner, persist, raids::Raiding, sculk::SculkState, tnt, trident,
 };
 use horizon_client::{
-    Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
-    save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
-    ticket_levels::ChunkTickets, vanillagen::VanillaTerrain, world::World,
+    Result, block_entity_anim::BlockEntityAnims, clock::Overload,
+    random_tick_sections::RandomTickSections, save::SaveDir, streaming::Streaming,
+    tick_chunk_membership::TickChunkMembership, ticket_levels::ChunkTickets,
+    vanillagen::VanillaTerrain, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{
@@ -109,6 +110,10 @@ impl Default for Pass {
 #[derive(Default)]
 pub(super) struct Levels {
     parked: HashMap<Dim, Parked>,
+    /// When the server tick loop started, on its own clock.
+    loop_started: Option<Instant>,
+    /// Vanilla's "Can't keep up" gate for late server deadlines.
+    overload: Overload,
 }
 
 impl Levels {
@@ -205,6 +210,11 @@ impl Game<'_> {
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
         swap(&mut self.tickets, &mut p.tickets);
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);
+        // The random-tick list is in place, not per level: its key could match
+        // another level's.
+        self.random_ticking_key = None;
+        // The uuid index is also in place: its ids are the old level's.
+        self.trial_uuid_index.borrow_mut().invalidate();
         swap(&mut self.level_events, &mut p.level_events);
         swap(&mut self.falling, &mut p.falling);
         swap(&mut self.paintings, &mut p.paintings);
@@ -390,6 +400,12 @@ impl Game<'_> {
     /// the next tick starts one tick length after this one, or straight away
     /// while the sprint runs (`checkShouldSprintThisTick`).
     pub(super) fn wait_for_next_server_tick(&mut self, next: &mut Instant, paused: bool) {
+        // Windows rounds `sleep` to its ~15.6 ms tick unless the process asks
+        // for 1 ms, as vanilla's JVM does. Once, before the first wait.
+        static TIMER_RESOLUTION: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        TIMER_RESOLUTION.get_or_init(|| {
+            horizon_threads::raise_timer_resolution();
+        });
         if let Some(report) = self.clock.take_sprint_report() {
             // ServerTickRateManager.finishTickSprint: the server's sendSuccess.
             self.console_broadcast = Some(true);
@@ -406,7 +422,8 @@ impl Game<'_> {
             *next = now;
             return;
         }
-        *next += self.clock.tick_duration();
+        let tick = self.clock.tick_duration();
+        *next += tick;
         if *next > now {
             // The chunks loading (the players', force-loaded ones, a
             // `/pregen` task) keep the workers fed until the next tick.
@@ -415,8 +432,20 @@ impl Game<'_> {
             if *next > now {
                 std::thread::sleep(*next - now);
             }
-        } else if now - *next > Duration::from_secs(2) {
-            *next = now;
+        } else {
+            let started = *self.levels.loop_started.get_or_insert(now);
+            let behind = now - *next;
+            let ticks = (behind.as_nanos() / tick.as_nanos().max(1)).min(u32::MAX as u128) as u32;
+            if let Some(warning) = self
+                .levels
+                .overload
+                .late(behind, ticks, tick, now - started)
+            {
+                log::warn!("{warning}");
+            }
+            if behind > Duration::from_secs(2) {
+                *next = now;
+            }
         }
     }
 

@@ -276,14 +276,88 @@ struct Logger {
 
 static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
 
+/// `HORIZON_LOG`: the level every target gets, then `target=level` overrides
+/// matched by target prefix (the longest one wins). Unset means the game's
+/// usual level, with other crates' chatter above errors kept out.
+#[derive(Debug)]
+struct Filter {
+    default: log::LevelFilter,
+    rules: Vec<(String, log::LevelFilter)>,
+}
+
+impl Filter {
+    /// `info`, or `debug,horizon_client::game=debug,horizon_world=trace`.
+    fn parse(spec: &str) -> Option<Self> {
+        let mut filter = Self {
+            default: log::LevelFilter::Info,
+            rules: Vec::new(),
+        };
+        let mut any = false;
+        for part in spec.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            any = true;
+            let level = |text: &str| text.trim().to_ascii_lowercase().parse().ok();
+            match part.split_once('=') {
+                Some((target, level_text)) => {
+                    if let Some(level) = level(level_text) {
+                        filter.rules.push((target.trim().to_owned(), level));
+                    }
+                }
+                None => {
+                    if let Some(level) = level(part) {
+                        filter.default = level;
+                    }
+                }
+            }
+        }
+        any.then_some(filter)
+    }
+
+    fn level(&self, target: &str) -> log::LevelFilter {
+        self.rules
+            .iter()
+            .filter(|(prefix, _)| target.starts_with(prefix))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map_or(self.default, |(_, level)| *level)
+    }
+
+    fn max(&self) -> log::LevelFilter {
+        self.rules
+            .iter()
+            .map(|(_, level)| *level)
+            .fold(self.default, |max, level| max.max(level))
+    }
+}
+
+/// Read once: the environment cannot change a process's log level anyway.
+static FILTER: std::sync::OnceLock<Option<Filter>> = std::sync::OnceLock::new();
+
+fn filter() -> Option<&'static Filter> {
+    FILTER
+        .get_or_init(|| {
+            std::env::var("HORIZON_LOG")
+                .ok()
+                .and_then(|spec| Filter::parse(&spec))
+        })
+        .as_ref()
+}
+
 fn ours(target: &str) -> bool {
     target.starts_with("horizon")
 }
 
 impl log::Log for Logger {
     fn enabled(&self, meta: &log::Metadata) -> bool {
-        meta.level() <= log::Level::Info
-            && (ours(meta.target()) || meta.level() <= log::Level::Error)
+        match filter() {
+            Some(filter) => meta.level() <= filter.level(meta.target()),
+            None => {
+                meta.level() <= log::Level::Info
+                    && (ours(meta.target()) || meta.level() <= log::Level::Error)
+            }
+        }
     }
 
     fn log(&self, record: &log::Record) {
@@ -395,7 +469,7 @@ pub fn init(home: &Path, main_thread: &'static str) {
         }
     });
     if log::set_logger(logger).is_ok() {
-        log::set_max_level(log::LevelFilter::Info);
+        log::set_max_level(filter().map_or(log::LevelFilter::Info, Filter::max));
     }
 }
 
@@ -469,6 +543,33 @@ mod tests {
 
     fn day(d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
+    }
+
+    #[test]
+    fn horizon_log_parses_a_default_and_target_prefixes() {
+        let filter = Filter::parse("info,horizon_client::game=debug,horizon_world=trace")
+            .expect("a set filter");
+        assert_eq!(
+            filter.level("horizon_client::game"),
+            log::LevelFilter::Debug
+        );
+        assert_eq!(
+            filter.level("horizon_client::game::levels"),
+            log::LevelFilter::Debug
+        );
+        assert_eq!(filter.level("horizon_world"), log::LevelFilter::Trace);
+        assert_eq!(filter.level("horizon_items"), log::LevelFilter::Info);
+        assert_eq!(filter.level("wgpu"), log::LevelFilter::Info);
+        assert_eq!(filter.max(), log::LevelFilter::Trace);
+
+        let off = Filter::parse("warn,horizon_client=off").unwrap();
+        assert_eq!(off.level("horizon_client::game"), log::LevelFilter::Off);
+        assert_eq!(off.level("wgpu"), log::LevelFilter::Warn);
+        assert_eq!(Filter::parse("").map(|f| f.level("x")), None);
+        assert_eq!(
+            Filter::parse("WARN").unwrap().level("x"),
+            log::LevelFilter::Warn
+        );
     }
 
     #[test]
