@@ -1141,6 +1141,7 @@ impl Hub {
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
         let mut events = Vec::new();
+        let mut flooded = Vec::new();
         for event in self.lan.poll() {
             match event {
                 NetEvent::Joined(j) => {
@@ -1154,8 +1155,11 @@ impl Hub {
                     }
                 }
                 NetEvent::Packet(conn, packet) => {
-                    if let Some(g) = self.guest_mut(conn) {
-                        g.inbox.push_back(*packet);
+                    if let Some(g) = self.guest_mut(conn)
+                        && !g.queue_packet(*packet)
+                    {
+                        g.clear_inbox();
+                        flooded.push(conn);
                     }
                 }
                 NetEvent::Duplicate(uuid) => {
@@ -1173,6 +1177,12 @@ impl Hub {
                     }
                 }
             }
+        }
+        for conn in flooded {
+            self.kick(
+                conn,
+                translatable("multiplayer.disconnect.invalid_packet", &[]),
+            );
         }
         let dead: Vec<u32> = self
             .guests
@@ -2096,7 +2106,7 @@ impl Hub {
         g.known_moves = g.received_moves;
         let mut budget = 400;
         while budget > 0 {
-            let Some(packet) = self.guests[i].inbox.pop_front() else {
+            let Some(packet) = self.guests[i].pop_packet() else {
                 break;
             };
             budget -= 1;

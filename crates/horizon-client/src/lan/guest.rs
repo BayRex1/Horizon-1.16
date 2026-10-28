@@ -22,6 +22,13 @@ pub const SURVIVAL: i32 = 0;
 pub const CREATIVE: i32 = 1;
 pub const SPECTATOR: i32 = 3;
 
+/// A guest's inbox is capped by bytes, not packets: a client that outruns the
+/// 400-per-tick budget is dropped instead of growing a queue without bound.
+pub const INBOX_BYTES: usize = 1 << 20;
+/// What one queued packet counts as: the enum, its ids and a small payload.
+/// Larger payloads are under-counted, so this stays a floor on the real cost.
+const INBOX_PACKET_BYTES: usize = 256;
+
 /// The body state a player's file keeps that lives on `PlayerMotion`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SavedBody {
@@ -222,6 +229,8 @@ pub struct Guest {
     pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
+    /// The bytes `inbox` is charged (see [`INBOX_BYTES`]).
+    pub inbox_bytes: usize,
     pub joined_tick: u64,
     pub ticks: u64,
     /// The moves accepted since the game last looked (movement, on ground),
@@ -356,6 +365,7 @@ impl Guest {
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
+            inbox_bytes: 0,
             joined_tick: 0,
             ticks: 0,
             moves: Vec::new(),
@@ -385,6 +395,27 @@ impl Guest {
         for p in packets {
             self.send(p);
         }
+    }
+    /// Queue one inbound packet; false when the inbox is over its cap (the
+    /// caller disconnects the guest, as a full socket would).
+    pub fn queue_packet(&mut self, packet: play::Serverbound) -> bool {
+        if self.inbox_bytes + INBOX_PACKET_BYTES > INBOX_BYTES {
+            return false;
+        }
+        self.inbox_bytes += INBOX_PACKET_BYTES;
+        self.inbox.push_back(packet);
+        true
+    }
+    /// The next inbound packet, if any.
+    pub fn pop_packet(&mut self) -> Option<play::Serverbound> {
+        let packet = self.inbox.pop_front()?;
+        self.inbox_bytes = self.inbox_bytes.saturating_sub(INBOX_PACKET_BYTES);
+        Some(packet)
+    }
+    /// Drop what is queued (a guest over the cap is disconnected).
+    pub fn clear_inbox(&mut self) {
+        self.inbox.clear();
+        self.inbox_bytes = 0;
     }
     pub fn chunk(&self) -> (i32, i32) {
         (
@@ -773,5 +804,48 @@ mod tests {
         chestplate.data_mut().trim = Some(("minecraft:x".into(), "coast".into()));
         let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate)).unwrap();
         assert_eq!(stack.component(component::TRIM), None);
+    }
+
+    fn guest() -> Guest {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alex".into(),
+                properties: Vec::new(),
+                info: horizon_protocol::packets::configuration::ClientInformation::new(8),
+                brand: "test".into(),
+                sender: crate::lan::PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+            },
+            2,
+            [0.0, 64.0, 0.0],
+            8,
+        )
+    }
+
+    /// A flood stops being queued at the byte cap, and popping refunds it.
+    #[test]
+    fn the_inbox_is_capped_by_bytes() {
+        let mut g = guest();
+        let keep_alive = || play::Serverbound::Punch(horizon_protocol::packets::Empty);
+        let mut queued = 0;
+        while g.queue_packet(keep_alive()) {
+            queued += 1;
+            assert!(queued <= INBOX_BYTES / INBOX_PACKET_BYTES);
+        }
+        assert_eq!(g.inbox.len(), queued);
+        assert!(g.inbox_bytes <= INBOX_BYTES);
+        assert!(!g.queue_packet(keep_alive()));
+        for _ in 0..queued {
+            assert!(g.pop_packet().is_some());
+        }
+        assert_eq!(g.inbox_bytes, 0);
+        assert!(g.pop_packet().is_none());
+        assert!(g.queue_packet(keep_alive()));
+        g.clear_inbox();
+        assert_eq!((g.inbox.len(), g.inbox_bytes), (0, 0));
     }
 }
