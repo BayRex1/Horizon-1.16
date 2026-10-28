@@ -157,6 +157,16 @@ Forget one of your offline names; its skin and cape go with it.
 
 MCP: `account_forget_offline`.
 
+## `horizon-launcher account refresh`
+
+Renew an account's sign-in now, whatever is left on its token.
+
+    horizon-launcher account refresh <WHO>
+
+- `WHO`: Its name or UUID
+
+MCP: `account_refresh`.
+
 ## `horizon-launcher account skin`
 
 Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape PNG, the model. Kept by the launcher and given to the game when that name plays.

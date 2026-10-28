@@ -114,6 +114,11 @@ enum AccountCmd {
     Offline { name: Option<String> },
     /// Forget one of your offline names; its skin and cape go with it
     ForgetOffline { name: String },
+    /// Renew an account's sign-in now, whatever is left on its token
+    Refresh {
+        /// Its name or UUID
+        who: String,
+    },
     /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
     /// PNG, the model. Kept by the launcher and given to the game when that name plays
     Skin {
@@ -1574,6 +1579,16 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             if !account::store().persistent() {
                 eprintln!("{}", account::NO_KEYCHAIN);
             }
+        }
+        AccountCmd::Refresh { who } => {
+            let a = find(&accounts, &who)?;
+            account::renew(
+                &account::Endpoints::live(),
+                account::client_id().as_deref(),
+                account::store(),
+                &a.uuid,
+            )?;
+            println!("Renewed {}'s sign-in.", a.name);
         }
         AccountCmd::SignOut { who } => {
             let a = find(&accounts, &who)?;
