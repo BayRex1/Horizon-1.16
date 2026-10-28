@@ -1170,7 +1170,9 @@ pub struct Resources {
 
 struct WorldCore {
     facts: BlockFacts,
-    biomes: Arc<Biomes>,
+    /// The open world's biomes: the built-in ones with its data packs'
+    /// (`set_biomes` when a world opens).
+    biomes: std::sync::RwLock<Arc<Biomes>>,
     environment: Environment,
     collision: BlockCollisionRegistry<'static>,
     motion: MotionResources,
@@ -1219,8 +1221,16 @@ impl Resources {
     fn transformers(&self) -> &horizon_client::block_transform::Transformers {
         &self.rest().transformers
     }
-    fn biomes(&self) -> &Arc<Biomes> {
-        &self.core.biomes
+    fn biomes(&self) -> Arc<Biomes> {
+        self.core
+            .biomes
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    /// The biomes of the world about to open, before its first chunk.
+    fn set_biomes(&self, biomes: Arc<Biomes>) {
+        *self.core.biomes.write().unwrap_or_else(|e| e.into_inner()) = biomes;
     }
     fn environment(&self) -> &Environment {
         &self.core.environment
@@ -1323,6 +1333,21 @@ pub struct PackResources {
     forcefield: Arc<(u32, u32, Vec<u8>)>,
 }
 impl PackResources {
+    /// The workers' context with the open world's biomes (its data packs'
+    /// colours), for its streaming and distant terrain.
+    fn context_with(&self, biomes: Arc<Biomes>) -> Arc<WorkerContext> {
+        if Arc::ptr_eq(&self.context.biomes, &biomes) {
+            return self.context.clone();
+        }
+        let c = &self.context;
+        Arc::new(WorkerContext {
+            assets: c.assets.clone(),
+            render: c.render.clone(),
+            tables: c.tables.clone(),
+            biomes,
+            light: c.light.clone(),
+        })
+    }
     /// Everything a pack overlay at `root` provides, over `assets` and `render`
     /// loaded from it.
     fn load(
@@ -2433,7 +2458,7 @@ impl Game<'_> {
                 state,
                 pos,
                 &region,
-                self.res.biomes(),
+                &self.res.biomes(),
                 self.streaming.biome_zoom,
                 self.streaming.biome_blend,
             )
@@ -2928,7 +2953,7 @@ impl Game<'_> {
             player_box,
             guest_boxes,
             player_collision,
-            biomes: self.res.biomes(),
+            biomes: &self.res.biomes(),
             seed: self.level.seed,
             behaviours: self.res.behaviours(),
             items: self.res.items(),
@@ -9242,7 +9267,7 @@ impl Game<'_> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
-            .save(&chunks, self.pack.assets.registry, self.res.biomes())?;
+            .save(&chunks, self.pack.assets.registry, &self.res.biomes())?;
         self.save_dimension_entities()?;
         // Coordinates scale by 8 between the Overworld and the Nether.
         let scale = match (self.dim, target) {
@@ -11560,7 +11585,7 @@ impl Game<'_> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
-            .save_later(&chunks, self.pack.assets.registry, self.res.biomes())?;
+            .save_later(&chunks, self.pack.assets.registry, &self.res.biomes())?;
         // Prepare entities while the chunk writer runs, then use one barrier.
         self.save_entities(false)?;
         self.save_raids();
@@ -12563,7 +12588,7 @@ impl Game<'_> {
         if !modified.is_empty()
             && let Err(e) = horizon_client::spans::time("save_chunks", || {
                 self.save
-                    .save_later(&modified, self.pack.assets.registry, self.res.biomes())
+                    .save_later(&modified, self.pack.assets.registry, &self.res.biomes())
             })
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
@@ -13762,7 +13787,7 @@ impl<'a> Game<'a> {
         let registry = pack.assets.registry;
         // Until a world is opened the streamer is idle.
         let mut streaming = Streaming::new(
-            Arc::new(TestTerrain::new(registry, res.biomes())?),
+            Arc::new(TestTerrain::new(registry, &res.biomes())?),
             pack.context.clone(),
             1,
         );
@@ -14583,7 +14608,7 @@ fn load_resources(
     let resources = Resources {
         core: WorldCore {
             facts,
-            biomes: biomes.clone(),
+            biomes: std::sync::RwLock::new(biomes.clone()),
             environment,
             collision,
             motion,
@@ -14705,8 +14730,8 @@ fn load_world_rest(
     progress.set(8);
     let stations = horizon_client::stations::StationData::load(root, &items);
     let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
-    let fog = horizon_client::fog::FogTables::load(root, biomes);
+        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, &biomes)?;
+    let fog = horizon_client::fog::FogTables::load(root, &biomes);
     Ok(WorldRest {
         stations,
         items,
