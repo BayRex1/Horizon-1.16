@@ -80,8 +80,12 @@ enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
     /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
-    /// Minecraft: Java Edition
-    SignIn,
+    /// Minecraft: Java Edition, or an Ely.by account
+    SignIn {
+        /// Sign in with an Ely.by account instead (account.ely.by)
+        #[arg(long)]
+        ely: bool,
+    },
     /// Sign out: the account's tokens leave the keychain
     SignOut {
         /// Its name or UUID
@@ -1320,6 +1324,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
                         "name": a.name, "uuid": a.uuid,
+                        "provider": a.provider.user_type(),
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                     })).collect::<Vec<_>>(),
                     "offline": accounts.offline.iter().map(|n| serde_json::json!({
@@ -1327,12 +1332,14 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "selected": accounts.player() == account::Player::Offline(n.clone()),
                     })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
+                    "ely_sign_in_configured": account::ely_client_id().is_some(),
                     "owner": accounts.has_owner(account::store()),
                 }));
             } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
                 println!(
-                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
-                     Edition: horizon-launcher account sign-in"
+                    "No account signed in. Play needs a Microsoft account that owns Minecraft: Java \
+                     Edition (horizon-launcher account sign-in) or an Ely.by account \
+                     (horizon-launcher account sign-in --ely)"
                 );
             } else {
                 for a in &accounts.accounts {
@@ -1341,7 +1348,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     } else {
                         " "
                     };
-                    println!("{mark} {}  {}", a.name, a.uuid);
+                    println!("{mark} {}  {}  {}", a.name, a.uuid, a.provider.name());
                 }
                 for n in &accounts.offline {
                     let on = accounts.player() == account::Player::Offline(n.clone());
@@ -1357,15 +1364,21 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        AccountCmd::SignIn => {
-            let client_id = account::client_id().ok_or(account::NOT_CONFIGURED)?;
+        AccountCmd::SignIn { ely } => {
+            let provider = if ely {
+                account::Provider::Ely
+            } else {
+                account::Provider::Microsoft
+            };
+            let ids = account::ClientIds::configured();
+            let client_id = ids.get(provider).ok_or(provider.not_configured())?;
             let ep = account::Endpoints::live();
-            let code = account::device_code(&ep, &client_id)?;
+            let code = account::device_code(&ep, provider, client_id)?;
             eprintln!(
                 "To sign in, open {} in a browser and enter the code {}",
                 code.verification_uri, code.user_code
             );
-            let ms = account::wait_for_sign_in(&ep, &client_id, &code, &|| false)?;
+            let ms = account::wait_for_sign_in(&ep, client_id, &code, &|| false)?;
             let (signed_in, secrets) = account::finish_sign_in(&ep, ms)?;
             accounts.add(account::store(), signed_in.clone(), &secrets)?;
             accounts.save()?;
@@ -1387,7 +1400,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 .find(|n| n.eq_ignore_ascii_case(&who))
                 .cloned();
             let (player, name) = match (accounts.find(&who).cloned(), offline) {
-                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
+                (Some(a), _) => (account::Player::Account(a.uuid), a.name),
                 (None, Some(n)) => (
                     account::Player::Offline(n.clone()),
                     format!("{n} (offline)"),

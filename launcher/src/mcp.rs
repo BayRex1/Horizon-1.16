@@ -44,8 +44,9 @@ fn session_tools() -> Value {
         { "name": "server_log", "description": "The most recent lines of the server's console.",
           "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines (default 50)." } } } },
         { "name": "server_stop", "description": "Stop the server started with server cleanly (it saves the world), killing it if it does not stop within 30 seconds.", "inputSchema": none },
-        { "name": "account_list", "description": "The Microsoft accounts signed in to the launcher (names and UUIDs, never tokens), which one the game plays as (none = offline), and how a sign-in started with account_sign_in is going. CLI: horizon-launcher account list", "inputSchema": none },
-        { "name": "account_sign_in", "description": "Start signing in a Microsoft account: returns a link and a code the player enters in their browser. The sign-in finishes in the background; check it with account_list. Only when the player asks to sign in. CLI: horizon-launcher account sign-in", "inputSchema": none },
+        { "name": "account_list", "description": "The accounts (Microsoft or Ely.by) signed in to the launcher (names, UUIDs and provider, never tokens), which one the game plays as (none = offline), and how a sign-in started with account_sign_in is going. CLI: horizon-launcher account list", "inputSchema": none },
+        { "name": "account_sign_in", "description": "Start signing in a Microsoft account (or an Ely.by one with provider \"ely\"): returns a link and a code the player enters in their browser. The sign-in finishes in the background; check it with account_list. Only when the player asks to sign in. CLI: horizon-launcher account sign-in [--ely]",
+          "inputSchema": { "type": "object", "properties": { "provider": { "type": "string", "enum": ["microsoft", "ely"], "description": "Which account to sign in (default microsoft)." } } } },
     ])
 }
 
@@ -196,9 +197,10 @@ impl Session {
                     SignInState::Done(Err(e)) => json!({ "state": "failed", "error": e }),
                 });
                 Ok(serde_json::to_string_pretty(&json!({
-                    "accounts": accounts.accounts.iter().map(|a| json!({ "name": a.name, "uuid": a.uuid })).collect::<Vec<_>>(),
+                    "accounts": accounts.accounts.iter().map(|a| json!({ "name": a.name, "uuid": a.uuid, "provider": a.provider.user_type() })).collect::<Vec<_>>(),
                     "plays_as": accounts.selected().map(|a| a.name.clone()),
                     "sign_in_configured": account::client_id().is_some(),
+                    "ely_sign_in_configured": account::ely_client_id().is_some(),
                     "keychain": account::store().persistent(),
                     // Play needs an account that owns the game (the owner gate).
                     "owner": accounts.has_owner(account::store()),
@@ -207,11 +209,21 @@ impl Session {
                 .unwrap())
             }
             "account_sign_in" => {
-                account::client_id().ok_or(account::NOT_CONFIGURED)?;
+                let provider = match arg_str(args, "provider") {
+                    None | Some("microsoft") => account::Provider::Microsoft,
+                    Some("ely") => account::Provider::Ely,
+                    Some(other) => {
+                        return Err(format!("provider is microsoft or ely, not {other}."))
+                    }
+                };
+                provider
+                    .configured()
+                    .then_some(())
+                    .ok_or(provider.not_configured())?;
                 if let Some(s) = self.sign_in.take() {
                     s.cancel();
                 }
-                let sign_in = SignIn::start();
+                let sign_in = SignIn::start(provider);
                 let deadline = std::time::Instant::now() + Duration::from_secs(30);
                 let state = loop {
                     match sign_in.state() {
@@ -228,7 +240,7 @@ impl Session {
                         c.verification_uri, c.user_code
                     )),
                     SignInState::Done(Err(e)) => Err(e),
-                    _ => Err("Microsoft did not answer. Try again.".into()),
+                    _ => Err(format!("{} did not answer. Try again.", provider.name())),
                 }
             }
             _ => match cli_tools::all().into_iter().find(|t| t.name == name) {

@@ -99,9 +99,11 @@ MCP: `account_list`.
 
 ## `horizon-launcher account sign-in`
 
-Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition.
+Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition, or an Ely.by account.
 
     horizon-launcher account sign-in
+
+- `--ely`: Sign in with an Ely.by account instead (account.ely.by)
 
 MCP: `account_sign_in`.
 

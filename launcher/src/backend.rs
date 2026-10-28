@@ -1206,12 +1206,27 @@ fn download_for_owner(
 ) -> Result<(), String> {
     let v = &pins.version;
     let mut accounts = account::Accounts::load();
+    // Only a Microsoft account that owns the game may download it: an Ely.by account passes the
+    // owner gate, but Mojang's files are not for it.
+    let mut owners = account::Accounts {
+        accounts: accounts
+            .accounts
+            .iter()
+            .filter(|a| a.provider == account::Provider::Microsoft)
+            .cloned()
+            .collect(),
+        selected: accounts.selected.clone(),
+        ..Default::default()
+    };
     let pass = account::launch(
         &account::Endpoints::live(),
-        account::client_id().as_deref(),
+        &account::ClientIds::configured(),
         account::store(),
-        &mut accounts,
+        &mut owners,
     );
+    for renewed in &owners.accounts {
+        accounts.update(renewed.clone());
+    }
     let _ = accounts.save();
     match pass {
         Ok(account::Launch {
@@ -1236,6 +1251,10 @@ fn download_for_owner(
             "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
              checked: {}",
             pass.offline.unwrap_or_default()
+        )),
+        Err(_) if owners.accounts.is_empty() && !accounts.accounts.is_empty() => Err(format!(
+            "\n  • Ely.by accounts can't download {v} from Mojang. Prepare it From my install, or \
+             sign in with the Microsoft account that owns Minecraft."
         )),
         Err(_) if !accounts.accounts.is_empty() => Err(
             "\n  • No signed-in account owns Minecraft: Java Edition, so Horizon can't download it."

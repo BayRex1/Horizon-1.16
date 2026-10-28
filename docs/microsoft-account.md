@@ -76,7 +76,8 @@ possible; the launcher just doesn't offer it on its own.
   `modpack play`, the MCP's `play`) asks `account::launch` first. It asks the Minecraft services
   again for each account, the selected one first, until one owns the game: the token renewal
   (below) if due, then entitlements and profile. Without an owner the game doesn't start and Play
-  says "Sign in with a Microsoft account that owns Minecraft: Java Edition to play", with Sign in.
+  says "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with an Ely.by
+  account, to play", with Sign in. An [Ely.by account](ely-account.md) passes the gate too.
 - **The window says it once.** A player without an owner (one who played offline until now) sees
   the gate's screen once when the launcher opens: why Horizon needs the account ("like other
   launchers"), that worlds, offline names and settings stay where they are, and Sign in, which shows
@@ -132,8 +133,8 @@ Vanilla's launcher passes `--accessToken <token>` on the command line, where eve
 machine can read it in the process list. Horizon keeps it out of argv:
 
 - The launcher writes `session-<random>.json` (mode 0600 on Unix, created new, in the game home's
-  `sessions/` folder) with `{"name", "uuid", "access_token", "user_type": "msa", "xuid"}` and starts
-  the game with `--session-file PATH`.
+  `sessions/` folder) with `{"name", "uuid", "access_token", "user_type": "msa", "xuid"}` (`"ely"`
+  for an [Ely.by account](ely-account.md)) and starts the game with `--session-file PATH`.
 - The game reads the file at start and deletes it at once; the token lives only in the game's memory.
   A file older than two minutes is refused (and deleted), so a stale file can't be replayed.
 - Without a session file the game is offline as today (`--name`, offline UUID).

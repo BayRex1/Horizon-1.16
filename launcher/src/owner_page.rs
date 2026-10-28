@@ -1,5 +1,5 @@
 //! The owner gate in the window (`horizon_launcher::account::launch`): the screen that asks for a
-//! Microsoft account that owns Minecraft: Java Edition. It covers the launcher once for players
+//! Microsoft account that owns Minecraft: Java Edition, or an Ely.by account. It covers the launcher once for players
 //! without one (those who played offline before the gate), and again whenever Play is refused.
 //! The sign-in runs on it, code and all.
 use super::*;
@@ -14,10 +14,21 @@ impl Launcher {
             && self.opening.is_none()
     }
 
-    /// Opens the screen and starts the sign-in on it.
+    /// Opens the screen and starts the sign-in on it: Microsoft's, or Ely.by's when only that is
+    /// configured.
     pub(crate) fn sign_in_to_play(&mut self) {
+        let ely_only =
+            !account::Provider::Microsoft.configured() && account::Provider::Ely.configured();
+        self.sign_in_to_play_with(if ely_only {
+            account::Provider::Ely
+        } else {
+            account::Provider::Microsoft
+        });
+    }
+
+    pub(crate) fn sign_in_to_play_with(&mut self, provider: account::Provider) {
         self.owner_screen_open = true;
-        self.start_sign_in();
+        self.start_sign_in(provider);
     }
 
     /// Closes it; it comes back with the next refused Play.
@@ -35,26 +46,35 @@ impl Launcher {
 
     pub(crate) fn owner_screen(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
-        let configured = account::client_id().is_some();
+        let ely_ready = account::Provider::Ely.configured();
+        let configured = account::Provider::Microsoft.configured() || ely_ready;
         let mut body = div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .p(px(28.))
-            .child(caps(tr("Microsoft account")).text_color(t.muted))
+            .child(caps(tr("Account")).text_color(t.muted))
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
                     .child(format!("{}.", tr(account::NEEDS_OWNER))),
             )
             .child(text(theme::UI).text_color(t.muted).child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
+                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers, or an Ely.by account.",
             )))
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Your worlds, offline names and settings stay where they are.",
             )));
         let status = match &self.sign_in_state {
             _ if !configured => Some(div().child(tr(account::NOT_CONFIGURED))),
+            Some(SignInState::Starting)
+                if self
+                    .sign_in
+                    .as_ref()
+                    .is_some_and(|s| s.provider() == account::Provider::Ely) =>
+            {
+                Some(div().child(tr("Asking Ely.by…")))
+            }
             Some(SignInState::Starting) => Some(div().child(tr("Asking Microsoft…"))),
             Some(SignInState::Code(code)) => Some(
                 div()
@@ -117,14 +137,35 @@ impl Launcher {
             }
             Some(SignInState::Starting) => answers,
             _ if !configured => answers,
-            _ => answers.child(
-                button("owner-sign-in", "Sign in", Kind::Primary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
-                        cx.notify();
-                    },
-                )),
-            ),
+            _ => {
+                let answers = answers.child(
+                    button("owner-sign-in", "Sign in", Kind::Primary, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.sign_in_to_play();
+                            cx.notify();
+                        },
+                    )),
+                );
+                // Beside the primary sign-in (Microsoft's, unless only Ely.by's is configured).
+                if ely_ready && account::Provider::Microsoft.configured() {
+                    answers.child(
+                        button(
+                            "owner-sign-in-ely",
+                            "Sign in with Ely.by",
+                            Kind::Secondary,
+                            &t,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.sign_in_to_play_with(account::Provider::Ely);
+                                cx.notify();
+                            },
+                        )),
+                    )
+                } else {
+                    answers
+                }
+            }
         };
         let card = plate(&t)
             .flex()

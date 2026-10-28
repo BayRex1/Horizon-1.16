@@ -289,8 +289,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
-    horizon-launcher account [list]                 the Microsoft accounts signed in (* = plays)
-    horizon-launcher account sign-in                sign in in your browser with a code
+    horizon-launcher account [list]                 the accounts signed in, Microsoft or Ely.by (* = plays)
+    horizon-launcher account sign-in [--ely]        sign in in your browser with a code (--ely: an Ely.by account)
     horizon-launcher account sign-out <name>
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
@@ -377,8 +377,8 @@ The window, the command line and the MCP server all call the same core, `src/bac
 
 The launcher starts the game only while a Microsoft account that owns Minecraft: Java Edition is
 signed in, as other launchers do: without one, Play (Home, instances, `horizon-launcher play`, the
-MCP's `play`) says "Sign in with a Microsoft account that owns Minecraft: Java Edition to play"
-and starts nothing. Settings → Accounts signs in: the launcher shows a code, you enter it at
+MCP's `play`) says "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with an
+Ely.by account, to play" and starts nothing. Settings → Accounts signs in: the launcher shows a code, you enter it at
 microsoft.com/link, and the launcher checks that the account owns the game. It asks again at every
 Play, with the token renewal; with no network the last answer stands, and a "doesn't own" blocks
 at once. The account also plays online-mode servers under your own name and skin; offline names
@@ -392,6 +392,13 @@ deletes as soon as it has read it. Sign out removes the tokens.
 Sign-in needs Horizon's own Azure app registration: its client ID is built in from
 `HORIZON_MSA_CLIENT_ID` (and `HORIZON_MSA_CLIENT_ID` at run time overrides it; empty = not
 configured). How it works: [docs/microsoft-account.md](../docs/microsoft-account.md).
+
+**Ely.by accounts** sign in beside Microsoft ones (Settings → Accounts, **Sign in with Ely.by**, or
+`horizon-launcher account sign-in --ely`): the same code flow at account.ely.by, with Horizon's own
+Ely.by app (`HORIZON_ELY_CLIENT_ID`, built in or at run time; none = no Ely.by button). An Ely.by
+account passes the owner gate and plays online servers that check players against Ely.by; it can't
+have the game downloaded from Mojang (**Prepare** from your own install), and its skin and cape
+are not shown yet. How it works: [docs/ely-account.md](../docs/ely-account.md).
 
 ## Logs and crash reports
 

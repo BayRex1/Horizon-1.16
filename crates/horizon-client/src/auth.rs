@@ -1,8 +1,10 @@
-//! The Microsoft account the launcher signed in, handed over in a session
-//! file (docs/microsoft-account.md), and the Minecraft services call
-//! online-mode servers need: authlib's MinecraftServicesSessionService.joinServer
-//! through the services discovery document. The access token stays in this
-//! process's memory: it is never logged, printed or written anywhere.
+//! The Microsoft or Ely.by account the launcher signed in, handed over in a
+//! session file (docs/microsoft-account.md, docs/ely-account.md), and the
+//! session service call online-mode servers need: authlib's
+//! MinecraftServicesSessionService.joinServer through the services discovery
+//! document, or, for an Ely.by account, Ely's own session server. The access
+//! token stays in this process's memory: it is never logged, printed or
+//! written anywhere.
 use std::{
     path::Path,
     sync::{Arc, Mutex, OnceLock},
@@ -11,14 +13,18 @@ use std::{
 
 /// MinecraftServicesEnvironment.PROD.
 pub const DEFAULT_DISCOVERY: &str = "https://discovery.minecraftservices.com/minecraft/client";
+/// Ely.by's session server join (its Yggdrasil API: `POST /session/join`).
+pub const ELY_JOIN: &str = "https://authserver.ely.by/session/join";
 /// A session file older than this is refused: it can't be replayed later.
 const MAX_SESSION_FILE_AGE: Duration = Duration::from_secs(120);
 
-/// A signed-in account (vanilla's User with type msa).
+/// A signed-in account (vanilla's User with type msa, or an Ely.by account).
 pub struct AuthSession {
     pub name: String,
     pub uuid: u128,
     pub xuid: Option<String>,
+    /// An Ely.by account: its token is for Ely's session server, not Mojang's.
+    pub ely: bool,
     access_token: String,
 }
 impl std::fmt::Debug for AuthSession {
@@ -26,6 +32,7 @@ impl std::fmt::Debug for AuthSession {
         f.debug_struct("AuthSession")
             .field("name", &self.name)
             .field("uuid", &horizon_protocol::crypto::uuid_string(self.uuid))
+            .field("ely", &self.ely)
             .field("access_token", &"<hidden>")
             .finish()
     }
@@ -46,10 +53,12 @@ impl AuthSession {
             name: name.to_owned(),
             uuid,
             xuid: None,
+            ely: false,
             access_token: access_token.to_owned(),
         }
     }
-    /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
+    /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa" or "ely",
+    /// "xuid"}.
     pub fn parse(text: &str) -> Result<Self, String> {
         let v: serde_json::Value =
             serde_json::from_str(text).map_err(|_| "the session file is not valid JSON")?;
@@ -64,13 +73,18 @@ impl AuthSession {
         let access_token = field("access_token")
             .filter(|t| !t.is_empty())
             .ok_or("the session file has no access token")?;
-        if field("user_type").is_some_and(|t| t != "msa") {
-            return Err("the session file is not a Microsoft account session".into());
-        }
+        let ely = match field("user_type") {
+            None | Some("msa") => false,
+            Some("ely") => true,
+            Some(_) => {
+                return Err("the session file is not a Microsoft or Ely.by account session".into());
+            }
+        };
         Ok(Self {
             name: name.to_owned(),
             uuid,
             xuid: field("xuid").map(str::to_owned),
+            ely,
             access_token: access_token.to_owned(),
         })
     }
@@ -213,13 +227,32 @@ pub fn join_request(session: &AuthSession, server_hash: &str) -> String {
     .to_string()
 }
 
+/// Where an Ely.by account's join goes: `HORIZON_ELY_JOIN` overrides it, like
+/// `HORIZON_API_DISCOVERY` does for the services (for a mock in harnesses).
+pub fn ely_join_url() -> String {
+    std::env::var("HORIZON_ELY_JOIN")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| ELY_JOIN.to_owned())
+}
+
 /// MinecraftServicesSessionService.joinServer: tell the session service this
-/// account is joining the server whose hash is `server_hash`.
+/// account is joining the server whose hash is `server_hash`. An Ely.by
+/// account tells Ely's session server instead of Mojang's.
 pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinError> {
-    let doc = discovery()?;
-    let url = endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?;
+    let url = if session.ely {
+        ely_join_url()
+    } else {
+        let doc = discovery()?;
+        endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?
+    };
+    join_server_at(&url, session, server_hash)
+}
+
+/// The join request itself, to a given session server URL.
+fn join_server_at(url: &str, session: &AuthSession, server_hash: &str) -> Result<(), JoinError> {
     match agent()
-        .post(&url)
+        .post(url)
         .set("Content-Type", "application/json; charset=utf-8")
         .send_string(&join_request(session, server_hash))
     {
@@ -384,6 +417,94 @@ mod tests {
         assert!(AuthSession::parse(r#"{"name":"A","uuid":"069a79f444e94726a5befca90e38aaf5","access_token":"t","user_type":"legacy"}"#).is_err());
         let s = AuthSession::parse(r#"{"name":"A","uuid":"069a79f444e94726a5befca90e38aaf5","access_token":"t","xuid":"25"}"#).unwrap();
         assert_eq!(s.xuid.as_deref(), Some("25"));
+    }
+
+    #[test]
+    fn ely_sessions_are_read_from_the_session_file() {
+        let ely = r#"{"name":"Elyman","uuid":"0d4e8c3f-a17b-4b1d-9a2f-6c5e7b8a9f10","access_token":"t","user_type":"ely"}"#;
+        let s = AuthSession::parse(ely).unwrap();
+        assert!(s.ely && s.xuid.is_none());
+        assert!(format!("{s:?}").contains("ely: true") && !format!("{s:?}").contains("\"t\""));
+        let msa = r#"{"name":"Notch","uuid":"069a79f444e94726a5befca90e38aaf5","access_token":"t","user_type":"msa"}"#;
+        assert!(!AuthSession::parse(msa).unwrap().ely);
+        // No user type: a session from before Ely.by accounts, Microsoft's.
+        assert!(!AuthSession::new("Notch", UUID, "t").ely);
+        assert!(AuthSession::parse(&ely.replace("ely\"}", "mojang\"}")).is_err());
+    }
+
+    /// A local session server that answers one request and returns what it was asked.
+    fn answer_once(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/session/join", listener.local_addr().unwrap());
+        let asked = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                let header = header.trim_end();
+                if header.is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = header.split_once(':') {
+                    if k.eq_ignore_ascii_case("content-length") {
+                        length = v.trim().parse().unwrap();
+                    }
+                }
+            }
+            let mut sent = vec![0; length];
+            reader.read_exact(&mut sent).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            format!(
+                "{}\n{}",
+                request_line.trim(),
+                String::from_utf8(sent).unwrap()
+            )
+        });
+        (url, asked)
+    }
+
+    #[test]
+    fn an_ely_account_joins_through_elys_session_server() {
+        assert_eq!(ELY_JOIN, "https://authserver.ely.by/session/join");
+        let ely = AuthSession {
+            ely: true,
+            ..AuthSession::new("Elyman", 0x0d4e8c3fa17b4b1d9a2f6c5e7b8a9f10, "ely-token")
+        };
+        // The same request body as Mojang's, to Ely's URL.
+        let (url, asked) = answer_once(200, "");
+        assert_eq!(join_server_at(&url, &ely, "-7c9d"), Ok(()));
+        let (line, body) = asked
+            .join()
+            .unwrap()
+            .split_once('\n')
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .unwrap();
+        assert_eq!(line, "POST /session/join HTTP/1.1");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"accessToken": "ely-token", "selectedProfile": "0d4e8c3fa17b4b1d9a2f6c5e7b8a9f10", "serverId": "-7c9d"})
+        );
+        // Ely.by's refusals read like Mojang's.
+        let (url, asked) = answer_once(
+            403,
+            r#"{"error":"ForbiddenOperationException","errorMessage":"Invalid token."}"#,
+        );
+        assert_eq!(
+            join_server_at(&url, &ely, "-7c9d"),
+            Err(JoinError::InvalidSession)
+        );
+        asked.join().unwrap();
+        assert_eq!(ely_join_url(), ELY_JOIN);
     }
 
     #[test]

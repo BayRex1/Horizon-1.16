@@ -6,6 +6,15 @@ use std::net::TcpListener;
 use std::sync::Arc;
 
 const UUID: &str = "069a79f444e94726a5befca90e38aaf5";
+const ELY_UUID: &str = "0d4e8c3fa17b4b1d9a2f6c5e7b8a9f10";
+
+/// Both sign-ins are configured.
+fn ids() -> ClientIds {
+    ClientIds {
+        microsoft: Some("test-client".into()),
+        ely: Some("test-ely".into()),
+    }
+}
 
 /// What the mock answers and what it was asked.
 #[derive(Default)]
@@ -100,6 +109,45 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
             };
             reply(200, json!({"items": items, "signature": "x", "keyId": "1"}))
         }
+        ("POST", "/ely/devicecode") => {
+            assert_eq!(form("client_id").as_deref(), Some("test-ely"));
+            assert_eq!(form("scope").as_deref(), Some(ELY_SCOPE));
+            reply(
+                200,
+                json!({"user_code": "ELY-1234", "device_code": "ely-dev-1", "verification_uri": "https://account.ely.by/code", "expires_in": 900, "interval": 1}),
+            )
+        }
+        ("POST", "/ely/token") => match form("grant_type").as_deref() {
+            Some("urn:ietf:params:oauth:grant-type:device_code") if mock.pending > 0 => {
+                mock.pending -= 1;
+                reply(400, json!({"error": "authorization_pending"}))
+            }
+            Some("urn:ietf:params:oauth:grant-type:device_code") => {
+                assert_eq!(form("device_code").as_deref(), Some("ely-dev-1"));
+                reply(
+                    200,
+                    json!({"access_token": "ely-access-1", "refresh_token": "ely-refresh-1", "token_type": "Bearer", "expires_in": 86400}),
+                )
+            }
+            // Ely.by's refresh answers with no new refresh token: the old one stays.
+            Some("refresh_token") if form("refresh_token").as_deref() == Some("ely-refresh-1") => {
+                assert_eq!(form("scope").as_deref(), Some(ELY_SCOPE));
+                reply(
+                    200,
+                    json!({"access_token": "ely-access-2", "token_type": "Bearer", "expires_in": 86400}),
+                )
+            }
+            _ => reply(400, json!({"error": "invalid_grant"})),
+        },
+        ("GET", "/ely/profile")
+            if matches!(auth, "Bearer ely-access-1" | "Bearer ely-access-2") =>
+        {
+            reply(200, json!({"id": ELY_UUID, "name": "Elyman"}))
+        }
+        ("GET", "/ely/profile") => reply(
+            401,
+            json!({"name": "Unauthorized", "message": "Your request was made with invalid credentials.", "status": 401}),
+        ),
         ("GET", "/mc/minecraft/profile") if mock.no_profile => reply(
             404,
             json!({"path": "/minecraft/profile", "errorType": "NOT_FOUND", "error": "NOT_FOUND"}),
@@ -169,6 +217,8 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
         xbox_user: format!("{base}/xbl"),
         xsts: format!("{base}/xsts"),
         minecraft: format!("{base}/mc"),
+        ely_oauth: format!("{base}/ely"),
+        ely_profile: format!("{base}/ely/profile"),
     }
 }
 
@@ -186,7 +236,7 @@ fn mock(f: impl FnOnce(&mut Mock)) -> (Arc<Mutex<Mock>>, Endpoints) {
 #[test]
 fn the_whole_chain() {
     let (m, ep) = mock(|m| m.pending = 2);
-    let code = device_code(&ep, "test-client").unwrap();
+    let code = device_code(&ep, Provider::Microsoft, "test-client").unwrap();
     assert_eq!(
         (code.user_code.as_str(), code.verification_uri.as_str()),
         ("ABCD-EFGH", "https://www.microsoft.com/link")
@@ -203,6 +253,7 @@ fn the_whole_chain() {
                 "slim".into()
             )),
             cape: Some("http://textures.minecraft.net/texture/cape2".into()),
+            provider: Provider::Microsoft,
         }
     );
     assert_eq!(secrets.minecraft_token, "mc-token");
@@ -239,6 +290,7 @@ fn notch() -> Account {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: Provider::Microsoft,
     }
 }
 
@@ -260,18 +312,15 @@ fn offline() -> Endpoints {
         xbox_user: "http://127.0.0.1:9/xbl".into(),
         xsts: "http://127.0.0.1:9/xsts".into(),
         minecraft: "http://127.0.0.1:9/mc".into(),
+        ely_oauth: "http://127.0.0.1:9/ely".into(),
+        ely_profile: "http://127.0.0.1:9/ely/profile".into(),
     }
 }
 
 #[test]
 fn refresh_only_when_the_token_runs_out() {
     let (m, ep) = mock(|_| {});
-    let Check::Owns(_, kept) = check(
-        &ep,
-        Some("test-client"),
-        &notch(),
-        secrets("mc-token", true),
-    ) else {
+    let Check::Owns(_, kept) = check(&ep, &ids(), &notch(), secrets("mc-token", true)) else {
         panic!("owns");
     };
     assert_eq!(kept.refresh_token, "ms-refresh-1");
@@ -281,8 +330,7 @@ fn refresh_only_when_the_token_runs_out() {
         minecraft_expires_at: now() + 60,
         ..kept.clone()
     };
-    let Check::Owns(renewed_account, renewed) = check(&ep, Some("test-client"), &notch(), stale)
-    else {
+    let Check::Owns(renewed_account, renewed) = check(&ep, &ids(), &notch(), stale) else {
         panic!("owns");
     };
     assert_eq!(
@@ -299,7 +347,7 @@ fn refresh_only_when_the_token_runs_out() {
         ..kept
     };
     assert!(matches!(
-        check(&ep, Some("test-client"), &notch(), revoked),
+        check(&ep, &ids(), &notch(), revoked),
         Check::NoAnswer(e, s) if e == SIGN_IN_AGAIN && s.owns
     ));
 }
@@ -320,7 +368,7 @@ fn an_owner_plays_with_a_session() {
     let (_, ep) = mock(|_| {});
     let store = MemoryStore::default();
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
-    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    let pass = launch(&ep, &ids(), &store, &mut accounts).unwrap();
     let (account, session) = pass.session.unwrap();
     assert_eq!(
         (account.name.as_str(), session.minecraft_token.as_str()),
@@ -338,18 +386,18 @@ fn a_no_from_the_services_blocks_at_once() {
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
     assert!(accounts.has_owner(&store));
     assert_eq!(
-        launch(&ep, Some("test-client"), &store, &mut accounts).unwrap_err(),
+        launch(&ep, &ids(), &store, &mut accounts).unwrap_err(),
         NoOwner
     );
     // The answer is kept beside the tokens: offline now, it still says no.
     assert!(!kept(&store).owns && !accounts.has_owner(&store));
     assert_eq!(
-        launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
+        launch(&offline(), &ids(), &store, &mut accounts).unwrap_err(),
         NoOwner
     );
     assert_eq!(
         NoOwner.to_string(),
-        "Sign in with a Microsoft account that owns Minecraft: Java Edition to play."
+        "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with an Ely.by account, to play."
     );
 }
 
@@ -357,7 +405,7 @@ fn a_no_from_the_services_blocks_at_once() {
 fn no_network_never_blocks_a_past_owner() {
     let store = MemoryStore::default();
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
-    let pass = launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    let pass = launch(&offline(), &ids(), &store, &mut accounts).unwrap();
     // Plays, offline, and says why.
     assert!(pass.session.is_none() && pass.owner.is_none());
     assert!(pass.offline.unwrap().contains("Could not reach"));
@@ -367,11 +415,11 @@ fn no_network_never_blocks_a_past_owner() {
         ..secrets("mc-token", true)
     };
     let mut accounts = signed_in(&store, &stale);
-    assert!(launch(&offline(), Some("test-client"), &store, &mut accounts).is_ok());
-    assert!(launch(&offline(), None, &store, &mut accounts).is_ok());
+    assert!(launch(&offline(), &ids(), &store, &mut accounts).is_ok());
+    assert!(launch(&offline(), &ClientIds::default(), &store, &mut accounts).is_ok());
     // An account that never passed doesn't pass offline.
     let mut accounts = signed_in(&store, &secrets("mc-token", false));
-    assert!(launch(&offline(), Some("test-client"), &store, &mut accounts).is_err());
+    assert!(launch(&offline(), &ids(), &store, &mut accounts).is_err());
 }
 
 #[test]
@@ -391,9 +439,10 @@ fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
         name: "Alex".into(),
         skin: None,
         cape: None,
+        provider: Provider::Microsoft,
     });
     accounts.selected = Some("other".into());
-    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    let pass = launch(&ep, &ids(), &store, &mut accounts).unwrap();
     assert!(pass.session.is_none());
     assert!(pass
         .offline
@@ -403,11 +452,11 @@ fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
     // An offline name plays: Notch is asked, and no session goes to the game.
     accounts.selected = None;
     m.lock().unwrap().log.clear();
-    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    let pass = launch(&ep, &ids(), &store, &mut accounts).unwrap();
     assert!(pass.session.is_none() && pass.offline.is_none());
     assert_eq!(m.lock().unwrap().log.len(), 2);
     // No account at all.
-    assert!(launch(&ep, Some("test-client"), &store, &mut Accounts::default()).is_err());
+    assert!(launch(&ep, &ids(), &store, &mut Accounts::default()).is_err());
 }
 
 #[test]
@@ -427,7 +476,7 @@ fn offline_names_play_only_beside_an_owner() {
     assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
     assert!(!accounts.has_owner(&store));
     let (_, ep) = mock(|_| {});
-    assert!(launch(&ep, Some("test-client"), &store, &mut accounts).is_err());
+    assert!(launch(&ep, &ids(), &store, &mut accounts).is_err());
     assert!(accounts
         .play_as(&store, Player::Offline("Builder_2".into()))
         .is_err());
@@ -438,6 +487,8 @@ fn refusals_have_messages() {
     let tokens = || MsTokens {
         access: "ms-access-1".into(),
         refresh: "r".into(),
+        expires_in: Some(3600),
+        provider: Provider::Microsoft,
     };
     let (_, ep) = mock(|m| m.xerr = Some(2148916233));
     assert!(finish_sign_in(&ep, tokens())
@@ -454,12 +505,19 @@ fn refusals_have_messages() {
         .unwrap_err()
         .contains("no Minecraft profile"));
     assert_eq!(
-        oauth_error(&json!({"error": "authorization_declined"})),
+        oauth_error(
+            &json!({"error": "authorization_declined"}),
+            Provider::Microsoft
+        ),
         "Sign-in was declined in the browser."
+    );
+    assert_eq!(
+        oauth_error(&json!({"error": "invalid_client"}), Provider::Ely),
+        "Ely.by refused this launcher's app registration (client ID)."
     );
     // Nothing listening: a message, not a URL.
     assert_eq!(
-        device_code(&offline(), "x").unwrap_err(),
+        device_code(&offline(), Provider::Microsoft, "x").unwrap_err(),
         "Could not reach Microsoft. Check your internet connection."
     );
 }
@@ -467,7 +525,7 @@ fn refusals_have_messages() {
 #[test]
 fn cancelling_stops_the_wait() {
     let (_, ep) = mock(|m| m.pending = 100);
-    let code = device_code(&ep, "test-client").unwrap();
+    let code = device_code(&ep, Provider::Microsoft, "test-client").unwrap();
     assert_eq!(
         wait_for_sign_in(&ep, "test-client", &code, &|| true).unwrap_err(),
         "Sign-in cancelled."
@@ -483,6 +541,7 @@ fn accounts_keep_secrets_in_the_store_only() {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: Provider::Microsoft,
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
@@ -547,6 +606,7 @@ fn session_files_are_private_and_complete() {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: Provider::Microsoft,
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
@@ -604,11 +664,12 @@ fn offline_names_switch_with_accounts() {
             name: "Ludo".into(),
             skin: None,
             cape: None,
+            provider: Provider::Microsoft,
         }],
         selected: Some("abc".into()),
         ..Accounts::default()
     };
-    assert_eq!(a.player(), Player::Microsoft("abc".into()));
+    assert_eq!(a.player(), Player::Account("abc".into()));
     assert_eq!(a.name_arg(), None);
     a.play_as(&store, Player::Offline("Builder_1".into()))
         .unwrap();
@@ -622,9 +683,9 @@ fn offline_names_switch_with_accounts() {
     assert!(a.add_offline("no spaces").is_err());
     assert!(a.add_offline("ab").is_err());
     assert!(a.add_offline("seventeen_letters").is_err());
-    a.play_as(&store, Player::Microsoft("abc".into())).unwrap();
+    a.play_as(&store, Player::Account("abc".into())).unwrap();
     assert_eq!(a.name_arg(), None, "an account plays with its own name");
-    assert!(a.play_as(&store, Player::Microsoft("zzz".into())).is_err());
+    assert!(a.play_as(&store, Player::Account("zzz".into())).is_err());
     a.play_as(&store, Player::Offline("Builder_1".into()))
         .unwrap();
     a.remove_offline("BUILDER_1").unwrap();
@@ -637,4 +698,184 @@ fn offline_names_switch_with_accounts() {
         serde_json::to_string(&old).unwrap(),
         r#"{"accounts":[],"selected":null}"#
     );
+}
+
+// ----- Ely.by --------------------------------------------------------------------------------------
+
+fn elyman() -> Account {
+    Account {
+        uuid: ELY_UUID.into(),
+        name: "Elyman".into(),
+        skin: None,
+        cape: None,
+        provider: Provider::Ely,
+    }
+}
+
+/// An Ely.by account's secrets: its access token is the session.
+fn ely_secrets(token: &str) -> Secrets {
+    Secrets {
+        refresh_token: "ely-refresh-1".into(),
+        minecraft_token: token.into(),
+        minecraft_expires_at: now() + 7200,
+        xuid: None,
+        owns: true,
+    }
+}
+
+fn paths(m: &Arc<Mutex<Mock>>) -> Vec<String> {
+    m.lock()
+        .unwrap()
+        .log
+        .iter()
+        .map(|(_, p, _)| p.clone())
+        .collect()
+}
+
+#[test]
+fn the_ely_chain_has_no_xbox_and_no_ownership_check() {
+    let (m, ep) = mock(|m| m.pending = 1);
+    let code = device_code(&ep, Provider::Ely, "test-ely").unwrap();
+    assert_eq!(
+        (
+            code.user_code.as_str(),
+            code.verification_uri.as_str(),
+            code.provider
+        ),
+        ("ELY-1234", "https://account.ely.by/code", Provider::Ely)
+    );
+    let tokens = wait_for_sign_in(&ep, "test-ely", &code, &|| false).unwrap();
+    let (account, secrets) = finish_sign_in(&ep, tokens).unwrap();
+    assert_eq!(account, elyman());
+    assert_eq!(secrets.minecraft_token, "ely-access-1");
+    assert_eq!(secrets.refresh_token, "ely-refresh-1");
+    assert!(secrets.owns && secrets.xuid.is_none());
+    assert!(secrets.minecraft_expires_at > now() + 80000);
+    // A pending poll, then the token, then the profile: no Xbox Live, no entitlements.
+    assert_eq!(
+        paths(&m),
+        [
+            "/ely/devicecode",
+            "/ely/token",
+            "/ely/token",
+            "/ely/profile"
+        ]
+    );
+    assert!(!format!("{secrets:?}").contains("ely-access-1"));
+}
+
+#[test]
+fn an_ely_account_opens_the_gate_but_never_downloads_the_game() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .add(&store, elyman(), &ely_secrets("ely-access-1"))
+        .unwrap();
+    assert!(accounts.has_owner(&store));
+    let pass = launch(&ep, &ids(), &store, &mut accounts).unwrap();
+    let (account, session) = pass.session.unwrap();
+    assert_eq!(
+        (account.name.as_str(), session.minecraft_token.as_str()),
+        ("Elyman", "ely-access-1")
+    );
+    // Mojang's files are for Microsoft owners.
+    assert!(pass.owner.is_none() && pass.offline.is_none());
+}
+
+#[test]
+fn ely_tokens_are_renewed_through_the_refresh_token() {
+    let (m, ep) = mock(|_| {});
+    let stale = Secrets {
+        minecraft_expires_at: now() + 60,
+        ..ely_secrets("gone")
+    };
+    let Check::Owns(account, renewed) = check(&ep, &ids(), &elyman(), stale) else {
+        panic!("passes");
+    };
+    assert_eq!(account.name, "Elyman");
+    // The refresh answered without a refresh token: the old one stays.
+    assert_eq!(
+        (
+            renewed.refresh_token.as_str(),
+            renewed.minecraft_token.as_str()
+        ),
+        ("ely-refresh-1", "ely-access-2")
+    );
+    assert_eq!(paths(&m), ["/ely/token", "/ely/profile"]);
+    // A refresh token Ely.by refuses, and a build without Ely.by sign-in.
+    let revoked = Secrets {
+        refresh_token: "revoked".into(),
+        minecraft_expires_at: 0,
+        ..ely_secrets("gone")
+    };
+    assert!(matches!(
+        check(&ep, &ids(), &elyman(), revoked.clone()),
+        Check::NoAnswer(e, s) if e == ELY_SIGN_IN_AGAIN && s.owns
+    ));
+    assert!(matches!(
+        check(&ep, &ClientIds::default(), &elyman(), revoked),
+        Check::NoAnswer(e, _) if e == ELY_NOT_CONFIGURED
+    ));
+}
+
+#[test]
+fn a_rejected_ely_token_keeps_the_last_answer_and_plays_offline() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .add(&store, elyman(), &ely_secrets("ely-revoked"))
+        .unwrap();
+    let pass = launch(&ep, &ids(), &store, &mut accounts).unwrap();
+    assert!(pass.session.is_none());
+    assert_eq!(pass.offline.as_deref(), Some(ELY_SIGN_IN_AGAIN));
+    // No network: the same, with its own message.
+    let pass = launch(&offline(), &ids(), &store, &mut accounts).unwrap();
+    assert!(pass.offline.unwrap().contains("Could not reach Ely.by"));
+}
+
+#[test]
+fn ely_session_files_say_so() {
+    let dir = std::env::temp_dir().join(format!("horizon-launcher-ely-{}", std::process::id()));
+    let path = write_session_file(&dir, &elyman(), &ely_secrets("ely-access-1")).unwrap();
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        v,
+        json!({"name": "Elyman", "uuid": ELY_UUID, "access_token": "ely-access-1", "user_type": "ely", "xuid": null})
+    );
+    assert!(!v.to_string().contains("ely-refresh-1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn accounts_json_keeps_a_provider_only_for_ely() {
+    let accounts = Accounts {
+        accounts: vec![notch(), elyman()],
+        ..Accounts::default()
+    };
+    let text = serde_json::to_string(&accounts).unwrap();
+    assert_eq!(text.matches("\"provider\"").count(), 1);
+    assert!(text.contains("\"provider\":\"ely\""));
+    assert_eq!(serde_json::from_str::<Accounts>(&text).unwrap(), accounts);
+    // A file from before Ely.by accounts reads as Microsoft's.
+    let old: Accounts =
+        serde_json::from_str(r#"{"accounts":[{"uuid":"abc","name":"Ludo"}],"selected":"abc"}"#)
+            .unwrap();
+    assert_eq!(old.accounts[0].provider, Provider::Microsoft);
+}
+
+#[test]
+fn the_ely_client_id_is_configuration_too() {
+    std::env::set_var("HORIZON_ELY_CLIENT_ID", " ");
+    assert_eq!(ely_client_id(), None);
+    std::env::set_var("HORIZON_ELY_CLIENT_ID", "horizon-launcher");
+    assert_eq!(ely_client_id().as_deref(), Some("horizon-launcher"));
+    std::env::remove_var("HORIZON_ELY_CLIENT_ID");
+    let ids = ClientIds {
+        microsoft: Some("m".into()),
+        ely: None,
+    };
+    assert_eq!(ids.get(Provider::Microsoft), Some("m"));
+    assert_eq!(ids.get(Provider::Ely), None);
 }
