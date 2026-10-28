@@ -23,6 +23,22 @@ The project has a working WASM mod system in `crates/horizon-mods/` with:
 
 ## Changelog
 
+### 2025-10-28 - Screen replacement (`ui.replace-screen`, API level 8)
+
+#### Added
+- **WIT `ui.replace-screen(vanilla, replacement)`** - a mod shows its own screen *in place of* a vanilla one, not over it
+  - `minecraft:inventory` (the inventory key, survival and creative); `none` gives the vanilla screen back
+  - Err for a screen this Horizon can't replace (`REPLACEABLE_SCREENS` in `runtime.rs`)
+  - While shown it is the mod's ordinary screen: `open-screen` updates it, Esc/Done is `ui-events::closed`
+- **`runtime.rs`** - `UiState.replacements`; `Mods::replacement_owner`, `Mods::show_replacement`
+- **`api_level.rs`** - `("ui.replace-screen", 8)`, `LEVEL = 8`
+- **Game integration** (`horizon-client`): `game/mods.rs` `open_replaced_screen`; the inventory key in `game.rs` asks it first
+- **Tests** - `sandbox.rs` `ui_replaces_the_inventory` (the UI guest's `/ui_replace on|off|bad`); `docs/api/mods-reference.md` regenerated
+
+#### Test Mod
+- **`mods/test_core/`** - replaces the inventory with its "Test Core" screen; its button gives the inventory back
+  (capabilities `ui`, `experimental = ["ui"]`); `horizon-mods/test_core.hmod` rebuilt with `cargo horizon-mod build`
+
 ### 2025-10-28 - NeoForge-like Core Infrastructure
 
 #### Added
