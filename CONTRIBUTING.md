@@ -104,6 +104,4 @@ new pushes, we add it again.
 [Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/horizon-rust/horizon/issues)
 for bugs. If you want to take something on, say so in its issue so nobody else starts the same work.
 
-[![Just Prompt It](https://www.justfuckingprompt.it/badge/neutral.svg?ref=pr-horizon-rust-horizon)](https://www.justfuckingprompt.it/gh/badge-pr-horizon-rust-horizon)
-
 **Before opening an issue, please Just Prompt It.** Many questions have an answer one search or one AI prompt away, and the rest are welcome on Discord. If you've found a bug, open the issue and tell us what you already tried.
