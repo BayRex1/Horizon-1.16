@@ -275,10 +275,18 @@ pub struct ItemCells {
 impl ItemCells {
     pub fn new(items: &[ItemEntity]) -> Self {
         let mut cells = Self::default();
-        for (i, item) in items.iter().enumerate() {
-            cells.add(i, item.position);
-        }
+        cells.rebuild(items);
         cells
+    }
+    /// Refill the grid, keeping the cell lists' capacity across ticks.
+    pub fn rebuild(&mut self, items: &[ItemEntity]) {
+        for list in self.cells.values_mut() {
+            list.clear();
+        }
+        for (i, item) in items.iter().enumerate() {
+            self.add(i, item.position);
+        }
+        self.cells.retain(|_, list| !list.is_empty());
     }
     fn cell(p: Vec3) -> (i32, i32, i32) {
         (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
@@ -1219,5 +1227,23 @@ mod merge_tests {
         merge_with_neighbours(&mut items, &mut removed, &mut cells, 0, &max_stack);
         assert_eq!(removed, [true, false]);
         assert_eq!(items[1].stack.count, 2);
+    }
+
+    /// An item leaving the world leaves no index in the reused grid.
+    #[test]
+    fn rebuilding_the_grid_forgets_removed_items() {
+        let mut items = vec![
+            item("minecraft:sand", 1, 0.5, 0),
+            item("minecraft:sand", 1, 0.5, 0),
+            item("minecraft:stone", 1, 0.5, 0),
+        ];
+        let mut cells = ItemCells::new(&items);
+        let mut near = Vec::new();
+        cells.near(items[0].bounds(), &mut near);
+        assert_eq!(near, vec![0, 1, 2]);
+        items.remove(1);
+        cells.rebuild(&items);
+        cells.near(items[0].bounds(), &mut near);
+        assert_eq!(near, vec![0, 1]);
     }
 }

@@ -1307,6 +1307,17 @@ impl UiResources {
             panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
         })
     }
+    /// A game that draws nothing needs only the font, which chat and books
+    /// measure with; no GUI, block or item sprites, no map slots, no panorama.
+    pub fn server(root: &std::path::Path) -> Result<Self> {
+        Ok(Self {
+            atlas: HudAtlas::fonts(root)?,
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces {
+                size: 1,
+                pixels: [0u8; 4].repeat(6),
+            }),
+        })
+    }
 }
 /// What a resource pack reload replaces (`Minecraft.reloadResourcePacks`):
 /// block models and sprites with their meshing tables, item models,
@@ -1705,6 +1716,18 @@ struct Game<'a> {
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
     tickets: horizon_client::ticket_levels::ChunkTickets,
     random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
+    /// `world.chunks` keys with random ticks, in the map's order, and the
+    /// (membership revision, ticket generation, lit chunks) they were built
+    /// for. The order is the RNG stream, so it must stay the map's.
+    random_ticking: Vec<(i32, i32)>,
+    random_ticking_key: Option<(u64, u64, usize)>,
+    /// The ticket sources of the last tick, reused so an unchanged set costs
+    /// no allocation or sort.
+    ticket_sources: Option<horizon_client::ticket_levels::Sources>,
+    /// `tick_blocks`'s entity-trigger boxes and positions, reused.
+    trigger_inside: Vec<BlockPos>,
+    trigger_standing: Vec<(BlockPos, bool, f64)>,
+    trigger_touched: Vec<BlockPos>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
@@ -1798,6 +1821,9 @@ struct Game<'a> {
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
+    /// `tick_items`'s removed mask and cell grid, reused across ticks.
+    item_removed: Vec<bool>,
+    item_cells: horizon_client::entities::ItemCells,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
@@ -2652,8 +2678,11 @@ impl Game<'_> {
         let mut items = std::mem::take(&mut self.dropped);
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
-        let mut removed = vec![false; items.len()];
-        let mut cells = horizon_client::entities::ItemCells::new(&items);
+        let mut removed = std::mem::take(&mut self.item_removed);
+        removed.clear();
+        removed.resize(items.len(), false);
+        let mut cells = std::mem::take(&mut self.item_cells);
+        cells.rebuild(&items);
         let catalog = self.res.items();
         let max_stack =
             |stack: &ItemStack| catalog.get(&stack.item).map_or(64, |i| i.max_stack).max(1);
@@ -2741,8 +2770,12 @@ impl Game<'_> {
                 cells.remove(i, item.position);
             }
         }
-        let mut removed = removed.into_iter();
-        items.retain(|_| !removed.next().unwrap_or(false));
+        {
+            let mut flags = removed.drain(..);
+            items.retain(|_| !flags.next().unwrap_or(false));
+        }
+        self.item_removed = removed;
+        self.item_cells = cells;
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
             return;
@@ -3006,30 +3039,37 @@ impl Game<'_> {
     /// chunks. A game with neither a server nor a player (the headless
     /// fixtures) ticks everywhere.
     fn update_chunk_tickets(&mut self) {
-        let mut players: Vec<(i32, i32)> = self.lan.as_ref().map_or_else(Vec::new, |h| {
-            h.hub
-                .guests
-                .iter()
-                .filter(|g| h.hub.here(g))
-                .map(|g| g.chunk())
-                .collect()
-        });
+        let sources = self
+            .ticket_sources
+            .get_or_insert_with(horizon_client::ticket_levels::Sources::default);
+        sources.players.clear();
+        if let Some(h) = &self.lan {
+            sources.players.extend(
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| h.hub.here(g))
+                    .map(|g| g.chunk()),
+            );
+        }
         if let Some(p) = &self.player {
-            players.push((
+            sources.players.push((
                 (p.position.x.floor() as i32) >> 4,
                 (p.position.z.floor() as i32) >> 4,
             ));
         }
-        let sources =
-            (!self.options.execution_role.is_client() || !players.is_empty()).then(|| {
-                horizon_client::ticket_levels::Sources {
-                    players,
-                    forced: self.streaming.forced.iter().copied().collect(),
-                    view_distance: self.settings.render_distance.clamp(2, 32),
-                    simulation_distance: self.settings.simulation_distance.max(2),
-                }
-            });
-        self.tickets.update(sources);
+        sources.forced.clear();
+        sources.forced.extend(self.streaming.forced.iter().copied());
+        sources.view_distance = self.settings.render_distance.clamp(2, 32);
+        sources.simulation_distance = self.settings.simulation_distance.max(2);
+        sources.players.sort_unstable();
+        sources.players.dedup();
+        sources.forced.sort_unstable();
+        let active = !self.options.execution_role.is_client() || !sources.players.is_empty();
+        let current = active.then_some(&*sources);
+        if !self.tickets.matches(current) {
+            self.tickets.update(current.cloned());
+        }
     }
     /// `ServerLevel.startTickingChunk`: a loaded chunk's saved ticks are
     /// scheduled from the game time at which it becomes a ticking chunk
@@ -3042,7 +3082,7 @@ impl Game<'_> {
             .tick_chunks
             .start_ticking(|(x, z)| levels.loaded_ticking(x, z) && ticking_chunk(world, x, z));
         let time = self.world.game_time - 1;
-        for (x, z) in started {
+        for &(x, z) in started {
             let pos = horizon_core::position::ChunkPos::new(x, z);
             self.block_ticks.blocks.unpack_chunk(pos, time);
             self.block_ticks.fluids.unpack_chunk(pos, time);
@@ -3055,19 +3095,29 @@ impl Game<'_> {
         self.start_ticking_chunks();
         let levels = self.tickets.levels();
         // Keep the world map's chunk order, including empty chunks
-        // (tick_chunk_random still draws for precipitation in those).
-        let ticking: Vec<_> = self
-            .world
-            .chunks
-            .keys()
-            .copied()
-            .filter(|&(x, z)| levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z))
-            .collect();
+        // (tick_chunk_random still draws for precipitation in those): the
+        // list is the RNG stream, so rebuild it only when its inputs change.
+        let key = (
+            self.world.chunks.membership_revision(),
+            self.tickets.generation(),
+            self.streaming.lit_count(),
+        );
+        if self.random_ticking_key != Some(key) {
+            self.random_ticking_key = Some(key);
+            self.random_ticking.clear();
+            self.random_ticking.extend(
+                self.world.chunks.keys().copied().filter(|&(x, z)| {
+                    levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z)
+                }),
+            );
+        }
+        let ticking = std::mem::take(&mut self.random_ticking);
         // Entity.checkInsideBlocks for the plates, tripwires, detector rails and
         // buttons under the players (the host and the LAN guests), the minecarts
         // and the arrows (the mobs and other entities are added in `with_level`
         // below).
-        let mut inside = Vec::new();
+        let mut inside = std::mem::take(&mut self.trigger_inside);
+        inside.clear();
         let guests = self.lan_block_trigger_boxes();
         let boxes = self
             .player
@@ -3119,7 +3169,8 @@ impl Game<'_> {
         // BigDripleafBlock.entityInside also asks whether the player stands on
         // the ground and how high its feet are: the leaves its box's feet
         // layer is inside (the host and the LAN guests).
-        let mut standing = Vec::new();
+        let mut standing = std::mem::take(&mut self.trigger_standing);
+        standing.clear();
         let feet = self
             .player
             .iter()
@@ -3144,9 +3195,10 @@ impl Game<'_> {
                 }
             }
         }
+        let mut touched = std::mem::take(&mut self.trigger_touched);
+        touched.clear();
         self.with_level(|b, level, ticks| {
             // The mobs and the other entities (items, orbs, projectiles...) too.
-            let mut touched: Vec<BlockPos> = Vec::new();
             for bounds in level.mob_trigger_boxes().chain(level.other_trigger_boxes()) {
                 let (lo, hi) = (bounds.min_position(), bounds.max_position());
                 for x in (lo.x + 1e-7).floor() as i32..=(hi.x - 1e-7).floor() as i32 {
@@ -3159,17 +3211,20 @@ impl Game<'_> {
             }
             touched.sort_unstable_by_key(|p| (p.x, p.y, p.z));
             touched.dedup();
-            for pos in inside.into_iter().chain(touched) {
+            for pos in inside.drain(..).chain(touched.drain(..)) {
                 b.entity_inside(level, ticks, pos);
             }
-            for (pos, on_ground, feet_y) in standing {
+            for (pos, on_ground, feet_y) in standing.drain(..) {
                 b.entity_on_big_dripleaf(level, ticks, pos, on_ground, feet_y);
             }
         });
+        self.trigger_inside = inside;
+        self.trigger_standing = standing;
+        self.trigger_touched = touched;
         self.process_level_events()?;
         self.tick_scheduled()?;
         self.with_level(|b, level, ticks| {
-            for (x, z) in ticking {
+            for &(x, z) in &ticking {
                 // The sections are read again only after a block changed.
                 let mut read = None;
                 let mut sections = Default::default();
@@ -3191,6 +3246,7 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        self.random_ticking = ticking;
         // `PistonMovingBlockEntity.tick` pushes what its block just ran into,
         // with the progress it is about to take.
         let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
@@ -3239,10 +3295,12 @@ impl Game<'_> {
     }
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
-        let events = std::mem::take(&mut self.level_events);
+        // Drain the batch, keeping its allocation: events pushed while it
+        // runs land in `level_events` and go after it, as before.
+        let mut events = std::mem::take(&mut self.level_events);
         self.lan_record_events(&events);
         dispense_fixture::record_events(&events);
-        for event in events {
+        for event in events.drain(..) {
             match event {
                 LevelEvent::LevelEvent {
                     id: 2001,
@@ -3651,6 +3709,8 @@ impl Game<'_> {
                 | LevelEvent::BlockEvent { .. } => {}
             }
         }
+        events.append(&mut self.level_events);
+        self.level_events = events;
         Ok(())
     }
     /// Menus opened by PlayerEffect::OpenMenu.
@@ -13643,9 +13703,11 @@ impl<'a> Game<'a> {
                 .join("saves")
                 .join(".horizon-title"),
         ));
-        let prepared = prepared
-            .map(Ok)
-            .unwrap_or_else(|| GameCpuResources::load(&root))?;
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None if options.execution_role.is_client() => GameCpuResources::load(&root)?,
+            None => GameCpuResources::server(&root)?,
+        };
         let world = World::new(res.facts().air, 0);
         let creative = options.creative;
         let inventory = vec![None; 36];
@@ -13860,6 +13922,12 @@ impl<'a> Game<'a> {
             tick_chunks: Default::default(),
             tickets: Default::default(),
             random_tick_sections: Default::default(),
+            random_ticking: Vec::new(),
+            random_ticking_key: None,
+            ticket_sources: None,
+            trigger_inside: Vec::new(),
+            trigger_standing: Vec::new(),
+            trigger_touched: Vec::new(),
             level_events: Vec::new(),
             falling: Vec::new(),
             paintings: Vec::new(),
@@ -13924,6 +13992,8 @@ impl<'a> Game<'a> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             item_columns: None,
+            item_removed: Vec::new(),
+            item_cells: Default::default(),
             creative_screen: prepared.creative_screen,
             control: None,
             agent_control_on: false,
@@ -14056,6 +14126,37 @@ impl GameCpuResources {
             dragon_model: model("minecraft:ender_dragon#main"),
             arrow_model: model("minecraft:arrow#main"),
             trident_model: model("minecraft:trident#main"),
+            creative_screen: Creative::load(root)?,
+        })
+    }
+    /// A game that draws nothing: the painting variants and boat models its
+    /// gameplay asks for and the creative tab list, without the render models.
+    fn server(root: &std::path::Path) -> Result<Self> {
+        let document = horizon_client::mobs::EntityModelDocument::load(root).ok();
+        Ok(Self {
+            painting_variants: paintings::PaintingVariants::load(root),
+            frame_model: Vec::new(),
+            glow_frame_model: Vec::new(),
+            map_frame_model: Vec::new(),
+            glow_map_frame_model: Vec::new(),
+            armor_stand_assets: armor_stands::ArmorStandAssets {
+                main: None,
+                small: None,
+                layers: HashMap::new(),
+                player: HashMap::new(),
+                equipment: HashMap::new(),
+                trim_overrides: HashMap::new(),
+                trims: Default::default(),
+                root: root.to_path_buf(),
+            },
+            waypoint_styles: Default::default(),
+            boat_models: boats::BoatModels::load(document.as_ref()),
+            cart_models: minecarts::CartModels::load(None),
+            crystal_model: None,
+            cushion_model: None,
+            dragon_model: None,
+            arrow_model: None,
+            trident_model: None,
             creative_screen: Creative::load(root)?,
         })
     }
@@ -14283,7 +14384,8 @@ impl Progress {
         }
     }
     fn set(&self, stage: u32) {
-        self.value.store(stage, Ordering::Relaxed);
+        // Parallel lanes finish out of order: the loading screen only ever moves forward.
+        self.value.fetch_max(stage, Ordering::Relaxed);
     }
     fn fraction(&self) -> f32 {
         self.value.load(Ordering::Relaxed) as f32 / (self.lines.len() - 1) as f32
@@ -14315,6 +14417,7 @@ fn load_resources(
     settings: &Settings,
     started: Instant,
     menu: bool,
+    visuals: bool,
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
 ) -> Result<Loaded> {
@@ -14323,10 +14426,20 @@ fn load_resources(
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
     // published at once so the title screen can appear while the world bundle
     // loads; the synchronous launch instead carries it in `Loaded`.
+    let load_ui = |root: &std::path::Path| {
+        if visuals {
+            UiResources::load(root, vanilla_root)
+        } else {
+            UiResources::server(root)
+        }
+    };
     let mut loaded_gui = None;
     let mut ui_ready = false;
     let mut pack_error = None;
-    let ui = match UiResources::load(&root, vanilla_root) {
+    if !visuals {
+        log::info!("Horizon: server build, loading the font atlas only");
+    }
+    let ui = match load_ui(&root) {
         Ok(ui) => Some(ui),
         // Minecraft.rollbackResourcePacks: the packs' textures don't fit, start
         // with the game's own resources.
@@ -14378,7 +14491,7 @@ fn load_resources(
     let render = Arc::new(render);
     // The menu bundle must come from the same root as the world bundle.
     if !ui_ready || root != requested_root {
-        let ui = UiResources::load(&root, vanilla_root)?;
+        let ui = load_ui(&root)?;
         if menu {
             horizon_client::telemetry::mark_ui_ready();
             log::info!(
@@ -14431,7 +14544,9 @@ fn load_resources(
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(4);
     if !menu {
-        horizon_client::ui::load_metadata(&root);
+        if visuals {
+            horizon_client::ui::load_metadata(&root);
+        }
         horizon_client::lang::set(horizon_client::lang::Language::load(
             &[&root],
             &settings.language,
@@ -14489,6 +14604,7 @@ fn load_resources(
                     &assets,
                     &behaviour_json,
                     &gameplay_projection,
+                    visuals,
                     &progress,
                     started,
                 )
@@ -14516,6 +14632,7 @@ fn load_resources(
             &assets,
             &behaviour_json,
             &gameplay_projection,
+            visuals,
             progress,
             started,
         )?;
@@ -14543,22 +14660,121 @@ fn load_world_rest(
     assets: &Assets,
     behaviour_json: &serde_json::Value,
     gameplay_projection: &[horizon_client::blocks::GameplayProjection],
+    visuals: bool,
     progress: &Progress,
     started: Instant,
 ) -> Result<WorldRest> {
     let facts = resources.facts();
     let biomes = resources.biomes();
     let threads = resources.threads();
-    let registry_owner = assets;
     progress.set(6);
-    let mob_data = horizon_client::mobs::MobData::load(root, facts);
-    horizon_client::mobs::trial_spawner::load_registry(root);
-
-    let items = Items::load(root, assets.registry, facts)?;
-    log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
-    progress.set(7);
-    let recipes = Recipes::load(root, &items)?;
-    let transformers = horizon_client::block_transform::Transformers::load(root, assets.registry)?;
+    // Three independent lanes; a lane returns the first error as a string so
+    // it can cross the thread boundary.
+    let lane_a = || -> std::result::Result<_, String> {
+        let items = Items::load(root, assets.registry, facts).map_err(|e| e.to_string())?;
+        log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
+        progress.set(7);
+        let recipes = Recipes::load(root, &items).map_err(|e| e.to_string())?;
+        let transformers =
+            horizon_client::block_transform::Transformers::load(root, assets.registry)
+                .map_err(|e| e.to_string())?;
+        let stations = horizon_client::stations::StationData::load(root, &items);
+        Ok((items, recipes, transformers, stations))
+    };
+    let lane_b = || -> std::result::Result<_, String> {
+        let animate =
+            horizon_client::animate_tick::AnimateTables::load(root, assets.registry, biomes)
+                .map_err(|e| e.to_string())?;
+        let fog = horizon_client::fog::FogTables::load(root, biomes);
+        let providers = Providers::load(root);
+        let block_entity_render =
+            horizon_client::block_entity_render::BlockEntityRenderer::load(root, assets.registry)
+                .map_err(|e| e.to_string())?;
+        let behaviours = Behaviours::load_with_gameplay(
+            assets.registry,
+            root,
+            behaviour_json,
+            gameplay_projection,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((animate, fog, providers, block_entity_render, behaviours))
+    };
+    let lane_c = || -> std::result::Result<_, String> {
+        let mob_data = horizon_client::mobs::MobData::load(root, facts);
+        horizon_client::mobs::trial_spawner::load_registry(root);
+        let music = if visuals {
+            horizon_client::music::MusicTables::load(root)
+        } else {
+            Default::default()
+        };
+        let ambient = if visuals {
+            horizon_client::ambience::AmbientTables::load(root)
+        } else {
+            Default::default()
+        };
+        let nether_environment =
+            Environment::load_dimension(root, "the_nether", false).map_err(|e| e.to_string())?;
+        let end_environment =
+            Environment::load_dimension(root, "the_end", false).map_err(|e| e.to_string())?;
+        let mob_types: HashMap<String, Arc<MobType>> = MobTypes::load(root)
+            .map_err(|e| e.to_string())?
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+        let player_type = visuals.then(|| perspective::player_type(root)).flatten();
+        let player_arm = visuals
+            .then(|| {
+                horizon_client::mobs::load_model(root, "minecraft:player#main")
+                    .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm"))
+            })
+            .flatten();
+        let player_arm_slim = visuals
+            .then(|| {
+                horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
+                    .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm"))
+            })
+            .flatten();
+        let spin_attack = visuals
+            .then(|| horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"))
+            .flatten();
+        Ok((
+            mob_data,
+            music,
+            ambient,
+            nether_environment,
+            end_environment,
+            mob_types,
+            player_type,
+            player_arm,
+            player_arm_slim,
+            spin_attack,
+        ))
+    };
+    let (lane_a, lane_b, lane_c) = if threads > 1 {
+        std::thread::scope(|scope| {
+            let a = scope.spawn(lane_a);
+            let b = scope.spawn(lane_b);
+            let c = scope.spawn(lane_c);
+            (a.join().unwrap(), b.join().unwrap(), c.join().unwrap())
+        })
+    } else {
+        (lane_a(), lane_b(), lane_c())
+    };
+    let (items, recipes, transformers, stations) = lane_a?;
+    let (animate, fog, providers, block_entity_render, behaviours) = lane_b?;
+    let (
+        mob_data,
+        music,
+        ambient,
+        nether_environment,
+        end_environment,
+        mob_types,
+        player_type,
+        player_arm,
+        player_arm_slim,
+        spin_attack,
+    ) = lane_c?;
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -14568,44 +14784,26 @@ fn load_world_rest(
         threads
     );
     progress.set(8);
-    let stations = horizon_client::stations::StationData::load(root, &items);
-    let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
-    let fog = horizon_client::fog::FogTables::load(root, biomes);
     Ok(WorldRest {
         stations,
         items,
         recipes,
         transformers,
-        providers: Providers::load(root),
-        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
-            root,
-            registry_owner.registry,
-        )?,
+        providers,
+        block_entity_render,
         animate,
         fog,
-        music: horizon_client::music::MusicTables::load(root),
-        ambient: horizon_client::ambience::AmbientTables::load(root),
-        nether_environment: Environment::load_dimension(root, "the_nether", false)?,
-        end_environment: Environment::load_dimension(root, "the_end", false)?,
-        behaviours: Behaviours::load_with_gameplay(
-            registry_owner.registry,
-            root,
-            behaviour_json,
-            gameplay_projection,
-        )?,
-        mob_types: MobTypes::load(root)?
-            .types
-            .into_iter()
-            .map(|(k, v)| (k, Arc::new(v)))
-            .collect(),
+        music,
+        ambient,
+        nether_environment,
+        end_environment,
+        behaviours,
+        mob_types,
         mob_data,
-        player_type: perspective::player_type(root),
-        player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
-            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-        player_arm_slim: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
-            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-        spin_attack: horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
+        player_type,
+        player_arm,
+        player_arm_slim,
+        spin_attack,
     })
 }
 
@@ -15397,6 +15595,7 @@ pub fn run() -> Result<()> {
         &early_settings,
         started,
         false,
+        options.execution_role.is_client(),
         &Progress::new(),
         &mut |_, _| {},
     )?;
@@ -15441,6 +15640,49 @@ fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
 fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
     *adv = Default::default();
     *stats = Default::default();
+}
+
+#[cfg(test)]
+mod server_ui_tests {
+    use super::*;
+
+    /// A server draws nothing: its bundle is the font alone, without the GUI
+    /// sprites, map slots and panorama the client's atlas packs.
+    #[test]
+    fn server_ui_has_a_font_and_no_sprites() {
+        let ui = UiResources::server(std::path::Path::new("/nonexistent")).unwrap();
+        // Only the built-in white pixel: no GUI, block, item or map sprites.
+        assert_eq!(
+            ui.atlas.sprites.keys().collect::<Vec<_>>(),
+            ["horizon/white"]
+        );
+        assert!(ui.atlas.pixels.is_empty());
+        assert_eq!(ui.panorama.size, 1);
+        assert!(ui.atlas.font.width("Horizon") > 0.0);
+    }
+
+    #[test]
+    fn server_bundle_keeps_gameplay_data_and_skips_render_models() {
+        let root = std::env::temp_dir().join(format!("horizon-server-cpu-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("creative-tabs.json"), "[]").unwrap();
+        std::fs::write(
+            root.join("entity-models.json"),
+            r#"{"minecraft:boat/oak#main": {}, "minecraft:chest_boat/oak#main": {},
+                "minecraft:ender_dragon#main": {}}"#,
+        )
+        .unwrap();
+        let prepared = GameCpuResources::server(&root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        // Placement and save loading ask which boats exist.
+        assert!(prepared.boat_models.has("oak", false));
+        assert!(prepared.boat_models.has("oak", true));
+        assert!(prepared.crystal_model.is_none());
+        assert!(prepared.dragon_model.is_none());
+        assert!(prepared.frame_model.is_empty());
+        assert!(prepared.armor_stand_assets.main.is_none());
+        assert!(prepared.cart_models.models.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -15518,6 +15760,15 @@ mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
+
+    #[test]
+    fn loading_progress_never_goes_backwards() {
+        let progress = Progress::new();
+        progress.set(6);
+        progress.set(8);
+        progress.set(7);
+        assert_eq!(progress.value.load(Ordering::Relaxed), 8);
+    }
 
     #[test]
     fn sleep_fade_lasts_ten_ticks_after_waking() {
