@@ -168,7 +168,11 @@ fn append_log(path: &Path, entry: &[(&str, serde_json::Value)]) -> io::Result<()
 
 fn sha1_of(path: &Path) -> io::Result<String> {
     let mut hasher = Sha1::new();
-    io::copy(&mut fs::File::open(path)?, &mut hasher)?;
+    // A cached pack is hashed on every join: read it in large blocks.
+    io::copy(
+        &mut io::BufReader::with_capacity(1 << 20, fs::File::open(path)?),
+        &mut hasher,
+    )?;
     Ok(hex(&hasher.finalize()))
 }
 fn hex(bytes: &[u8]) -> String {
@@ -219,7 +223,13 @@ pub fn download_file(
             })
             .map_err(|e| format!("Failed to remove existing file {}: {e}", target.display()))?;
     }
-    let mut call = ureq::AgentBuilder::new().build().get(&request.url);
+    // HttpUtil.downloadFile's 15 s connect timeout; a stalled transfer fails
+    // rather than holding the pack (and the join) forever.
+    let mut call = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build()
+        .get(&request.url);
     for (name, value) in headers {
         call = call.set(name, value);
     }
@@ -278,17 +288,23 @@ fn save_hashed(
     max_size: u64,
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<String> {
-    let mut out = fs::File::create(path)?;
+    // Large reads into a buffered file: a pack is tens of megabytes, and
+    // 8 KiB unbuffered writes cost a system call each.
+    let mut out = io::BufWriter::with_capacity(1 << 20, fs::File::create(path)?);
     let mut hasher = Sha1::new();
-    let mut buffer = [0u8; 8196];
-    let mut read_so_far = 0u64;
+    let mut buffer = vec![0u8; 256 * 1024];
+    let (mut read_so_far, mut reported) = (0u64, 0u64);
     loop {
         let n = input.read(&mut buffer)?;
         if n == 0 {
             break;
         }
         read_so_far += n as u64;
-        progress(read_so_far);
+        // The toast shows whole percents: a report every 64 KiB is plenty.
+        if read_so_far - reported >= 64 * 1024 || reported == 0 {
+            reported = read_so_far;
+            progress(read_so_far);
+        }
         if read_so_far > max_size {
             return Err(io::Error::other(format!(
                 "Filesize was bigger than maximum allowed (got >= {read_so_far}, limit was {max_size})"
@@ -297,6 +313,10 @@ fn save_hashed(
         out.write_all(&buffer[..n])?;
         hasher.update(&buffer[..n]);
     }
+    if reported != read_so_far {
+        progress(read_so_far);
+    }
+    out.flush()?;
     Ok(hex(&hasher.finalize()))
 }
 

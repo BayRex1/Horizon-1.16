@@ -218,6 +218,11 @@ impl Game<'_> {
         let context = pack.context.clone();
         self.pack = pack;
         self.gui = gui;
+        // The new atlas has empty skin and map slots: forget what the old one
+        // held, so players and maps upload into it again instead of naming
+        // sprites it does not have (a player drew as nothing).
+        self.skin_slots.clear();
+        self.maps.forget_slots();
         // The atlas's sprites moved: the particle engine re-reads every rect
         // and the packs' sprite sets, or every particle draws a stale region.
         self.particles

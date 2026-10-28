@@ -183,6 +183,76 @@ pub struct ConnWriter {
 /// `InetAddress.getByName` under Java's default `java.net.preferIPv6Addresses=false`: IPv4
 /// addresses first, whatever order the system resolver gives (macOS lists IPv6 first). Vanilla
 /// connects to that first address only; the rest stay here as fallbacks.
+/// How long an address has before the next one is tried alongside it
+/// (Happy Eyeballs' connection attempt delay, RFC 8305).
+const ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+
+/// A TCP connection to the first of `addrs` that answers. IPv4 goes first as
+/// vanilla tries it; each further address starts [`ATTEMPT_DELAY`] after the
+/// one before instead of after its whole timeout, so a dead first address (an
+/// IPv6 route the client lacks, one host of a round-robin that is down) no
+/// longer holds the join for the full timeout.
+fn connect_any(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<TcpStream> {
+    use std::sync::{atomic::AtomicBool, mpsc};
+    let addrs = ipv4_first(addrs);
+    // Report the first address's failure: it is the one vanilla tries, and the IPv6
+    // fallbacks after it often fail only because the client has no IPv6 route.
+    let refused = |e: &std::io::Error| Error::new(format!("Connection refused: {e}"));
+    match addrs.as_slice() {
+        [] => return Err(Error::new(format!("Unknown host {host}"))),
+        [addr] => return TcpStream::connect_timeout(addr, timeout).map_err(|e| refused(&e)),
+        _ => {}
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    let failed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (send, results) = mpsc::channel();
+    for (i, addr) in addrs.iter().copied().enumerate() {
+        let (done, failed, tx) = (done.clone(), failed.clone(), send.clone());
+        let delay = ATTEMPT_DELAY * i as u32;
+        let attempt = move || {
+            // Wait out the delay, unless as many attempts as came before
+            // have already failed, or one has connected.
+            let started = Instant::now();
+            while started.elapsed() < delay
+                && failed.load(Ordering::Relaxed) < i
+                && !done.load(Ordering::Relaxed)
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if done.load(Ordering::Relaxed) {
+                return;
+            }
+            let result = TcpStream::connect_timeout(&addr, timeout);
+            if result.is_err() {
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
+            let _ = tx.send((i, result));
+        };
+        if let Err(e) = std::thread::Builder::new()
+            .name("horizon-connect".into())
+            .spawn(attempt)
+        {
+            let _ = send.send((i, Err(e)));
+        }
+    }
+    drop(send);
+    let mut errors: Vec<Option<std::io::Error>> = addrs.iter().map(|_| None).collect();
+    for (i, result) in results {
+        match result {
+            Ok(stream) => {
+                done.store(true, Ordering::Relaxed);
+                return Ok(stream);
+            }
+            Err(e) => errors[i] = Some(e),
+        }
+    }
+    let first = errors.into_iter().flatten().next();
+    Err(first.map_or_else(
+        || Error::new(format!("Unknown host {host}")),
+        |e| refused(&e),
+    ))
+}
+
 fn ipv4_first(mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
     addrs.sort_by_key(SocketAddr::is_ipv6);
     addrs
@@ -204,21 +274,21 @@ impl Connection {
     /// keep the player's original host and port in the protocol handshake.
     pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
         let addrs = crate::resolver::resolve(host, port)?;
-        Self::connect_addresses(host, addrs, timeout)
-    }
-    fn connect_addresses(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
-        // Report the first address's failure: it is the one vanilla tries, and the IPv6
-        // fallbacks after it often fail only because the client has no IPv6 route.
-        let mut first = None;
-        for addr in ipv4_first(addrs) {
-            match TcpStream::connect_timeout(&addr, timeout) {
-                Ok(stream) => return Self::from_stream(stream),
-                Err(e) => {
-                    first.get_or_insert_with(|| Error::new(format!("Connection refused: {e}")));
+        match connect_any(host, addrs, timeout) {
+            Ok(stream) => {
+                if let Ok(address) = stream.peer_addr() {
+                    crate::resolver::cache::connected(host, port, address);
                 }
+                Self::from_stream(stream)
+            }
+            Err(e) => {
+                crate::resolver::cache::forget(host, port);
+                Err(e)
             }
         }
-        Err(first.unwrap_or_else(|| Error::new(format!("Unknown host {host}"))))
+    }
+    fn connect_addresses(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
+        Self::from_stream(connect_any(host, addrs, timeout)?)
     }
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream.set_nodelay(true)?;
@@ -334,6 +404,33 @@ impl ConnWriter {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn a_refused_first_address_falls_through_to_one_that_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap();
+        // A port nothing listens on: bound, then released.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let started = Instant::now();
+        let stream = connect_any("test", vec![dead, live], Duration::from_secs(5)).unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), live);
+        // The refusal starts the next attempt at once.
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let error = connect_any("test", vec![dead, dead], Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error.to_string().starts_with("Connection refused"),
+            "{error}"
+        );
+        assert_eq!(
+            connect_any("nowhere", vec![], Duration::from_secs(1))
+                .unwrap_err()
+                .to_string(),
+            "Unknown host nowhere"
+        );
+    }
 
     #[test]
     fn ipv4_first_keeps_each_familys_order() {

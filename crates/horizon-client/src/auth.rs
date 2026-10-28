@@ -171,11 +171,31 @@ pub fn discovery_url() -> String {
         .unwrap_or_else(|| DEFAULT_DISCOVERY.to_owned())
 }
 
+/// One agent for the game: its connection pool keeps the services' TLS
+/// connection open between the discovery fetch and a join.
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(15))
-        .user_agent(&format!("Horizon/{}", horizon_core::release::VERSION))
-        .build()
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(15))
+                .user_agent(&format!("Horizon/{}", horizon_core::release::VERSION))
+                .build()
+        })
+        .clone()
+}
+
+/// Fetch the discovery document in the background when a join is likely
+/// (the server list opened), so an online-mode login need not wait for it.
+pub fn warm_up() {
+    if current().is_none() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("horizon-auth-warm-up".into())
+        .spawn(|| {
+            let _ = discovery();
+        });
 }
 
 /// The discovery document, fetched once per game (a failure is retried next time).

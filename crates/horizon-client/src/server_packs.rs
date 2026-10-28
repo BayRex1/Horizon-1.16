@@ -267,6 +267,23 @@ impl ServerPacks {
         self.update = true;
     }
 
+    /// The downloads [`Self::tick`] would start, started now, without the
+    /// reload or the cleanup: the game runs it while it cannot reload yet, so
+    /// a pack downloads while the rest of the resources load.
+    pub fn start_downloads(&mut self) -> Vec<Request> {
+        let mut out = Vec::new();
+        for pack in self.packs.iter_mut().filter(|p| !p.removed() && p.accepted) {
+            if pack.download == Download::Requested {
+                pack.download = Download::Pending;
+                out.push(Request {
+                    id: pack.id,
+                    url: pack.url.clone(),
+                    sha1: pack.sha1.clone(),
+                });
+            }
+        }
+        out
+    }
     /// `ServerPackManager.tick`: start the downloads the accepted packs
     /// need; once none is left, reload if the active packs should change;
     /// then forget the packs that are gone, reporting why.
@@ -493,6 +510,31 @@ mod tests {
             [(1, ACCEPTED), (1, DOWNLOADED), (1, SUCCESSFULLY_LOADED)]
         );
         assert_eq!(loaded, [(1, PathBuf::from("/p/1"))]);
+    }
+
+    #[test]
+    fn downloads_start_before_the_reload_can_run() {
+        let mut sp = ServerPacks::default();
+        sp.connect(Prompt::Allowed);
+        sp.push(1, "http://a/p.zip", None);
+        let early = sp.start_downloads();
+        assert_eq!(early.len(), 1);
+        assert!(sp.start_downloads().is_empty(), "started once");
+        sp.downloaded(ok(1));
+        let mut loaded = Vec::new();
+        settle(
+            &mut sp,
+            &mut |_| unreachable!("already downloading"),
+            &mut |p| {
+                loaded = p.to_vec();
+                true
+            },
+        );
+        assert_eq!(loaded, [(1, PathBuf::from("/p/1"))]);
+        assert_eq!(
+            sp.take_replies(),
+            [(1, ACCEPTED), (1, DOWNLOADED), (1, SUCCESSFULLY_LOADED)]
+        );
     }
 
     #[test]

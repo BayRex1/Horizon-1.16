@@ -867,6 +867,9 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     let sleep = (m.species() == Species::Villager || avatar(m))
         .then(|| super::villager::sleep_pose(m))
         .flatten();
+    // LivingEntityRenderer.submit: poseStack.scale(state.scale) after the bed
+    // offset and before setupRotations (the scale attribute).
+    let scale = glam::Mat4::from_scale(glam::Vec3::splat(m.scale));
     let rotation = match sleep {
         // setupRotations for Pose.SLEEPING, with the head moved toward the pillow.
         Some((angle, step)) => {
@@ -877,14 +880,18 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             } else {
                 (m.eye_y() - m.position.y) as f32
             };
-            let head = eye - 0.1;
+            let head = eye * m.scale - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
+                * scale
                 * glam::Mat4::from_rotation_y(angle.to_radians())
                 * glam::Mat4::from_rotation_z(90.0_f32.to_radians())
                 * glam::Mat4::from_rotation_y(270.0_f32.to_radians())
         }
-        None => super::aquatic::rotations(m, alpha, body)
-            .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
+        None => {
+            scale
+                * super::aquatic::rotations(m, alpha, body)
+                    .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians()))
+        }
     };
     let mut base = origin * rotation;
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
@@ -899,8 +906,9 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             * glam::Mat4::from_rotation_y(((m.age as f32 + alpha) * -75.0).to_radians());
     } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
         // isEntityUpsideDown
-        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
-            * glam::Mat4::from_rotation_z(PI);
+        base *=
+            glam::Mat4::from_translation(glam::Vec3::new(0.0, (m.height() + 0.1) / m.scale, 0.0))
+                * glam::Mat4::from_rotation_z(PI);
     }
     // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
@@ -1204,8 +1212,11 @@ fn render_visible(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
+    // A player's downloaded skin can be missing from the atlas for a frame
+    // (evicted, or the atlas was rebuilt): draw the default skin, never nothing.
+    let uv = atlas(&texture).or_else(|| avatar(m).then(|| atlas(&m.kind.texture)).flatten());
     let draw_body = |out: &mut Vec<Vertex>| {
-        if let Some(uv) = atlas(&texture) {
+        if let Some(uv) = uv {
             draw(
                 &model,
                 base,
@@ -1511,6 +1522,104 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A player whose model is one quad, with the default skin texture.
+    fn player() -> Mob {
+        use super::super::{Anim, Brain, Flags, MobType, Part, Species};
+        use std::{collections::HashMap, sync::Arc};
+        let quad = serde_json::json!({
+            "polygons": [[[0, 0, 0, 0, 0], [1, 0, 0, 1, 0], [1, 1, 0, 1, 1], [0, 1, 0, 0, 1]]]
+        });
+        let kind = Arc::new(MobType {
+            id: "minecraft:player".into(),
+            species: Species::Zombie,
+            width: 0.6,
+            height: 1.8,
+            eye_height: 1.62,
+            category: "misc".into(),
+            max_health: 20.0,
+            speed: 0.1,
+            flying_speed: 0.02,
+            attack_damage: 1.0,
+            attack_knockback: 0.0,
+            follow_range: 0.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Flags::default(),
+            model: Arc::new(Part::parse(
+                "root",
+                &serde_json::json!({"children": {"body": quad}}),
+            )),
+            layers: HashMap::new(),
+            texture: "entity/player/wide/steve".into(),
+            brain: Brain::Passive,
+            anim: Anim::Humanoid { zombie_arms: false },
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        });
+        Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0)
+    }
+    fn mob_data() -> MobData {
+        MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_player_whose_skin_left_the_atlas_draws_the_default_skin() {
+        let mut m = player();
+        m.skin = Some("skins/0123".into());
+        let atlas =
+            |name: &str| (name == "entity/player/wide/steve").then_some([0.0, 0.0, 1.0, 1.0]);
+        let mut out = Vec::new();
+        render(&m, 1.0, glam::DVec3::ZERO, &atlas, 0, &mob_data(), &mut out);
+        assert!(!out.is_empty(), "the player was drawn invisible");
+    }
+
+    #[test]
+    fn the_scale_attribute_grows_the_box_and_the_model() {
+        let mut m = player();
+        let height = |m: &Mob| {
+            let feet = base_transform(m, 1.0, glam::DVec3::ZERO);
+            // The model's origin sits 1.501 above the feet, flipped: 24 px up.
+            feet.transform_point3(glam::Vec3::new(0.0, 1.501 - 1.8, 0.0))
+                .y
+        };
+        let normal = height(&m);
+        assert_eq!(m.height(), 1.8);
+        m.scale = 2.0;
+        assert_eq!(m.height(), 3.6);
+        assert_eq!(m.width(), 1.2);
+        assert!(
+            (height(&m) - normal * 2.0).abs() < 1e-4,
+            "{} vs {normal}",
+            height(&m)
+        );
+    }
 
     /// VillagerProfessionLayer's textures (type, or baby for a baby;
     /// profession; level) of every villager and zombie villager are in the

@@ -666,9 +666,10 @@ impl Game<'_> {
                     u.iter()
                         .fold(0u128, |a, &w| (a << 32) | u128::from(w as u32))
                 });
+                let skin = self.update_local_skin(uuid);
                 let mut me = TabPlayer::new(uuid, PLAYER_NAME);
                 me.game_mode = self.mode_id();
-                me.skin = "entity/player/wide/steve".into();
+                me.skin = skin;
                 let guests = self.lan.as_ref().map_or(&[][..], |h| &h.hub.guests);
                 let players = local_tab_players(me, guests);
                 let upside_down = players

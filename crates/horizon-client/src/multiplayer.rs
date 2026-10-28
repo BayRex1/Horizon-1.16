@@ -130,10 +130,40 @@ fn favicon_bytes(json: &serde_json::Value) -> Option<Vec<u8>> {
         .replace('\n', "");
     crate::skins::base64_decode(&base64)
 }
+/// Each address's last answer and when it came: a list opened again (after
+/// adding or editing a server, or coming back from a game) shows it at once
+/// while the new ping runs, instead of every row starting over at "Pinging".
+static LAST_PINGS: Mutex<Option<HashMap<String, (std::time::Instant, Ping)>>> = Mutex::new(None);
+/// How long a remembered answer stands in for a new one.
+const PING_REUSE: Duration = Duration::from_secs(300);
+
+fn last_ping(address: &str) -> Option<Ping> {
+    let last = LAST_PINGS.lock().ok()?;
+    let (at, ping) = last.as_ref()?.get(address)?;
+    (at.elapsed() < PING_REUSE).then(|| ping.clone())
+}
+fn remember_ping(address: &str, ping: &Ping) {
+    if let Ok(mut last) = LAST_PINGS.lock() {
+        let last = last.get_or_insert_with(HashMap::new);
+        match ping {
+            Ping::Ok { .. } => {
+                last.insert(
+                    address.to_owned(),
+                    (std::time::Instant::now(), ping.clone()),
+                );
+            }
+            _ => {
+                last.remove(address);
+            }
+        }
+    }
+}
+
 fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) {
     for s in servers {
         let address = s.ip.clone();
-        pings.lock().unwrap().insert(address.clone(), Ping::Pinging);
+        let shown = last_ping(&address).unwrap_or(Ping::Pinging);
+        pings.lock().unwrap().insert(address.clone(), shown);
         let saved = s.icon.clone();
         if let Some(pixels) = saved
             .as_deref()
@@ -181,6 +211,7 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
                     }
                     Err(e) => Ping::Failed(e),
                 };
+                remember_ping(&address, &result);
                 pings.lock().unwrap().insert(address, result);
             });
     }
@@ -400,6 +431,7 @@ impl Screen {
         let pings: Pings = Arc::default();
         let icons: Icons = Arc::default();
         ping_all(&servers, &pings, &icons, &servers_file(saves));
+        crate::auth::warm_up();
         Self::List {
             servers,
             selected: None,

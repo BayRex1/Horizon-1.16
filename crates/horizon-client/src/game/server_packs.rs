@@ -337,11 +337,6 @@ impl Game<'_> {
     /// packs change, and the statuses for the server.
     pub(super) fn tick_server_packs(&mut self) {
         self.server_packs.notifiers.retain_mut(PackNotifier::poll);
-        // A reload waits for the world's resources (`reload_packs`).
-        if self.rest_loader.is_some() || self.world_loader.is_some() {
-            return;
-        }
-        self.drive_pack_reload();
         let finished = self
             .server_packs
             .queue
@@ -351,6 +346,16 @@ impl Game<'_> {
         for batch in finished {
             self.server_packs.packs.downloaded(batch);
         }
+        // A reload waits for the world's resources (`reload_packs`); the
+        // downloads need not, so they overlap that loading.
+        if self.rest_loader.is_some() || self.world_loader.is_some() {
+            let early = self.server_packs.packs.start_downloads();
+            if !early.is_empty() {
+                self.start_pack_downloads(early);
+            }
+            return;
+        }
+        self.drive_pack_reload();
         while self.server_packs.packs.wants_tick() {
             let tick = self.server_packs.packs.tick();
             if !tick.download.is_empty() {

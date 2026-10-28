@@ -942,6 +942,9 @@ pub struct Mob {
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
+    /// The `minecraft:scale` attribute a server sends (`LivingEntity.getScale`):
+    /// its box and model grow or shrink with it. 1 unless a server says otherwise.
+    pub scale: f32,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -1912,6 +1915,7 @@ impl Mob {
             skin: None,
             slim: false,
             profile: None,
+            scale: 1.0,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
