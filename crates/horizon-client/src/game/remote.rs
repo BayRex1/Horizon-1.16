@@ -189,6 +189,10 @@ pub(super) struct Remote {
     online_mode: bool,
     /// Player entities in the level: entity id to profile UUID.
     level_players: HashMap<i32, u128>,
+    /// The `textures` each player entity took from its profile while it was
+    /// in the player list (`AbstractClientPlayer.playerInfo`, cached on the
+    /// entity): NPCs leave the list right after they spawn and keep their skin.
+    entity_textures: HashMap<i32, horizon_client::skins::Textures>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -497,6 +501,7 @@ impl Game<'_> {
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
+            entity_textures: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -1082,6 +1087,7 @@ impl Game<'_> {
                 // The entity ids are the old world's; the new dimension's
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
+                r.entity_textures.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -1681,37 +1687,41 @@ impl Game<'_> {
     }
 
     /// `ClientPacketListener.handleUpdateAttributes` for a mob: its maximum
-    /// health (the hearts drawn over its mount) takes the server's value, from
-    /// `AttributeInstance.calculateValue`.
+    /// health (the hearts drawn over its mount) and its scale (the size of its
+    /// box and model: servers grow NPCs with it) take the server's values,
+    /// from `AttributeInstance.calculateValue`.
     fn remote_mob_attributes(&mut self, id: i32, values: &[play::AttributeSnapshot]) {
         let catalog = &self.motion.attributes;
-        let Some(max_health) = catalog.id("minecraft:max_health") else {
-            return;
-        };
-        let Some(s) = values
-            .iter()
-            .find(|s| s.attribute == max_health.registry_id())
-        else {
-            return;
-        };
-        let amounts = |op: i32| {
-            s.modifiers
+        let value = |name: &str| {
+            let attribute = catalog.id(name)?;
+            let s = values
                 .iter()
-                .filter(move |m| m.operation == op)
-                .map(|m| m.amount)
+                .find(|s| s.attribute == attribute.registry_id())?;
+            let amounts = |op: i32| {
+                s.modifiers
+                    .iter()
+                    .filter(move |m| m.operation == op)
+                    .map(|m| m.amount)
+            };
+            let base = s.base + amounts(0).sum::<f64>();
+            let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
+            for amount in amounts(2) {
+                value *= 1.0 + amount;
+            }
+            Some(catalog.attribute(attribute).definition.sanitize(value))
         };
-        let base = s.base + amounts(0).sum::<f64>();
-        let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
-        for amount in amounts(2) {
-            value *= 1.0 + amount;
-        }
-        let value = catalog.attribute(max_health).definition.sanitize(value);
+        let (max_health, scale) = (value("minecraft:max_health"), value("minecraft:scale"));
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
-            horizon_client::mobs::finalize::set_base(
-                m,
-                horizon_client::mobs::finalize::Attr::MaxHealth,
-                value,
-            );
+            if let Some(max_health) = max_health {
+                horizon_client::mobs::finalize::set_base(
+                    m,
+                    horizon_client::mobs::finalize::Attr::MaxHealth,
+                    max_health,
+                );
+            }
+            if let Some(scale) = scale {
+                m.scale = scale as f32;
+            }
         }
     }
 
@@ -1889,6 +1899,15 @@ impl Game<'_> {
                     } else {
                         r.level_players.remove(&p.id);
                     }
+                    // RemotePlayer is made from the profile the player list has now.
+                    match r.skin_textures.get(&p.uuid) {
+                        Some(textures) if kind == "minecraft:player" => {
+                            r.entity_textures.insert(p.id, textures.clone());
+                        }
+                        _ => {
+                            r.entity_textures.remove(&p.id);
+                        }
+                    }
                 }
                 // Entity.getTeam: a mob is on a team by its UUID.
                 self.persist.uuids.insert(
@@ -1914,6 +1933,7 @@ impl Game<'_> {
                 for id in p.ids {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
+                        r.entity_textures.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -3101,19 +3121,60 @@ impl Game<'_> {
         let (value, signature) = profile.textures()?;
         Some(skins::unpack(&value, signature, &skins::TEXTURE_URIS))
     }
+    /// The local player's skin without a connection (the in-frame world):
+    /// the signed-in account's own skin once downloaded, else the default
+    /// skin of `uuid` (`DefaultPlayerSkin.get`). Also gives the player model
+    /// its skin, so third person and the inventory show it.
+    pub(super) fn update_local_skin(&mut self, uuid: u128) -> String {
+        let own = self.own_textures().and_then(|textures| {
+            let skin = {
+                let mut downloads = self.skin_downloads.borrow_mut();
+                horizon_client::skins::lookup(&textures, false, |kind, url| {
+                    downloads.state(kind, url)
+                })
+            }?;
+            self.again_skin(&skin).then_some((skin, textures.slim))
+        });
+        let (skin, slim) = own.unwrap_or_else(|| {
+            let skin = horizon_client::tab_list::default_skin(uuid);
+            (skin.to_owned(), skin.contains("/slim/"))
+        });
+        if let Some(mob) = self.player_model.as_mut() {
+            mob.skin = Some(skin.clone());
+            mob.slim = slim;
+        }
+        skin
+    }
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
     fn update_remote_skins(&mut self) {
-        let Some(r) = self.remote.as_ref() else {
+        let Some(r) = self.remote.as_mut() else {
             return;
         };
         let local = r.profile;
+        // getPlayerInfo caches the entry on the entity the first time it is
+        // found; a player that has left the list keeps the cached textures.
+        for (id, uuid) in &r.level_players {
+            if !r.entity_textures.contains_key(id)
+                && let Some(textures) = r.skin_textures.get(uuid)
+            {
+                r.entity_textures.insert(*id, textures.clone());
+            }
+        }
         let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()
             .map(|(uuid, textures)| (*uuid, textures.clone()))
             .collect();
+        for (id, textures) in &r.entity_textures {
+            if let Some(uuid) = r.level_players.get(id)
+                && !r.skin_textures.contains_key(uuid)
+                && !entries.iter().any(|(u, _)| u == uuid)
+            {
+                entries.push((*uuid, textures.clone()));
+            }
+        }
         // Minecraft.profileFuture: the signed-in account's own profile, fetched from the
         // services, gives the local player its skin where the server sends none (single
         // player's offline-mode server).

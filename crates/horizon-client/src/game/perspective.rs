@@ -231,7 +231,8 @@ impl Game<'_> {
                     m.kind.attributes.get(name).copied().unwrap_or(default)
                 };
                 (
-                    attribute("minecraft:scale", 1.0) as f32,
+                    // A server's mount carries its scale attribute on the mob.
+                    attribute("minecraft:scale", 1.0) as f32 * m.scale,
                     attribute("minecraft:camera_distance", 4.0),
                 )
             });
@@ -311,8 +312,15 @@ impl Game<'_> {
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
     pub(super) fn tick_player_model(&mut self) {
-        let Some(p) = self.player.as_ref() else {
+        let Some(scale) = self
+            .player
+            .as_mut()
+            .map(|p| p.attribute("minecraft:scale").unwrap_or(1.0) as f32)
+        else {
             self.player_model = None;
+            return;
+        };
+        let Some(p) = self.player.as_ref() else {
             return;
         };
         if self.player_model.is_none() {
@@ -429,6 +437,7 @@ impl Game<'_> {
         m.extra.swim.tick(visually_swimming, in_water);
         m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
+        m.scale = scale;
     }
     /// Whether the player's own model shows in the world view.
     fn player_model_shown(&self) -> bool {
@@ -522,6 +531,9 @@ impl Game<'_> {
         let x_angle = ((cx - self.cursor.0) / 40.0).atan();
         let y_angle = ((cy - self.cursor.1) / 40.0).atan();
         let mut m = m.clone();
+        // extractEntityInInventoryFollowsMouse draws at size / getScale(): the
+        // same size in the box whatever the scale attribute.
+        m.scale = 1.0;
         // The render state: still, facing out, the head toward the cursor.
         m.previous = m.position;
         m.body_yaw = 180.0 + x_angle * 20.0;

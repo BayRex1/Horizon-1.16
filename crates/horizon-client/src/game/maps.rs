@@ -281,6 +281,12 @@ pub(super) struct Maps {
     slots: Vec<(i32, usize)>,
     missing: std::collections::HashSet<i32>,
 }
+impl Maps {
+    /// A new atlas has blank map slots: every map draws into a slot again.
+    pub(super) fn forget_slots(&mut self) {
+        self.slots.clear();
+    }
+}
 /// `MapColor.getColorFromPackedId` as RGBA bytes (NONE is transparent).
 fn packed_rgba(packed: u8) -> [u8; 4] {
     let id = usize::from(packed >> 2);

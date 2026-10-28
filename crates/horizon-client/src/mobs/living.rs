@@ -388,7 +388,7 @@ impl Mob {
         let k = &self.kind;
         // Avatar.POSES: a player's or mannequin's box follows its pose.
         if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
-            let d = self.extra.avatar_pose.dimensions(1.0);
+            let d = self.extra.avatar_pose.dimensions(self.scale);
             return (
                 f64::from(d.width),
                 f64::from(d.height),
@@ -423,6 +423,10 @@ impl Mob {
         } else if self.extra.size > 0 {
             let s = self.extra.size as f32;
             (w, h, e) = (w * s, h * s, e * s);
+        }
+        // Entity.getDimensions: EntityDimensions.scale(getScale()).
+        if self.scale != 1.0 {
+            (w, h, e) = (w * self.scale, h * self.scale, e * self.scale);
         }
         (f64::from(w), f64::from(h), f64::from(e))
     }
