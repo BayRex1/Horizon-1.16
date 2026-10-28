@@ -246,6 +246,16 @@ impl TestGame {
             self.mods.block_broken(player, pos, state);
         }
     }
+    /// G3: `player` started using main-hand `item`.
+    pub fn item_use_start(&mut self, player: &ServerPlayer, item: &str) {
+        self.snapshot();
+        self.mods.item_use_start(player, item);
+    }
+    /// G3: `player` stopped using `item` after `ticks`.
+    pub fn item_use_stop(&mut self, player: &ServerPlayer, item: &str, ticks: u32) {
+        self.snapshot();
+        self.mods.item_use_stop(player, item, ticks);
+    }
 
     /// The scratch copy the mod runs from; its `storage` is beside it.
     pub fn hmod(&self) -> &Path {
@@ -362,11 +372,11 @@ pub struct ClockSet {
 
 /// One step. Its parts happen in this order: `reload`, `title-screen`,
 /// `blocks`, `join`, `player`, `clock`, `ticks`, `frames`, `chat`, `command`,
-/// `break`, `place`, `leave`; then the blocks the mod set are made, and
-/// `expect` is checked against what the mod showed and changed during the
-/// step. For a server mod, `player`, `chat`, `command`, `break`
-/// and `place` are the doing of the player named by `as`, or of the first
-/// player on.
+/// `break`, `place`, `use-start`, `use-stop`, `leave`; then the blocks the
+/// mod set are made, and `expect` is checked against what the mod showed and
+/// changed during the step. For a server mod, `player`, `chat`, `command`,
+/// `break`, `place`, `use-start` and `use-stop` are the doing of the player
+/// named by `as`, or of the first player on.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {
@@ -391,12 +401,25 @@ pub struct Step {
     #[serde(rename = "break")]
     broken: Option<BlockSet>,
     place: Option<BlockSet>,
+    /// G3: main-hand item id the actor starts using (`minecraft:bow`, ...).
+    use_start: Option<String>,
+    /// G3: stop use; `item` id and held `ticks` (default 0).
+    use_stop: Option<UseStopSet>,
     /// Blocks of the Overworld before the rest of the step (capability
     /// `world`); every other block is air.
     #[serde(default)]
     blocks: Vec<BlockSet>,
     #[serde(default)]
     expect: Expect,
+}
+
+/// G3 script key `use-stop = { item = "...", ticks = 20 }`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct UseStopSet {
+    item: String,
+    #[serde(default)]
+    ticks: u32,
 }
 
 /// What a step checks; a part left out is not checked.
@@ -547,7 +570,9 @@ impl Step {
             || self.chat.is_some()
             || self.command.is_some()
             || self.broken.is_some()
-            || self.place.is_some();
+            || self.place.is_some()
+            || self.use_start.is_some()
+            || self.use_stop.is_some();
         let actor = if server && acts {
             Some(actor(game)?)
         } else {
@@ -587,6 +612,12 @@ impl Step {
                 };
                 game.block(p, pos, &b.state, placed);
             }
+        }
+        if let (Some(item), Some(p)) = (&self.use_start, &who) {
+            game.item_use_start(p, item);
+        }
+        if let (Some(stop), Some(p)) = (&self.use_stop, &who) {
+            game.item_use_stop(p, &stop.item, stop.ticks);
         }
         if let Some(name) = &self.leave
             && !game.leave(name)

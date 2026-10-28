@@ -3,7 +3,7 @@ use crate::manifest::{Manifest, Package, Side};
 use server_bindings::{
     HorizonServerMod,
     exports::horizon::mods::server_events::Registration as ServerRegistration,
-    horizon::mods::{players, world as mod_world},
+    horizon::mods::{entities, players, world as mod_world},
 };
 use std::{
     path::{Path, PathBuf},
@@ -55,7 +55,8 @@ pub use server_bindings::{
     exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, ServerCommand,
     },
-    horizon::mods::players::{GameMode, Player as ServerPlayer},
+    horizon::mods::entities::{Aabb as EntityBox, Entity as ServerEntity},
+    horizon::mods::players::{GameMode, Player as ServerPlayer, PlayerEx as ServerPlayerEx},
     horizon::mods::world::BlockChange,
 };
 type ClientEvents = bindings::exports::horizon::mods::events::Guest;
@@ -152,8 +153,13 @@ pub struct Snapshot {
     /// The HUD font's advance per character from U+0000
     /// (`render.text-width`); empty: 6 each.
     pub font_widths: Arc<[f32]>,
-    /// The players on the server, for server mods.
+    /// The players on the server, for server mods (`online` / G2 `players-ex`).
     pub players: Vec<ServerPlayer>,
+    /// G2: look, velocity, team and held item (same order as `players`).
+    pub players_ex: Vec<ServerPlayerEx>,
+    /// G2: living entities the host filled for `entities.near` (empty: the
+    /// host synthesizes players from `players_ex` / `players`).
+    pub entities: Vec<ServerEntity>,
     /// The first block along the player's view within [`RAYCAST_MAX`] and
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
@@ -540,6 +546,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             players::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            entities::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             mod_world::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -893,6 +901,22 @@ impl Mods {
             FUEL_EVENT,
             |h| h.blocks,
             |m, s| m.call_block_placed(s, player, pos, state),
+        );
+    }
+    /// G3: `player` started using main-hand `item`.
+    pub fn item_use_start(&mut self, player: &ServerPlayer, item: &str) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.item_use,
+            |m, s| m.call_item_use_start(s, player, item),
+        );
+    }
+    /// G3: `player` stopped using `item` after `ticks`.
+    pub fn item_use_stop(&mut self, player: &ServerPlayer, item: &str, ticks: u32) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.item_use,
+            |m, s| m.call_item_use_stop(s, player, item, ticks),
         );
     }
     /// The commands running server mods own and their arguments, for the
@@ -1259,6 +1283,16 @@ impl Mods {
         std::mem::take(&mut self.out)
     }
 
+    /// True when a running mod with this id is a server mod (G1 console path).
+    pub fn is_server_mod(&self, id: &str) -> bool {
+        self.entries.iter().any(|e| {
+            e.run.is_some()
+                && e.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == id && m.side == Side::Server)
+        })
+    }
+
     /// Restarts the mods whose file changed since they loaded (mod
     /// development: rebuild, and the game picks it up). True when any did.
     pub fn reload_changed(&mut self, reserved: impl Fn(&str) -> bool) -> bool {
@@ -1597,6 +1631,33 @@ impl players::Host for State {
     fn online(&mut self) -> Vec<ServerPlayer> {
         self.snapshot.players.clone()
     }
+    fn players_ex(&mut self) -> Vec<ServerPlayerEx> {
+        if !self.snapshot.players_ex.is_empty() {
+            return self.snapshot.players_ex.clone();
+        }
+        // Sandbox / paths that only filled `online`: synthesize G2 fields.
+        self.snapshot
+            .players
+            .iter()
+            .map(|p| ServerPlayerEx {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                dimension: p.dimension.clone(),
+                game_mode: p.game_mode,
+                health: p.health,
+                yaw: 0.0,
+                pitch: 0.0,
+                vx: 0.0,
+                vy: 0.0,
+                vz: 0.0,
+                team: String::new(),
+                held: "minecraft:air".into(),
+            })
+            .collect()
+    }
     fn tell(&mut self, player: String, text: String) -> bool {
         self.snapshot.players.iter().any(|p| p.id == player)
             && self.say(|name| Output::Tell {
@@ -1612,6 +1673,70 @@ impl players::Host for State {
         });
     }
 }
+
+const ENTITIES_NEAR_MAX: usize = 256;
+
+impl entities::Host for State {
+    fn near(&mut self, dimension: String, area: EntityBox) -> Vec<ServerEntity> {
+        let in_box = |x: f64, y: f64, z: f64| {
+            x >= area.min_x
+                && x <= area.max_x
+                && y >= area.min_y
+                && y <= area.max_y
+                && z >= area.min_z
+                && z <= area.max_z
+        };
+        // Host fills `entities` for the dimension it last prepared; when empty,
+        // synthesize `minecraft:player` rows from `players_ex` / `players`.
+        let mut out: Vec<ServerEntity> = if !self.snapshot.entities.is_empty() {
+            self.snapshot
+                .entities
+                .iter()
+                .filter(|e| in_box(e.x, e.y, e.z))
+                .cloned()
+                .collect()
+        } else if !self.snapshot.players_ex.is_empty() {
+            self.snapshot
+                .players_ex
+                .iter()
+                .filter(|p| p.dimension == dimension && in_box(p.x, p.y, p.z))
+                .map(|p| ServerEntity {
+                    id: p.id.clone(),
+                    kind: "minecraft:player".into(),
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    yaw: p.yaw,
+                    pitch: p.pitch,
+                    vx: p.vx,
+                    vy: p.vy,
+                    vz: p.vz,
+                })
+                .collect()
+        } else {
+            self.snapshot
+                .players
+                .iter()
+                .filter(|p| p.dimension == dimension && in_box(p.x, p.y, p.z))
+                .map(|p| ServerEntity {
+                    id: p.id.clone(),
+                    kind: "minecraft:player".into(),
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    vx: 0.0,
+                    vy: 0.0,
+                    vz: 0.0,
+                })
+                .collect()
+        };
+        out.truncate(ENTITIES_NEAR_MAX);
+        out
+    }
+}
+
 /// A key a mod registered (capability `input`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModKey {

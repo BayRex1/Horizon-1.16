@@ -85,6 +85,12 @@ impl Game<'_> {
             return false;
         };
         self.mods.mods.use_start(&item);
+        // G3: server mods hear the same claimed use (in-frame / LAN host).
+        self.mod_item_use(
+            super::server_mods::Who::Local,
+            &item.id,
+            None,
+        );
         self.mods.using = Some(ModUse {
             item,
             since: self.ticks,
@@ -99,6 +105,12 @@ impl Game<'_> {
         };
         let ticks = self.ticks.saturating_sub(u.since).min(u64::from(u32::MAX)) as u32;
         self.mods.mods.use_stop(&u.item, ticks);
+        // G3: server mods hear the release.
+        self.mod_item_use(
+            super::server_mods::Who::Local,
+            &u.item.id,
+            Some(ticks),
+        );
         true
     }
     /// Once a tick: a claimed use stops when its item leaves the hand or a

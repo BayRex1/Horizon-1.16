@@ -473,7 +473,29 @@ impl Game<'_> {
             mappings,
             cps,
             font_widths: self.mods.font_widths.clone(),
+            players_ex: players
+                .iter()
+                .map(|p| horizon_mods::ServerPlayerEx {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    dimension: p.dimension.clone(),
+                    game_mode: p.game_mode,
+                    health: p.health,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    vx: 0.0,
+                    vy: 0.0,
+                    vz: 0.0,
+                    team: String::new(),
+                    held: "minecraft:air".into(),
+                })
+                .collect(),
             players,
+            // G2: client snapshots leave entities empty; server host fills for `entities.near`.
+            entities: Vec::new(),
             view_hit: self.mod_view_hit(),
             recipes,
             known_recipes,
@@ -582,6 +604,27 @@ impl Game<'_> {
             lines.len()
         );
     }
+    /// G1: a server mod's `command.run-quiet` as the server console
+    /// (`as_console`), full rights, no chat feedback.
+    fn server_mod_quiet_commands(&mut self, mod_id: String, lines: Vec<String>) {
+        let lines: Vec<String> = lines
+            .into_iter()
+            .filter(|l| vanilla_command(l.split(' ').next().unwrap_or_default()))
+            .collect();
+        if lines.is_empty() {
+            return;
+        }
+        self.as_console(|g| {
+            let mut failed = 0;
+            for line in &lines {
+                failed += usize::from(!g.run_command_quietly(line));
+            }
+            log::info!(
+                "[mod {mod_id}] ran {} quiet command(s) as console: {failed} failed",
+                lines.len()
+            );
+        });
+    }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
         // Here, at the player's level: shown inside a console call (a control
@@ -687,7 +730,12 @@ impl Game<'_> {
                     continue;
                 }
                 Output::QuietCommands { mod_id, lines } => {
-                    self.mod_quiet_commands(mod_id, lines);
+                    // G1: server mods run as the console; client mods as the player.
+                    if self.mods.mods.is_server_mod(&mod_id) {
+                        self.server_mod_quiet_commands(mod_id, lines);
+                    } else {
+                        self.mod_quiet_commands(mod_id, lines);
+                    }
                     continue;
                 }
                 Output::Stopped { name, reason } => {

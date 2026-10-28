@@ -29,6 +29,13 @@ pub(super) enum ModEvent {
         state: String,
         placed: bool,
     },
+    /// G3: main-hand item use start or stop.
+    ItemUse {
+        who: Who,
+        item: String,
+        /// None = start; Some(ticks) = stop after that many ticks held.
+        stop_ticks: Option<u32>,
+    },
 }
 
 #[cfg(not(feature = "mods"))]
@@ -36,6 +43,7 @@ impl Game<'_> {
     pub(super) fn tick_server_mods(&mut self) {}
     pub(super) fn mod_block_event(&mut self, _pos: [i32; 3], _state: BlockStateId, _placed: bool) {}
     pub(super) fn mod_player_chat(&mut self, _who: Who, _text: &str) {}
+    pub(super) fn mod_item_use(&mut self, _who: Who, _item: &str, _stop_ticks: Option<u32>) {}
     pub(super) fn local_server_mod_command(&mut self, _line: &str) -> bool {
         false
     }
@@ -236,6 +244,71 @@ mod run {
             out
         }
 
+        /// G2: [`Game::server_players`] plus look and velocity (from pose /
+        /// position delta). Team and held item stay empty / air until scoreboard
+        /// and inventory hooks land.
+        pub(in crate::game) fn server_players_ex(
+            &self,
+            host: Option<&LanHost>,
+        ) -> Vec<horizon_mods::ServerPlayerEx> {
+            let mut out = Vec::new();
+            if self.options.execution_role.is_client()
+                && self.remote.is_none()
+                && let Some(p) = &self.player
+            {
+                let v = p.velocity;
+                out.push(horizon_mods::ServerPlayerEx {
+                    id: self.player_uuid_string(),
+                    name: crate::game::chat::PLAYER_NAME.to_owned(),
+                    x: p.position.x,
+                    y: p.position.y,
+                    z: p.position.z,
+                    dimension: self.dim.id().to_owned(),
+                    game_mode: match self.mode {
+                        Mode::Survival => GameMode::Survival,
+                        Mode::Creative => GameMode::Creative,
+                        Mode::Adventure => GameMode::Adventure,
+                        Mode::Spectator => GameMode::Spectator,
+                    },
+                    health: p.health.health(),
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    vx: v.x,
+                    vy: v.y,
+                    vz: v.z,
+                    team: String::new(),
+                    held: "minecraft:air".into(),
+                });
+            }
+            let guests = host
+                .or(self.lan.as_ref())
+                .into_iter()
+                .flat_map(|h| &h.hub.guests);
+            out.extend(guests.filter(|g| g.placed).map(|g| {
+                let vx = g.position[0] - g.previous_position[0];
+                let vy = g.position[1] - g.previous_position[1];
+                let vz = g.position[2] - g.previous_position[2];
+                horizon_mods::ServerPlayerEx {
+                    id: uuid_string(g.uuid),
+                    name: g.name.clone(),
+                    x: g.position[0],
+                    y: g.position[1],
+                    z: g.position[2],
+                    dimension: g.dimension.clone(),
+                    game_mode: mode(g.game_mode),
+                    health: g.health,
+                    yaw: g.yaw,
+                    pitch: g.pitch,
+                    vx,
+                    vy,
+                    vz,
+                    team: String::new(),
+                    held: "minecraft:air".into(),
+                }
+            }));
+            out
+        }
+
         /// Whether what players do now reaches server mods: one is running
         /// and this game simulates the world.
         fn hears_players(&self) -> bool {
@@ -252,8 +325,22 @@ mod run {
             if !self.mods.server {
                 return;
             }
-            let players = self.server_players(None);
-            let snapshot = self.mod_snapshot_with(players.clone());
+            let players_ex = self.server_players_ex(None);
+            let players: Vec<ServerPlayer> = players_ex
+                .iter()
+                .map(|p| ServerPlayer {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    dimension: p.dimension.clone(),
+                    game_mode: p.game_mode,
+                    health: p.health,
+                })
+                .collect();
+            let mut snapshot = self.mod_snapshot_with(players.clone());
+            snapshot.players_ex = players_ex;
             self.mods.mods.set_snapshot(snapshot);
             self.lend_world();
             let before = std::mem::take(&mut self.mods.players);
@@ -304,6 +391,17 @@ mod run {
                             self.mods.mods.block_placed(&p, pos, &state);
                         } else {
                             self.mods.mods.block_broken(&p, pos, &state);
+                        }
+                    }
+                    ModEvent::ItemUse {
+                        who: w,
+                        item,
+                        stop_ticks,
+                    } => {
+                        let Some(p) = who(&w) else { continue };
+                        match stop_ticks {
+                            None => self.mods.mods.item_use_start(&p, &item),
+                            Some(ticks) => self.mods.mods.item_use_stop(&p, &item, ticks),
                         }
                     }
                 }
@@ -423,6 +521,23 @@ mod run {
         pub(in crate::game) fn mod_player_chat(&mut self, who: Who, text: &str) {
             if self.hears_players() {
                 self.mods.events.push(ModEvent::Chat(who, text.to_owned()));
+            }
+        }
+
+        /// G3: a player started (`stop_ticks = None`) or stopped using a
+        /// main-hand item.
+        pub(in crate::game) fn mod_item_use(
+            &mut self,
+            who: Who,
+            item: &str,
+            stop_ticks: Option<u32>,
+        ) {
+            if self.hears_players() {
+                self.mods.events.push(ModEvent::ItemUse {
+                    who,
+                    item: item.to_owned(),
+                    stop_ticks,
+                });
             }
         }
 

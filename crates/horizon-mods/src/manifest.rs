@@ -81,7 +81,8 @@ pub enum Capability {
     Chat,
     Hud,
     Storage,
-    /// Runs vanilla commands as the player, with the player's permissions.
+    /// Runs vanilla commands: as the player (client) or the server console
+    /// (server mod, G1).
     Command,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
@@ -97,6 +98,8 @@ pub enum Capability {
     Input,
     /// The players on the server and messages to them (server mods).
     Players,
+    /// Living entities in a box (server mods; G2 `entities.near`).
+    Entities,
     /// Blocks in the server's loaded chunks, and changes to them (server
     /// mods; client mods later, where the game runs the world).
     World,
@@ -105,7 +108,7 @@ pub enum Capability {
     Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 13] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -116,6 +119,7 @@ impl Capability {
         Capability::Render,
         Capability::Input,
         Capability::Players,
+        Capability::Entities,
         Capability::World,
         Capability::Recipes,
     ];
@@ -123,7 +127,11 @@ impl Capability {
     pub fn on_server(self) -> bool {
         matches!(
             self,
-            Capability::Storage | Capability::Players | Capability::World
+            Capability::Storage
+                | Capability::Players
+                | Capability::Entities // G2: entities.near
+                | Capability::World
+                | Capability::Command // G1: console run / run-quiet
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -139,6 +147,7 @@ impl Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Entities => "entities",
             Capability::World => "world",
             Capability::Recipes => "recipes",
         }
@@ -158,7 +167,9 @@ impl Capability {
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
-            Capability::Command => "run commands as you, with your permissions",
+            Capability::Command => {
+                "run vanilla commands (as you on the client, or as the server console)"
+            }
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
             Capability::Render => "draw on your screen, shake and zoom the camera",
@@ -166,6 +177,9 @@ impl Capability {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
             Capability::Players => "see who is on the server and message them",
+            Capability::Entities => {
+                "see living entities near a place on the server (players and mobs)"
+            }
             Capability::World => "read and change the world's blocks",
             Capability::Recipes => {
                 "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
@@ -209,6 +223,7 @@ impl fmt::Display for Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Entities => "entities",
             Capability::World => "world",
             Capability::Recipes => "recipes",
         };
@@ -247,11 +262,12 @@ impl Manifest {
                 "{MANIFEST}: a server mod is side = \"server\" with api = \"{SERVER_API}\", and only it"
             ));
         }
-        if let Some(c) = m
-            .capabilities
-            .iter()
-            .find(|c| c.on_server() != server && **c != Capability::Storage)
-        {
+        // Storage and Command are dual-side (client player-run / server console).
+        if let Some(c) = m.capabilities.iter().find(|c| {
+            c.on_server() != server
+                && **c != Capability::Storage
+                && **c != Capability::Command
+        }) {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
         }

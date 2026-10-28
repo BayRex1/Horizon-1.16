@@ -191,6 +191,8 @@ pub mod server {
         with: {
             "horizon:mods/log@0.1.0": crate::log,
             "horizon:mods/storage@0.1.0": crate::storage,
+            // G1: same WIT as client; host runs lines as the server console.
+            "horizon:mods/command@0.1.0": crate::command,
         },
     });
 
@@ -198,8 +200,11 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
-    pub use horizon::mods::players::{self, GameMode, Player};
+    pub use horizon::mods::entities::{self, Aabb as EntityBox, Entity};
+    pub use horizon::mods::players::{self, GameMode, Player, PlayerEx};
     pub use horizon::mods::world::{self, BlockChange};
+    /// G1: `run` / `run-quiet` as the server console (re-export of the shared interface).
+    pub use crate::command;
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
     /// for are called; the others may stay as their defaults.
@@ -228,6 +233,9 @@ pub mod server {
         /// When [`Registration::blocks`] is set: `state` is what was there.
         fn block_broken(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
         fn block_placed(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
+        /// G3: when [`Registration::item_use`] is set.
+        fn item_use_start(&mut self, _player: &Player, _item: &str) {}
+        fn item_use_stop(&mut self, _player: &Player, _item: &str, _ticks: u32) {}
     }
 
     impl Registration {
@@ -239,6 +247,7 @@ pub mod server {
                 joins: false,
                 chat: false,
                 blocks: false,
+                item_use: false,
             }
         }
         /// Adds `/name`, taking free text ([`Args::text`]): one optional
@@ -274,6 +283,11 @@ pub mod server {
         }
         pub fn on_blocks(mut self) -> Self {
             self.blocks = true;
+            self
+        }
+        /// G3: `item_use_start` / `item_use_stop`.
+        pub fn on_item_use(mut self) -> Self {
+            self.item_use = true;
             self
         }
     }
@@ -436,6 +450,12 @@ macro_rules! export_server_mod {
                 }
                 fn block_placed(player: Player, pos: BlockPos, state: String) {
                     with(|m| m.block_placed(&player, pos, &state))
+                }
+                fn item_use_start(player: Player, item: String) {
+                    with(|m| m.item_use_start(&player, &item))
+                }
+                fn item_use_stop(player: Player, item: String, ticks: u32) {
+                    with(|m| m.item_use_stop(&player, &item, ticks))
                 }
             }
             #[cfg(target_arch = "wasm32")]

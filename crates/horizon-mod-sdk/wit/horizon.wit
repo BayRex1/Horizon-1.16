@@ -105,19 +105,23 @@ interface storage {
     delete: func(key: string);
 }
 
-/// Capability `command`: vanilla commands run as the player, with the
-/// player's permissions, after the hook call returns (8 per call). A mod's
-/// own commands are not run this way.
+/// Capability `command`: vanilla commands after the hook call returns
+/// (8 per `run`, 256 per `run-quiet`). A mod's own commands are not run
+/// this way. On a **client** mod they run as the local player with that
+/// player's permissions. On a **server** mod (G1) they run as the server
+/// console (full rights), so teams, kits, `/damage`, particles and TNT
+/// work without a player proxy.
 interface command {
-    /// `line` without its slash; its feedback goes to the chat as if typed.
+    /// `line` without its slash; its feedback goes to the chat as if typed
+    /// (client) or is logged (server console).
     run: func(line: string);
     /// `lines` (each without its slash, at most 256 a call) as `run` does,
     /// but with nothing in the chat: no feedback and no failure. In single
-    /// player and on Horizon's servers, each runs exactly as the player
-    /// typing it would (the same rights), in order, 64 a tick, and the
-    /// server logs one line a batch; one that carries a chat message (`say`,
-    /// `msg`) is refused. On any other server they go as chat commands, and
-    /// there their feedback shows: a mod running many should say so.
+    /// player and on Horizon's servers, each runs in order, 64 a tick, and
+    /// the server logs one line a batch; one that carries a chat message
+    /// (`say`, `msg`) is refused. Client mods: as the player. Server mods:
+    /// as the console. On any other server client mods send them as chat
+    /// commands (feedback shows).
     run-quiet: func(lines: list<string>);
 }
 
@@ -654,14 +658,73 @@ interface players {
         /// Hit points as vanilla counts them: 20 is full health without effects.
         health: f32,
     }
+    /// G2: look, motion and loadout for aiming / lag-comp (extends `player`).
+    record player-ex {
+        id: string,
+        name: string,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimension: string,
+        game-mode: game-mode,
+        health: f32,
+        /// Degrees, vanilla yaw (0 = south).
+        yaw: f32,
+        /// Degrees, vanilla pitch (−90..90).
+        pitch: f32,
+        /// Blocks per tick.
+        vx: f64,
+        vy: f64,
+        vz: f64,
+        /// Scoreboard team name, or empty.
+        team: string,
+        /// Main-hand item id (`minecraft:air` if empty).
+        held: string,
+    }
     /// The players online, in the order they joined.
     online: func() -> list<player>;
+    /// G2: same players as `online`, with look, velocity, team and held item.
+    players-ex: func() -> list<player-ex>;
     /// A system message to one player, after the mod's name; false when no
     /// player with that id is online. Up to 8 messages per call.
     tell: func(player: string, text: string) -> bool;
     /// A system message to every player and the server's log, after the
     /// mod's name. Counts toward the same 8 per call.
     broadcast: func(text: string);
+}
+
+/// Capability `entities`, server mods only (manifest `api = "0.3"`,
+/// experimental; G2): living entities in a box (players and mobs the server
+/// currently simulates). Players also appear in `players.players-ex`.
+interface entities {
+    /// Axis-aligned box in block coordinates (inclusive of the edges).
+    record aabb {
+        min-x: f64,
+        min-y: f64,
+        min-z: f64,
+        max-x: f64,
+        max-y: f64,
+        max-z: f64,
+    }
+    record entity {
+        /// UUID string for a player, or a stable id for a mob.
+        id: string,
+        /// Registry id: `minecraft:player`, `minecraft:zombie`, ...
+        kind: string,
+        x: f64,
+        y: f64,
+        z: f64,
+        /// Degrees, vanilla yaw (0 = south).
+        yaw: f32,
+        /// Degrees, vanilla pitch (−90..90).
+        pitch: f32,
+        /// Blocks per tick.
+        vx: f64,
+        vy: f64,
+        vz: f64,
+    }
+    /// Entities whose feet are inside `area` in `dimension`, at most 256.
+    near: func(dimension: string, area: aabb) -> list<entity>;
 }
 
 /// Capability `world`, server mods only (manifest `api = "0.3"`,
@@ -760,6 +823,8 @@ interface server-events {
         chat: bool,
         /// Call `block-broken` and `block-placed`.
         blocks: bool,
+        /// Call `item-use-start` and `item-use-stop` (G3).
+        item-use: bool,
     }
     /// Once, after loading. An error keeps the mod off and is logged.
     init: func() -> result<registration, string>;
@@ -781,6 +846,12 @@ interface server-events {
     block-broken: func(player: player, pos: block-pos, state: string);
     /// A player placed `state` at `pos` in their dimension.
     block-placed: func(player: player, pos: block-pos, state: string);
+    /// G3: the player started using `item` (main-hand id, e.g. `minecraft:bow`
+    /// or `omaha:garand`). Vanilla may still run unless a client mod claimed it.
+    item-use-start: func(player: player, item: string);
+    /// G3: use ended (release, item change, or screen); `ticks` is how long
+    /// the button was held (0 if never started on this server).
+    item-use-stop: func(player: player, item: string, ticks: u32);
 }
 
 /// A client mod: runs in the player's game.
@@ -801,7 +872,11 @@ world horizon-server-mod {
     import log;
     import storage;
     import players;
+    /// G2: entities in a box (players and mobs).
+    import entities;
     import %world;
+    /// G1: vanilla commands as the server console (`run` / `run-quiet`).
+    import command;
     export server-events;
 }
 
