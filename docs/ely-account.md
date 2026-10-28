@@ -5,7 +5,7 @@ game joins servers that check players against Ely.by's session server. It reuses
 sign-in's device-code flow, keychain and session file ([docs/microsoft-account.md](microsoft-account.md));
 this note lists what differs. The way ElyPrismLauncher signs in is the reference for the endpoints.
 
-## What Ludovic registers (needs his account)
+## What the maintainer registers (needs their account)
 
 An agent can't do this: the application belongs to a person's Ely.by account.
 
@@ -42,7 +42,7 @@ ElyPrismLauncher uses.
 
 ## The owner gate and the download
 
-Decided 2026-10-28 (the contributor adding it): an Ely.by account passes the owner gate. There is no
+Decided 2026-10-28 with the contributor adding it: an Ely.by account passes the owner gate. There is no
 ownership to ask Ely.by about, so the check at every Play is that the token (renewed if due) still
 gets the account's own profile; no network keeps the last answer, as for Microsoft.
 
