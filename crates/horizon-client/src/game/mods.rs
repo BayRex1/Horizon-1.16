@@ -264,11 +264,7 @@ impl Game<'_> {
         self.list_native_mods();
     }
     pub(super) fn merge_remote_tree(&mut self) {}
-    pub(super) fn sync_mods(&mut self) {
-        self.mods
-            .mods
-            .set_microphone_permissions(&self.settings.mods.microphones);
-    }
+    pub(super) fn sync_mods(&mut self) {}
     pub(super) fn tick_mods(&mut self) {}
     pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
     pub(super) fn mod_command(&mut self, _command: &str) -> bool {
