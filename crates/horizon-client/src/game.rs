@@ -1557,6 +1557,9 @@ struct Game<'a> {
     riding_cart_sounds: Option<u32>,
     /// Bees whose buzz is playing, and whether it is the aggressive one.
     bee_sounds: HashMap<u32, bool>,
+    /// The player was gliding at the last sound tick (the elytra's loop
+    /// starts when gliding does).
+    elytra_sound: bool,
     /// Guardians whose attack hum is playing.
     guardian_sounds: HashSet<u32>,
     dropped: Vec<ItemEntity>,
@@ -13761,6 +13764,7 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
+            elytra_sound: false,
             bee_sounds: HashMap::new(),
             guardian_sounds: HashSet::new(),
             dropped: Vec::new(),

@@ -58,6 +58,8 @@ pub enum Ticking {
     Bee { bee: u32, aggressive: bool },
     /// `GuardianAttackSoundInstance`.
     GuardianAttack { guardian: u32 },
+    /// `ElytraOnPlayerSoundInstance`, `time` ticks old.
+    Elytra { time: i32 },
 }
 /// What a minecart's sound instances read about it.
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +97,11 @@ pub struct TickContext {
     pub mobs: Vec<MobSound>,
     /// `!tickRateManager().runsNormally()`.
     pub frozen: bool,
+    /// The player's position, `getDeltaMovement().lengthSqr()` and
+    /// `isFallFlying`.
+    pub player_position: [f64; 3],
+    pub player_speed_sqr: f32,
+    pub player_fall_flying: bool,
 }
 /// `AbstractSoundInstance` and its subclasses' fields.
 #[derive(Clone, Debug)]
@@ -369,6 +376,24 @@ impl SoundInstance {
         };
         s
     }
+    /// `new ElytraOnPlayerSoundInstance(player)`: a loop that stays silent
+    /// for its first second.
+    pub fn elytra(random: LegacyRandom) -> Self {
+        let mut s = Self::new(
+            "minecraft:item.elytra.flying",
+            PLAYERS,
+            0.1,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::Linear,
+            [0.0; 3],
+            false,
+        );
+        s.ticking = Ticking::Elytra { time: 0 };
+        s
+    }
     /// `new GuardianAttackSoundInstance(guardian)`: the guardian's own volume
     /// and pitch until its first tick, heard everywhere.
     pub fn guardian_attack(guardian: &MobSound, random: LegacyRandom) -> Self {
@@ -511,6 +536,36 @@ impl SoundInstance {
                 let scale = guardian.attack_scale;
                 self.volume = 0.0 + 1.0 * scale * scale;
                 self.pitch = 0.7 + 0.5 * scale;
+            }
+            Ticking::Elytra { time } => {
+                *time += 1;
+                let time = *time;
+                if ctx.player_removed || (time > 20 && !ctx.player_fall_flying) {
+                    self.stop();
+                    return;
+                }
+                let [x, y, z] = ctx.player_position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                let speed = ctx.player_speed_sqr;
+                self.volume = if speed >= 1.0e-7 {
+                    (speed / 4.0).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                if time < 20 {
+                    self.volume = 0.0;
+                } else if time < 40 {
+                    self.volume *= (time - 20) as f32 / 20.0;
+                }
+                self.pitch = if self.volume > 0.8 {
+                    1.0 + (self.volume - 0.8)
+                } else {
+                    1.0
+                };
             }
             Ticking::RidingMinecart { cart, underwater } => {
                 let (id, underwater) = (*cart, *underwater);
