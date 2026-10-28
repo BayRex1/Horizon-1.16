@@ -1821,13 +1821,9 @@ struct Game<'a> {
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
-    /// The item indices a hopper's column holds, reused across hoppers.
-    item_candidates: Vec<u32>,
     /// `tick_items`'s removed mask and cell grid, reused across ticks.
     item_removed: Vec<bool>,
     item_cells: horizon_client::entities::ItemCells,
-    /// The trial spawners' uuid → entity index, rebuilt once per tick.
-    trial_uuid_index: std::cell::RefCell<trial_spawner::UuidIndex>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
@@ -13984,10 +13980,8 @@ impl<'a> Game<'a> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             item_columns: None,
-            item_candidates: Vec::new(),
             item_removed: Vec::new(),
             item_cells: Default::default(),
-            trial_uuid_index: Default::default(),
             creative_screen: prepared.creative_screen,
             control: None,
             agent_control_on: false,
