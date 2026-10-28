@@ -1716,6 +1716,18 @@ struct Game<'a> {
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
     tickets: horizon_client::ticket_levels::ChunkTickets,
     random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
+    /// `world.chunks` keys with random ticks, in the map's order, and the
+    /// (membership revision, ticket generation, lit chunks) they were built
+    /// for. The order is the RNG stream, so it must stay the map's.
+    random_ticking: Vec<(i32, i32)>,
+    random_ticking_key: Option<(u64, u64, usize)>,
+    /// The ticket sources of the last tick, reused so an unchanged set costs
+    /// no allocation or sort.
+    ticket_sources: Option<horizon_client::ticket_levels::Sources>,
+    /// `tick_blocks`'s entity-trigger boxes and positions, reused.
+    trigger_inside: Vec<BlockPos>,
+    trigger_standing: Vec<(BlockPos, bool, f64)>,
+    trigger_touched: Vec<BlockPos>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
@@ -1809,6 +1821,13 @@ struct Game<'a> {
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
+    /// The item indices a hopper's column holds, reused across hoppers.
+    item_candidates: Vec<u32>,
+    /// `tick_items`'s removed mask and cell grid, reused across ticks.
+    item_removed: Vec<bool>,
+    item_cells: horizon_client::entities::ItemCells,
+    /// The trial spawners' uuid → entity index, rebuilt once per tick.
+    trial_uuid_index: std::cell::RefCell<trial_spawner::UuidIndex>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
@@ -2663,8 +2682,11 @@ impl Game<'_> {
         let mut items = std::mem::take(&mut self.dropped);
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
-        let mut removed = vec![false; items.len()];
-        let mut cells = horizon_client::entities::ItemCells::new(&items);
+        let mut removed = std::mem::take(&mut self.item_removed);
+        removed.clear();
+        removed.resize(items.len(), false);
+        let mut cells = std::mem::take(&mut self.item_cells);
+        cells.rebuild(&items);
         let catalog = self.res.items();
         let max_stack =
             |stack: &ItemStack| catalog.get(&stack.item).map_or(64, |i| i.max_stack).max(1);
@@ -2752,8 +2774,12 @@ impl Game<'_> {
                 cells.remove(i, item.position);
             }
         }
-        let mut removed = removed.into_iter();
-        items.retain(|_| !removed.next().unwrap_or(false));
+        {
+            let mut flags = removed.drain(..);
+            items.retain(|_| !flags.next().unwrap_or(false));
+        }
+        self.item_removed = removed;
+        self.item_cells = cells;
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
             return;
@@ -3017,30 +3043,37 @@ impl Game<'_> {
     /// chunks. A game with neither a server nor a player (the headless
     /// fixtures) ticks everywhere.
     fn update_chunk_tickets(&mut self) {
-        let mut players: Vec<(i32, i32)> = self.lan.as_ref().map_or_else(Vec::new, |h| {
-            h.hub
-                .guests
-                .iter()
-                .filter(|g| h.hub.here(g))
-                .map(|g| g.chunk())
-                .collect()
-        });
+        let sources = self
+            .ticket_sources
+            .get_or_insert_with(horizon_client::ticket_levels::Sources::default);
+        sources.players.clear();
+        if let Some(h) = &self.lan {
+            sources.players.extend(
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| h.hub.here(g))
+                    .map(|g| g.chunk()),
+            );
+        }
         if let Some(p) = &self.player {
-            players.push((
+            sources.players.push((
                 (p.position.x.floor() as i32) >> 4,
                 (p.position.z.floor() as i32) >> 4,
             ));
         }
-        let sources =
-            (!self.options.execution_role.is_client() || !players.is_empty()).then(|| {
-                horizon_client::ticket_levels::Sources {
-                    players,
-                    forced: self.streaming.forced.iter().copied().collect(),
-                    view_distance: self.settings.render_distance.clamp(2, 32),
-                    simulation_distance: self.settings.simulation_distance.max(2),
-                }
-            });
-        self.tickets.update(sources);
+        sources.forced.clear();
+        sources.forced.extend(self.streaming.forced.iter().copied());
+        sources.view_distance = self.settings.render_distance.clamp(2, 32);
+        sources.simulation_distance = self.settings.simulation_distance.max(2);
+        sources.players.sort_unstable();
+        sources.players.dedup();
+        sources.forced.sort_unstable();
+        let active = !self.options.execution_role.is_client() || !sources.players.is_empty();
+        let current = active.then_some(&*sources);
+        if !self.tickets.matches(current) {
+            self.tickets.update(current.cloned());
+        }
     }
     /// `ServerLevel.startTickingChunk`: a loaded chunk's saved ticks are
     /// scheduled from the game time at which it becomes a ticking chunk
@@ -3053,7 +3086,7 @@ impl Game<'_> {
             .tick_chunks
             .start_ticking(|(x, z)| levels.loaded_ticking(x, z) && ticking_chunk(world, x, z));
         let time = self.world.game_time - 1;
-        for (x, z) in started {
+        for &(x, z) in started {
             let pos = horizon_core::position::ChunkPos::new(x, z);
             self.block_ticks.blocks.unpack_chunk(pos, time);
             self.block_ticks.fluids.unpack_chunk(pos, time);
@@ -3066,19 +3099,29 @@ impl Game<'_> {
         self.start_ticking_chunks();
         let levels = self.tickets.levels();
         // Keep the world map's chunk order, including empty chunks
-        // (tick_chunk_random still draws for precipitation in those).
-        let ticking: Vec<_> = self
-            .world
-            .chunks
-            .keys()
-            .copied()
-            .filter(|&(x, z)| levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z))
-            .collect();
+        // (tick_chunk_random still draws for precipitation in those): the
+        // list is the RNG stream, so rebuild it only when its inputs change.
+        let key = (
+            self.world.chunks.membership_revision(),
+            self.tickets.generation(),
+            self.streaming.lit_count(),
+        );
+        if self.random_ticking_key != Some(key) {
+            self.random_ticking_key = Some(key);
+            self.random_ticking.clear();
+            self.random_ticking.extend(
+                self.world.chunks.keys().copied().filter(|&(x, z)| {
+                    levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z)
+                }),
+            );
+        }
+        let ticking = std::mem::take(&mut self.random_ticking);
         // Entity.checkInsideBlocks for the plates, tripwires, detector rails and
         // buttons under the players (the host and the LAN guests), the minecarts
         // and the arrows (the mobs and other entities are added in `with_level`
         // below).
-        let mut inside = Vec::new();
+        let mut inside = std::mem::take(&mut self.trigger_inside);
+        inside.clear();
         let guests = self.lan_block_trigger_boxes();
         let boxes = self
             .player
@@ -3130,7 +3173,8 @@ impl Game<'_> {
         // BigDripleafBlock.entityInside also asks whether the player stands on
         // the ground and how high its feet are: the leaves its box's feet
         // layer is inside (the host and the LAN guests).
-        let mut standing = Vec::new();
+        let mut standing = std::mem::take(&mut self.trigger_standing);
+        standing.clear();
         let feet = self
             .player
             .iter()
@@ -3155,9 +3199,10 @@ impl Game<'_> {
                 }
             }
         }
+        let mut touched = std::mem::take(&mut self.trigger_touched);
+        touched.clear();
         self.with_level(|b, level, ticks| {
             // The mobs and the other entities (items, orbs, projectiles...) too.
-            let mut touched: Vec<BlockPos> = Vec::new();
             for bounds in level.mob_trigger_boxes().chain(level.other_trigger_boxes()) {
                 let (lo, hi) = (bounds.min_position(), bounds.max_position());
                 for x in (lo.x + 1e-7).floor() as i32..=(hi.x - 1e-7).floor() as i32 {
@@ -3170,17 +3215,20 @@ impl Game<'_> {
             }
             touched.sort_unstable_by_key(|p| (p.x, p.y, p.z));
             touched.dedup();
-            for pos in inside.into_iter().chain(touched) {
+            for pos in inside.drain(..).chain(touched.drain(..)) {
                 b.entity_inside(level, ticks, pos);
             }
-            for (pos, on_ground, feet_y) in standing {
+            for (pos, on_ground, feet_y) in standing.drain(..) {
                 b.entity_on_big_dripleaf(level, ticks, pos, on_ground, feet_y);
             }
         });
+        self.trigger_inside = inside;
+        self.trigger_standing = standing;
+        self.trigger_touched = touched;
         self.process_level_events()?;
         self.tick_scheduled()?;
         self.with_level(|b, level, ticks| {
-            for (x, z) in ticking {
+            for &(x, z) in &ticking {
                 // The sections are read again only after a block changed.
                 let mut read = None;
                 let mut sections = Default::default();
@@ -3202,6 +3250,7 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        self.random_ticking = ticking;
         // `PistonMovingBlockEntity.tick` pushes what its block just ran into,
         // with the progress it is about to take.
         let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
@@ -3250,10 +3299,12 @@ impl Game<'_> {
     }
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
-        let events = std::mem::take(&mut self.level_events);
+        // Drain the batch, keeping its allocation: events pushed while it
+        // runs land in `level_events` and go after it, as before.
+        let mut events = std::mem::take(&mut self.level_events);
         self.lan_record_events(&events);
         dispense_fixture::record_events(&events);
-        for event in events {
+        for event in events.drain(..) {
             match event {
                 LevelEvent::LevelEvent {
                     id: 2001,
@@ -3662,6 +3713,8 @@ impl Game<'_> {
                 | LevelEvent::BlockEvent { .. } => {}
             }
         }
+        events.append(&mut self.level_events);
+        self.level_events = events;
         Ok(())
     }
     /// Menus opened by PlayerEffect::OpenMenu.
@@ -13861,6 +13914,12 @@ impl<'a> Game<'a> {
             tick_chunks: Default::default(),
             tickets: Default::default(),
             random_tick_sections: Default::default(),
+            random_ticking: Vec::new(),
+            random_ticking_key: None,
+            ticket_sources: None,
+            trigger_inside: Vec::new(),
+            trigger_standing: Vec::new(),
+            trigger_touched: Vec::new(),
             level_events: Vec::new(),
             falling: Vec::new(),
             paintings: Vec::new(),
@@ -13925,6 +13984,10 @@ impl<'a> Game<'a> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             item_columns: None,
+            item_candidates: Vec::new(),
+            item_removed: Vec::new(),
+            item_cells: Default::default(),
+            trial_uuid_index: Default::default(),
             creative_screen: prepared.creative_screen,
             control: None,
             agent_control_on: false,

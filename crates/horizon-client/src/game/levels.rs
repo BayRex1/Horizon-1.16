@@ -210,6 +210,9 @@ impl Game<'_> {
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
         swap(&mut self.tickets, &mut p.tickets);
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);
+        // The random-tick list is in place, not per level: its key could match
+        // another level's.
+        self.random_ticking_key = None;
         swap(&mut self.level_events, &mut p.level_events);
         swap(&mut self.falling, &mut p.falling);
         swap(&mut self.paintings, &mut p.paintings);

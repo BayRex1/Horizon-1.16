@@ -838,6 +838,11 @@ impl Streaming {
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
     }
+    /// How many chunks have their light: it grows as chunks are lit and falls
+    /// only when a column unloads, so a cache of what ticks sees every change.
+    pub fn lit_count(&self) -> usize {
+        self.lit.len()
+    }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
     pub fn latest_status(
