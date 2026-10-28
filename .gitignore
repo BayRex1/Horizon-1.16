@@ -1,5 +1,6 @@
 /.local/
 /target/
+/mods/test_core/target
 **/__pycache__/
 *.py[cod]
 /.venv/

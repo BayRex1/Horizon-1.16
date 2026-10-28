@@ -8,9 +8,15 @@
 pub mod api_level;
 #[cfg(feature = "runtime")]
 pub mod commands;
+pub mod container;
 pub mod content;
+pub mod context;
+pub mod dependency;
+pub mod dist;
+pub mod event_bus;
 #[cfg(feature = "index")]
 pub mod index;
+pub mod lifecycle;
 pub mod manifest;
 pub mod modpack;
 #[cfg(feature = "runtime")]
@@ -18,7 +24,13 @@ mod runtime;
 #[cfg(feature = "runtime")]
 pub mod testing;
 
+pub use container::{ModContainer, ModDependency, ModState};
 pub use content::Content;
+pub use context::ModLoadingContext;
+pub use dependency::{DependencyError, DependencyResolver};
+pub use dist::Dist;
+pub use event_bus::{Event, EventBus, ModLoadEvent, TickEvent};
+pub use lifecycle::{LifecycleManager, LoadingStage};
 pub use manifest::{Capability, Manifest, Package, Side, find};
 #[cfg(feature = "runtime")]
 pub use runtime::*;

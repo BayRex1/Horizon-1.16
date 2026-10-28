@@ -1,5 +1,9 @@
 //! Loading and calling mods with wasmtime's component model.
-use crate::manifest::{Manifest, Package, Side};
+use crate::{
+    container::{ModContainer, ModState},
+    event_bus::{EventBus, ModLoadEvent, TickEvent},
+    manifest::{Manifest, Package, Side},
+};
 use server_bindings::{
     HorizonServerMod,
     exports::horizon::mods::server_events::Registration as ServerRegistration,
@@ -290,6 +294,8 @@ pub struct Entry {
     pub path: PathBuf,
     /// None when the manifest could not be read (`status` says why).
     pub manifest: Option<Manifest>,
+    /// NeoForge-style mod container
+    pub container: Option<ModContainer>,
     pub status: Status,
     /// The mod's average time per call of its busiest hook.
     pub cost: Duration,
@@ -441,9 +447,21 @@ pub struct Mods {
     /// Moves on whenever a mod starts or stops: the game resends the server
     /// mods' commands to players when it changes.
     generation: u64,
+    /// NeoForge-style event bus
+    event_bus: Arc<EventBus>,
 }
 
 impl Mods {
+    /// Get the event bus
+    pub fn event_bus(&self) -> &Arc<EventBus> {
+        &self.event_bus
+    }
+
+    /// Post an event to the bus
+    pub fn post_event<E: crate::event_bus::Event>(&self, event: &E) {
+        self.event_bus.post(event);
+    }
+
     /// Changes whenever the running mods (so their commands) change.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -495,6 +513,7 @@ impl Mods {
             let mut entry = Entry {
                 path: path.clone(),
                 manifest: None,
+                container: None,
                 status: Status::Off,
                 cost: Duration::ZERO,
                 run: None,
@@ -505,8 +524,15 @@ impl Mods {
                 Ok(package) => {
                     let on = enabled(&package.manifest.id);
                     entry.manifest = Some(package.manifest.clone());
+                    // Create mod container
+                    let mut container = ModContainer::from_manifest(package.manifest.clone(), path.clone());
+                    container.set_state(ModState::Validated);
+                    entry.container = Some(container);
                     if on && !runs.starts(package.manifest.side) {
                         entry.status = Status::Elsewhere;
+                        if let Some(c) = entry.container.as_mut() {
+                            c.set_state(ModState::Disabled);
+                        }
                     } else if on {
                         // Content is read before the world loads; a mod whose
                         // content is refused stays off, with the reason.
@@ -515,9 +541,17 @@ impl Mods {
                             match content.and_then(|_| mods.start(path, &package, &reserved)) {
                                 Ok(run) => {
                                     entry.run = run;
+                                    if let Some(c) = entry.container.as_mut() {
+                                        c.set_state(ModState::Loaded);
+                                    }
                                     Status::Running
                                 }
-                                Err(e) => Status::Failed(e),
+                                Err(e) => {
+                                    if let Some(c) = entry.container.as_mut() {
+                                        c.set_state(ModState::Errored(e.clone()));
+                                    }
+                                    Status::Failed(e)
+                                }
                             };
                     }
                 }
@@ -526,6 +560,14 @@ impl Mods {
                 log::warn!("Horizon: mod {} did not start: {reason}", m.id);
             }
             mods.entries.push(entry);
+        }
+        // Post mod load events
+        for entry in &mods.entries {
+            if entry.status == Status::Running {
+                if let Some(c) = &entry.container {
+                    mods.event_bus.post(&ModLoadEvent { mod_id: c.id.clone() });
+                }
+            }
         }
         mods
     }
@@ -802,6 +844,7 @@ impl Mods {
 
     /// A game tick.
     pub fn tick(&mut self, tick: u64) {
+        self.event_bus.post(&TickEvent { tick });
         self.each_client(FUEL_TICK, |h| h.tick, |m, s| m.call_tick(s, tick));
     }
     /// A rendered frame, `seconds` after the last.
