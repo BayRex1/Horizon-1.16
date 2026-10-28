@@ -471,7 +471,6 @@ fn build_overlay_uncached(
         files: &BTreeMap<String, (usize, Provided)>,
         merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
-        zips: &[Option<Zip>],
         dependencies: &mut cache::Dependencies,
         extract: &mut Vec<(PathBuf, usize, String)>,
     ) -> io::Result<()> {
@@ -529,7 +528,6 @@ fn build_overlay_uncached(
                     files,
                     merged,
                     filters,
-                    zips,
                     dependencies,
                     extract,
                 )?;
@@ -554,7 +552,6 @@ fn build_overlay_uncached(
         &files,
         &merged,
         &filters,
-        &zips,
         dependencies,
         &mut extract,
     )?;
