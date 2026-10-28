@@ -278,6 +278,69 @@ impl ServerTickRateManager {
 const SPRINT_PER_FRAME: i64 = 40;
 const SAMPLES: usize = 100;
 
+/// Vanilla `MinecraftServer`'s overload gate: a warning when the deadline is
+/// more than a second plus 20 ticks behind, at most every ten seconds plus
+/// 100 ticks (`OVERLOADED_THRESHOLD_NANOS` and its siblings). Shared by the
+/// frame's dropped ticks and a server thread's late deadlines, so the same
+/// stall is warned about once.
+#[derive(Clone, Debug, Default)]
+pub struct Overload {
+    /// Ticks the in-frame path dropped since the last warning.
+    dropped: u32,
+    /// The caller's clock when the last warning was due; none yet.
+    last_warning: Option<std::time::Duration>,
+}
+
+impl Overload {
+    /// The frame skipped `ticks` at `now`.
+    pub fn drop_ticks(
+        &mut self,
+        ticks: u32,
+        tick: std::time::Duration,
+        now: std::time::Duration,
+    ) -> Option<String> {
+        self.dropped = self.dropped.saturating_add(ticks);
+        let behind = tick * self.dropped;
+        let warning = self.warning(behind, self.dropped, tick, now);
+        if warning.is_some() {
+            self.dropped = 0;
+        }
+        warning
+    }
+
+    /// A server thread's deadline is `behind` (about `ticks` of it) at `now`.
+    pub fn late(
+        &mut self,
+        behind: std::time::Duration,
+        ticks: u32,
+        tick: std::time::Duration,
+        now: std::time::Duration,
+    ) -> Option<String> {
+        self.warning(behind, ticks, tick, now)
+    }
+
+    fn warning(
+        &mut self,
+        behind: std::time::Duration,
+        ticks: u32,
+        tick: std::time::Duration,
+        now: std::time::Duration,
+    ) -> Option<String> {
+        let threshold = std::time::Duration::from_secs(1) + tick * 20;
+        let interval = std::time::Duration::from_secs(10) + tick * 100;
+        if behind <= threshold || self.last_warning.is_some_and(|last| now < last + interval) {
+            return None;
+        }
+        let warning = format!(
+            "Can't keep up! Is the server overloaded? Running {}ms or {} ticks behind",
+            behind.as_millis(),
+            ticks
+        );
+        self.last_warning = Some(now);
+        Some(warning)
+    }
+}
+
 /// The game's clock: `DeltaTracker.Timer` pacing driven by the
 /// `ServerTickRateManager` the `/tick` command controls, over a virtual
 /// millisecond clock built from the frame times it is fed. The integrated
@@ -301,9 +364,7 @@ pub struct FixedStep {
     /// (`ServerTickRateManager.updateStepTicks` broadcasts each one).
     step_changes: u32,
     /// In-frame ticks dropped since the last overload warning (`drop_ticks`).
-    dropped: u32,
-    /// When the last overload warning was due, on the frame clock.
-    last_overload_warning: std::time::Duration,
+    overload: Overload,
 }
 
 impl Default for FixedStep {
@@ -320,8 +381,7 @@ impl Default for FixedStep {
             tick_count: 0,
             client: false,
             step_changes: 0,
-            dropped: 0,
-            last_overload_warning: std::time::Duration::ZERO,
+            overload: Overload::default(),
         }
     }
 }
@@ -454,22 +514,8 @@ impl FixedStep {
     /// is due: a second's worth of ticks behind, at most every ten seconds
     /// (`OVERLOADED_THRESHOLD_NANOS`, `OVERLOADED_WARNING_INTERVAL_NANOS`).
     pub fn drop_ticks(&mut self, ticks: u32) -> Option<String> {
-        self.dropped = self.dropped.saturating_add(ticks);
-        let tick = self.tick_duration();
-        let behind = tick * self.dropped;
-        let threshold = std::time::Duration::from_secs(1) + tick * 20;
-        let interval = std::time::Duration::from_secs(10) + tick * 100;
-        if behind <= threshold || self.now < self.last_overload_warning + interval {
-            return None;
-        }
-        let warning = format!(
-            "Can't keep up! Is the server overloaded? Running {}ms or {} ticks behind",
-            behind.as_millis(),
-            self.dropped
-        );
-        self.dropped = 0;
-        self.last_overload_warning = self.now;
-        Some(warning)
+        self.overload
+            .drop_ticks(ticks, self.tick_duration(), self.now)
     }
     /// `requestGameToSprint`: true when a sprint was already running.
     pub fn start_sprint(&mut self, ticks: u32) -> bool {
@@ -560,6 +606,39 @@ mod tests {
         assert_eq!(clock.drop_ticks(100), None, "within ten seconds");
         clock.now = s(36);
         assert!(clock.drop_ticks(0).unwrap().contains("100 ticks behind"));
+    }
+
+    /// A server thread's late deadline uses the same gate as the frame's
+    /// dropped ticks: 1 s + 20 ticks behind, at most every 10 s + 100 ticks.
+    #[test]
+    fn server_late_deadlines_warn_on_vanillas_schedule() {
+        let mut overload = Overload::default();
+        let tick = std::time::Duration::from_millis(50);
+        assert_eq!(
+            overload.late(tick * 40, 40, tick, std::time::Duration::ZERO),
+            None,
+            "two seconds: not past 1 s + 20 ticks"
+        );
+        let warning = overload
+            .late(tick * 41, 41, tick, std::time::Duration::from_millis(50))
+            .expect("past the threshold");
+        assert!(warning.contains("2050ms or 41 ticks behind"), "{warning}");
+        assert_eq!(
+            overload.late(tick * 60, 60, tick, std::time::Duration::from_secs(5)),
+            None,
+            "within ten seconds"
+        );
+        assert!(
+            overload
+                .late(
+                    tick * 60,
+                    60,
+                    tick,
+                    std::time::Duration::from_millis(15_100)
+                )
+                .is_some(),
+            "past the interval"
+        );
     }
 
     #[test]
