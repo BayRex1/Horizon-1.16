@@ -3,7 +3,9 @@
 //! pack) and the tags of every registry, loaded from the prepared resources
 //! (`data/minecraft/...`) and the registries report.
 use horizon_protocol::{
-    packets::configuration::{RegistryData, RegistryEntry, RegistryTags, TagEntry, UpdateTags},
+    packets::configuration::{
+        self as cfg, RegistryData, RegistryEntry, RegistryTags, TagEntry, UpdateTags,
+    },
     registry::{Builtin, Dynamic},
 };
 use horizon_world::nbt::{JavaString, Tag};
@@ -62,7 +64,11 @@ pub struct SyncData {
     /// Entry names per synchronized registry (for id lookups).
     pub dynamic: Dynamic,
     registries: Vec<(String, Entries)>,
+    /// [`SyncData::registry_packets`]' bodies, by known-pack answer.
+    registry_bodies: std::sync::OnceLock<[Vec<Vec<u8>>; 2]>,
     pub tags: UpdateTags,
+    /// [`SyncData::tags_packet`]'s body.
+    tags_body: std::sync::OnceLock<Vec<u8>>,
     pub features: Vec<String>,
     /// Vanilla's command tree (the commands report), when found.
     pub commands: Option<super::commands::CommandTree>,
@@ -122,6 +128,33 @@ pub fn component_nbt(v: &Value) -> Tag {
     }
 }
 
+/// The encoded ClientboundRegistryDataPacket bodies for `registries`, with or
+/// without their entry data.
+fn encode_registries(registries: &[(String, Entries)], known_pack: bool) -> Vec<Vec<u8>> {
+    registries
+        .iter()
+        .map(|(key, e)| {
+            cfg::Clientbound::RegistryData(RegistryData {
+                registry: key.clone(),
+                entries: e
+                    .names
+                    .iter()
+                    .zip(&e.json)
+                    .map(|(name, json)| RegistryEntry {
+                        id: name.clone(),
+                        data: if known_pack {
+                            None
+                        } else {
+                            Some(json_to_nbt(json))
+                        },
+                    })
+                    .collect(),
+            })
+            .encode()
+        })
+        .collect()
+}
+
 impl SyncData {
     pub fn load(resources: &Path) -> Result<Self, String> {
         let builtin = Builtin::find(resources)
@@ -149,7 +182,9 @@ impl SyncData {
             builtin,
             dynamic,
             registries,
+            registry_bodies: Default::default(),
             tags,
+            tags_body: Default::default(),
             features: vec!["minecraft:vanilla".to_owned()],
             commands: super::commands::CommandTree::load(resources),
             recipes: Vec::new(),
@@ -172,28 +207,21 @@ impl SyncData {
             .map(|i| i as i32)
     }
 
-    /// ClientboundRegistryDataPacket per registry. With `known_pack` the
-    /// client rebuilds the entries from its own data, so none is sent.
-    pub fn registry_packets(&self, known_pack: bool) -> Vec<RegistryData> {
-        self.registries
-            .iter()
-            .map(|(key, e)| RegistryData {
-                registry: key.clone(),
-                entries: e
-                    .names
-                    .iter()
-                    .zip(&e.json)
-                    .map(|(name, json)| RegistryEntry {
-                        id: name.clone(),
-                        data: if known_pack {
-                            None
-                        } else {
-                            Some(json_to_nbt(json))
-                        },
-                    })
-                    .collect(),
-            })
-            .collect()
+    /// The ClientboundRegistryDataPacket bodies, one per registry, encoded
+    /// once. With `known_pack` the client rebuilds the entries from its own
+    /// data, so none is sent; a vanilla client gets every entry's NBT, built
+    /// once rather than on each join.
+    pub fn registry_packets(&self, known_pack: bool) -> &[Vec<u8>] {
+        self.registry_bodies
+            .get_or_init(|| [false, true].map(|known| encode_registries(&self.registries, known)))
+            [usize::from(known_pack)]
+        .as_slice()
+    }
+
+    /// The ClientboundUpdateTagsPacket body, encoded once.
+    pub fn tags_packet(&self) -> &[u8] {
+        self.tags_body
+            .get_or_init(|| cfg::Clientbound::UpdateTags(self.tags.clone()).encode())
     }
 
     fn registry_names<'a>(
@@ -301,6 +329,34 @@ mod tests {
         assert!(matches!(t.get("a"), Some(Tag::Int(1))));
         assert!(matches!(t.get("c"), Some(Tag::String(_))));
         assert!(matches!(t.get("b"), Some(Tag::List(l)) if l.len() == 2));
+    }
+
+    /// Both known-pack answers have their own encoded registry packets: the
+    /// vanilla shape carries the converted NBT, the Horizon one does not.
+    #[test]
+    fn registry_packets_cover_both_known_pack_shapes() {
+        let entries = Entries {
+            names: vec!["minecraft:test".to_owned()],
+            json: vec![serde_json::json!({"a": 1})],
+        };
+        let registries = vec![("minecraft:test".to_owned(), entries)];
+        let vanilla = encode_registries(&registries, false);
+        let known = encode_registries(&registries, true);
+        assert_eq!(vanilla.len(), 1);
+        assert_eq!(known.len(), 1);
+        assert_ne!(vanilla[0], known[0]);
+        let packet = |known: bool| {
+            cfg::Clientbound::RegistryData(RegistryData {
+                registry: "minecraft:test".to_owned(),
+                entries: vec![RegistryEntry {
+                    id: "minecraft:test".to_owned(),
+                    data: (!known).then(|| json_to_nbt(&serde_json::json!({"a": 1}))),
+                }],
+            })
+            .encode()
+        };
+        assert_eq!(vanilla[0], packet(false));
+        assert_eq!(known[0], packet(true));
     }
 }
 

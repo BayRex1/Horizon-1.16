@@ -38,7 +38,83 @@ pub enum PathType {
     BigMobsCloseToDanger,
 }
 pub const PATH_TYPES: usize = 27;
+/// `getPathTypeOfMob` from the box's distinct types: the `EnumSet` rules on
+/// a bitset instead of an allocated, sorted `Vec`.
+fn path_type_of_set(
+    types: u32,
+    current: PathType,
+    entity_width: i32,
+    malus: impl Fn(PathType) -> f32,
+) -> PathType {
+    if types.count_ones() == 1 {
+        return PathType::ALL[types.trailing_zeros() as usize];
+    }
+    if types & (1 << PathType::Fence as u8) != 0 {
+        return PathType::Fence;
+    }
+    if types & (1 << PathType::UnpassableRail as u8) != 0 {
+        return PathType::UnpassableRail;
+    }
+    let mut highest = PathType::Blocked;
+    let mut highest_malus = malus(highest);
+    for (i, &t) in PathType::ALL.iter().enumerate() {
+        if types & (1 << i) == 0 {
+            continue;
+        }
+        let m = malus(t);
+        if m < 0.0 {
+            return t;
+        }
+        if m >= highest_malus {
+            highest_malus = m;
+            highest = t;
+        }
+    }
+    if entity_width > 1 {
+        let cheaper = malus(current) < highest_malus;
+        if cheaper && malus(PathType::BigMobsCloseToDanger) < highest_malus {
+            PathType::BigMobsCloseToDanger
+        } else {
+            highest
+        }
+    } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
+        PathType::Open
+    } else {
+        highest
+    }
+}
+
 impl PathType {
+    /// Declaration order, which is the order an `EnumSet` iterates in.
+    pub const ALL: [Self; PATH_TYPES] = [
+        Self::Blocked,
+        Self::Open,
+        Self::Walkable,
+        Self::WalkableDoor,
+        Self::Trapdoor,
+        Self::PowderSnow,
+        Self::OnTopOfPowderSnow,
+        Self::Fence,
+        Self::Lava,
+        Self::Water,
+        Self::WaterBorder,
+        Self::Rail,
+        Self::UnpassableRail,
+        Self::FireInNeighbor,
+        Self::Fire,
+        Self::DamagingInNeighbor,
+        Self::Damaging,
+        Self::DoorOpen,
+        Self::DoorWoodClosed,
+        Self::DoorIronClosed,
+        Self::Breach,
+        Self::Leaves,
+        Self::StickyHoney,
+        Self::Cocoa,
+        Self::DamageCautious,
+        Self::OnTopOfTrapdoor,
+        Self::BigMobsCloseToDanger,
+    ];
     pub fn from_name(name: &str) -> Self {
         match name {
             "OPEN" => Self::Open,
@@ -455,9 +531,15 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         t
     }
-    fn within_bb(&self, x: i32, y: i32, z: i32) -> Vec<PathType> {
-        let mut out = Vec::with_capacity(4);
+    /// The distinct path types of the boxes this mob would occupy: one bit
+    /// per `PathType` (fewer than 32), which is what the per-position `Vec`
+    /// and its `contains` scans held before.
+    fn within_bb(&self, x: i32, y: i32, z: i32) -> u32 {
+        let mut types = 0u32;
         let mp = self.mob.block_position();
+        // The mob's own rail types are the same for every cell: ask once, and
+        // only when a cell is a rail.
+        let mut on_rail = None;
         for dx in 0..self.entity_width {
             for dy in 0..self.entity_height {
                 for dz in 0..self.entity_depth {
@@ -472,61 +554,28 @@ impl<'a, 'w> Finder<'a, 'w> {
                         t = PathType::Blocked;
                     }
                     if t == PathType::Rail
-                        && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1] - 1, mp[2]) != PathType::Rail
+                        && !*on_rail.get_or_insert_with(|| {
+                            self.path_type(mp[0], mp[1], mp[2]) == PathType::Rail
+                                || self.path_type(mp[0], mp[1] - 1, mp[2]) == PathType::Rail
+                        })
                     {
                         t = PathType::UnpassableRail;
                     }
-                    if !out.contains(&t) {
-                        out.push(t);
-                    }
+                    types |= 1 << (t as u8);
                 }
             }
         }
-        out
+        types
     }
     /// WalkNodeEvaluator.getPathTypeOfMob.
     fn path_type_of_mob(&self, x: i32, y: i32, z: i32) -> PathType {
         if let Evaluator::Swim { .. } = self.eval {
             return self.swim_path_type(x, y, z);
         }
-        let mut types = self.within_bb(x, y, z);
-        // EnumSet iteration follows declaration order.
-        types.sort_by_key(|t| *t as u8);
-        if types.len() == 1 {
-            return types[0];
-        }
-        if types.contains(&PathType::Fence) {
-            return PathType::Fence;
-        }
-        if types.contains(&PathType::UnpassableRail) {
-            return PathType::UnpassableRail;
-        }
-        let mut highest = PathType::Blocked;
-        let mut highest_malus = self.malus(highest);
-        for t in &types {
-            let m = self.malus(*t);
-            if m < 0.0 {
-                return *t;
-            }
-            if m >= highest_malus {
-                highest_malus = m;
-                highest = *t;
-            }
-        }
+        let types = self.within_bb(x, y, z);
         let current = self.path_type(x, y, z);
-        if self.entity_width > 1 {
-            let cheaper = self.malus(current) < highest_malus;
-            if cheaper && self.malus(PathType::BigMobsCloseToDanger) < highest_malus {
-                PathType::BigMobsCloseToDanger
-            } else {
-                highest
-            }
-        } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
-            PathType::Open
-        } else {
-            highest
-        }
+        // EnumSet iteration follows declaration order.
+        path_type_of_set(types, current, self.entity_width, |t| self.malus(t))
     }
     fn swim_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut last = (x, y, z);
@@ -1394,6 +1443,98 @@ impl<'a, 'w> Finder<'a, 'w> {
                         .total_cmp(&b.dist_to_target)
                         .then(a.nodes.len().cmp(&b.nodes.len()))
                 })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The old `Vec` + sort implementation `path_type_of_set` replaces.
+    fn reference(
+        mut types: Vec<PathType>,
+        current: PathType,
+        entity_width: i32,
+        malus: impl Fn(PathType) -> f32,
+    ) -> PathType {
+        types.sort_by_key(|t| *t as u8);
+        if types.len() == 1 {
+            return types[0];
+        }
+        if types.contains(&PathType::Fence) {
+            return PathType::Fence;
+        }
+        if types.contains(&PathType::UnpassableRail) {
+            return PathType::UnpassableRail;
+        }
+        let mut highest = PathType::Blocked;
+        let mut highest_malus = malus(highest);
+        for t in &types {
+            let m = malus(*t);
+            if m < 0.0 {
+                return *t;
+            }
+            if m >= highest_malus {
+                highest_malus = m;
+                highest = *t;
+            }
+        }
+        if entity_width > 1 {
+            let cheaper = malus(current) < highest_malus;
+            if cheaper && malus(PathType::BigMobsCloseToDanger) < highest_malus {
+                PathType::BigMobsCloseToDanger
+            } else {
+                highest
+            }
+        } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
+            PathType::Open
+        } else {
+            highest
+        }
+    }
+
+    #[test]
+    fn bitset_aggregation_matches_the_sorted_vec() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // A few malus tables, including one with the negative (avoid) values
+        // in different places and one where every type is neutral.
+        let tables: [&dyn Fn(PathType) -> f32; 3] = [
+            &PathType::malus,
+            &|t| if t == PathType::Water { 3.0 } else { 0.0 },
+            &|t| match t {
+                PathType::Lava | PathType::Fence => -1.0,
+                PathType::Open => 0.0,
+                _ => (t as u8 % 5) as f32,
+            },
+        ];
+        for case in 0..4000 {
+            let mut types = 0u32;
+            let mut list = Vec::new();
+            for (i, &t) in PathType::ALL.iter().enumerate() {
+                if next() % 7 == 0 {
+                    types |= 1 << i;
+                    list.push(t);
+                }
+            }
+            if list.is_empty() {
+                types |= 1 << PathType::Blocked as u8;
+                list.push(PathType::Blocked);
+            }
+            let current = PathType::ALL[(next() as usize) % PATH_TYPES];
+            let width = 1 + (next() % 2) as i32;
+            let malus = tables[case % 3];
+            assert_eq!(
+                path_type_of_set(types, current, width, malus),
+                reference(list, current, width, malus),
+                "case {case}"
+            );
         }
     }
 }

@@ -74,9 +74,9 @@ pub struct Joined {
 /// Queued for a connection's writer thread.
 pub enum Out {
     /// A packet body: VarInt id and payload.
-    Packet(Vec<u8>),
+    Packet(Arc<[u8]>),
     /// Packet bodies held during a tick, in order.
-    Packets(Vec<Vec<u8>>),
+    Packets(Vec<Arc<[u8]>>),
     /// Send a play disconnect with this component, then close.
     Disconnect(horizon_world::nbt::Tag),
     Close,
@@ -226,6 +226,9 @@ pub struct Shared {
     max_players: AtomicUsize,
     /// PlayerList.players in join order: profile id and name.
     online: Mutex<Vec<(u128, String)>>,
+    /// `data:image/png;base64,...` of the server icon, encoded once: a ping
+    /// must not re-encode 5-20 KiB on every request.
+    favicon: Option<String>,
     /// Profiles held by the host (the LAN host's own name).
     reserved: Mutex<HashSet<u128>>,
     next: AtomicU32,
@@ -303,7 +306,8 @@ impl Shared {
         use crate::server::json::Json;
         let motd = self.motd.lock().unwrap().clone();
         let online: Vec<(u128, String)> = self.online.lock().unwrap().clone();
-        let count = self.online();
+        // The list was just read: only the reserved profiles need a lock more.
+        let count = online.len() + self.reserved.lock().unwrap().len();
         let mut players = vec![
             (
                 "max".to_owned(),
@@ -348,11 +352,8 @@ impl Shared {
                 ]),
             ),
         ];
-        if let Some(icon) = &self.config.favicon {
-            status.push((
-                "favicon".to_owned(),
-                Json::String(format!("data:image/png;base64,{}", base64(icon))),
-            ));
+        if let Some(icon) = &self.favicon {
+            status.push(("favicon".to_owned(), Json::String(icon.clone())));
         }
         if self.config.enforces_secure_chat() {
             status.push(("enforcesSecureChat".to_owned(), Json::Bool(true)));
@@ -413,12 +414,17 @@ impl Lan {
     pub fn start_with(sync: Arc<data::SyncData>, config: NetConfig) -> io::Result<Self> {
         let (tx, events) = channel();
         let (listen, port, announce) = (config.listen, config.port, config.announce);
+        let favicon = config
+            .favicon
+            .as_deref()
+            .map(|icon| format!("data:image/png;base64,{}", base64(icon)));
         let shared = Arc::new(Shared {
             sync,
             events: tx,
             motd: Mutex::new(config.motd.clone()),
             max_players: AtomicUsize::new(config.max_players),
             online: Mutex::new(Vec::new()),
+            favicon,
             reserved: Mutex::new(HashSet::new()),
             next: AtomicU32::new(1),
             stop: AtomicBool::new(false),

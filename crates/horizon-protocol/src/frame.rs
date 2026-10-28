@@ -5,7 +5,10 @@ use crate::{
     buf::{Reader, varint_size, write_varint},
 };
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use std::io::{Read, Write};
+use std::{
+    borrow::Cow,
+    io::{Read, Write},
+};
 
 /// Frames are at most three VarInt bytes long (21 bits).
 pub const MAX_FRAME: usize = (1 << 21) - 1;
@@ -55,37 +58,38 @@ pub fn prefixed(contents: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Split one complete frame off the front of `buffer`, if available.
-/// Returns the frame contents (without the length prefix).
-pub fn split(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
+/// Split one complete frame off `buffer[from..]`, if available. Returns the
+/// frame's start and length relative to `from` (without the length prefix):
+/// the caller advances its own cursor instead of moving the bytes behind it.
+pub fn split(buffer: &[u8], from: usize) -> Result<Option<(usize, usize)>> {
+    let data = &buffer[from..];
     let mut len = 0usize;
     for i in 0..3 {
-        let Some(&b) = buffer.get(i) else {
+        let Some(&b) = data.get(i) else {
             return Ok(None);
         };
         len |= usize::from(b & 0x7F) << (7 * i);
         if b & 0x80 == 0 {
             let start = i + 1;
-            if buffer.len() < start + len {
+            if data.len() < start + len {
                 return Ok(None);
             }
-            let frame = buffer[start..start + len].to_vec();
-            buffer.drain(..start + len);
-            return Ok(Some(frame));
+            return Ok(Some((start, len)));
         }
     }
     Err(Error::new("length wider than 21 bits"))
 }
 
-/// Undo compression on a frame, giving the packet body (id + payload).
-pub fn decompress(frame: Vec<u8>, threshold: Option<usize>) -> Result<Vec<u8>> {
+/// Undo compression on a frame, giving the packet body (id + payload). Borrows
+/// the frame for an uncompressed one, so the caller copies the payload once.
+pub fn decompress(frame: &[u8], threshold: Option<usize>) -> Result<Cow<'_, [u8]>> {
     let Some(threshold) = threshold else {
-        return Ok(frame);
+        return Ok(Cow::Borrowed(frame));
     };
-    let mut r = Reader::new(&frame);
+    let mut r = Reader::new(frame);
     let size = r.varint()?;
     if size == 0 {
-        return Ok(frame[1..].to_vec());
+        return Ok(Cow::Borrowed(&frame[1..]));
     }
     let size = usize::try_from(size).map_err(|_| Error::new("negative uncompressed length"))?;
     if size < threshold {
@@ -109,7 +113,7 @@ pub fn decompress(frame: Vec<u8>, threshold: Option<usize>) -> Result<Vec<u8>> {
             out.len()
         )));
     }
-    Ok(out)
+    Ok(Cow::Owned(out))
 }
 
 #[cfg(test)]
@@ -122,10 +126,26 @@ mod tests {
         let framed = encode(&body, None).unwrap();
         assert_eq!(framed, [4, 0, 1, 2, 3]);
         let mut buffer = framed.clone();
-        buffer.extend_from_slice(&framed[..2]);
-        assert_eq!(split(&mut buffer).unwrap(), Some(body));
-        assert_eq!(split(&mut buffer).unwrap(), None);
-        assert_eq!(buffer, [4, 0]);
+        buffer.push(4);
+        assert_eq!(split(&buffer, 0).unwrap(), Some((1, 4)));
+        // Only the prefix of the second frame is there.
+        assert_eq!(split(&buffer, 5).unwrap(), None);
+    }
+
+    /// Two frames in one buffer, then a partial frame behind them: the cursor
+    /// walks over them without the buffer changing.
+    #[test]
+    fn split_reads_frames_at_a_cursor() {
+        let first = encode(&[1, 2], None).unwrap();
+        let second = encode(&[3, 4, 5], None).unwrap();
+        let mut buffer = first.clone();
+        buffer.extend_from_slice(&second);
+        buffer.extend_from_slice(&second[..2]);
+        assert_eq!(split(&buffer, 0).unwrap(), Some((1, 2)));
+        assert_eq!(split(&buffer, 3).unwrap(), Some((1, 3)));
+        assert_eq!(split(&buffer, 7).unwrap(), None);
+        // A partial length prefix is not an error either.
+        assert_eq!(split(&[0x80], 0).unwrap(), None);
     }
 
     #[test]
@@ -134,16 +154,18 @@ mod tests {
         let small = vec![7u8; 10];
         let framed = encode(&small, Some(256)).unwrap();
         assert_eq!(&framed[..2], &[11, 0]);
-        let mut buffer = framed;
-        let frame = split(&mut buffer).unwrap().unwrap();
-        assert_eq!(decompress(frame, Some(256)).unwrap(), small);
+        let (start, len) = split(&framed, 0).unwrap().unwrap();
+        assert_eq!(
+            decompress(&framed[start..start + len], Some(256)).unwrap(),
+            small
+        );
         // At or above: the uncompressed size and a zlib stream.
         let big: Vec<u8> = (0..5000u32).map(|i| (i % 7) as u8).collect();
         let framed = encode(&big, Some(256)).unwrap();
         assert!(framed.len() < big.len());
-        let mut buffer = framed;
-        let frame = split(&mut buffer).unwrap().unwrap();
-        assert_eq!(Reader::new(&frame).varint().unwrap(), 5000);
+        let (start, len) = split(&framed, 0).unwrap().unwrap();
+        let frame = &framed[start..start + len];
+        assert_eq!(Reader::new(frame).varint().unwrap(), 5000);
         assert_eq!(decompress(frame, Some(256)).unwrap(), big);
     }
 
@@ -154,13 +176,13 @@ mod tests {
         let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
         z.write_all(&[1; 10]).unwrap();
         frame.extend(z.finish().unwrap());
-        assert!(decompress(frame, Some(256)).is_err());
+        assert!(decompress(&frame, Some(256)).is_err());
         // Declared size that does not match the stream.
         let mut frame = Vec::new();
         write_varint(&mut frame, 300);
         let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
         z.write_all(&[1; 299]).unwrap();
         frame.extend(z.finish().unwrap());
-        assert!(decompress(frame, Some(256)).is_err());
+        assert!(decompress(&frame, Some(256)).is_err());
     }
 }
