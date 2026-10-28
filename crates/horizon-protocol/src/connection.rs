@@ -115,12 +115,25 @@ impl Write for Pipe {
 enum Stream {
     Tcp(TcpStream),
     Memory(Pipe),
+    /// A byte sink that counts its writes, for the batching test.
+    #[cfg(test)]
+    Sink {
+        bytes: Vec<u8>,
+        writes: usize,
+    },
 }
 impl Stream {
     fn try_clone(&self) -> std::io::Result<Self> {
         Ok(match self {
             Self::Tcp(s) => Self::Tcp(s.try_clone()?),
             Self::Memory(p) => Self::Memory(p.try_clone()),
+            #[cfg(test)]
+            Self::Sink { .. } => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "a test sink cannot be cloned",
+                ));
+            }
         })
     }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
@@ -130,6 +143,8 @@ impl Stream {
                 *p.timeout.lock().unwrap() = timeout;
                 Ok(())
             }
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(()),
         }
     }
     fn shutdown(&self) {
@@ -138,6 +153,8 @@ impl Stream {
                 let _ = s.shutdown(Shutdown::Both);
             }
             Self::Memory(p) => p.shutdown(),
+            #[cfg(test)]
+            Self::Sink { .. } => {}
         }
     }
 }
@@ -146,6 +163,8 @@ impl Read for Stream {
         match self {
             Self::Tcp(s) => s.read(out),
             Self::Memory(p) => p.read(out),
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(0),
         }
     }
 }
@@ -154,12 +173,20 @@ impl Write for Stream {
         match self {
             Self::Tcp(s) => s.write(data),
             Self::Memory(p) => p.write(data),
+            #[cfg(test)]
+            Self::Sink { bytes, writes } => {
+                *writes += 1;
+                bytes.extend_from_slice(data);
+                Ok(data.len())
+            }
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Tcp(s) => s.flush(),
             Self::Memory(p) => p.flush(),
+            #[cfg(test)]
+            Self::Sink { .. } => Ok(()),
         }
     }
 }
@@ -462,6 +489,8 @@ mod tests {
         match &c.reader.stream {
             Stream::Tcp(s) => s.peer_addr().unwrap(),
             Stream::Memory(_) => panic!("not a socket"),
+            #[cfg(test)]
+            Stream::Sink { .. } => panic!("not a socket"),
         }
     }
 
@@ -585,6 +614,40 @@ mod tests {
             at += start + len;
         }
         assert_eq!(at, raw.len());
+    }
+
+    /// Frames appended for several bodies leave as one write, in order and
+    /// byte-identical to encoding each on its own.
+    #[test]
+    fn a_batch_of_bodies_is_one_write() {
+        let mut writer = ConnWriter {
+            stream: Stream::Sink {
+                bytes: Vec::new(),
+                writes: 0,
+            },
+            encrypt: None,
+            threshold: None,
+            counters: Arc::new(Counters::default()),
+            frame: Vec::new(),
+            compressor: None,
+            scratch: Vec::new(),
+        };
+        let bodies = [vec![1u8; 12], vec![2u8; 5000], vec![3u8; 40]];
+        let mut batch = Vec::new();
+        for body in &bodies {
+            writer.append(body, &mut batch).unwrap();
+        }
+        writer.write_batch(&mut batch).unwrap();
+        assert!(batch.is_empty());
+        let Stream::Sink { bytes, writes } = &writer.stream else {
+            panic!("not a test sink");
+        };
+        assert_eq!(*writes, 1);
+        let expected: Vec<u8> = bodies
+            .iter()
+            .flat_map(|body| frame::encode(body, None).unwrap())
+            .collect();
+        assert_eq!(bytes, &expected);
     }
 
     #[test]
