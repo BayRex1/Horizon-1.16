@@ -12142,7 +12142,9 @@ impl Game<'_> {
                 Screen::Playing => {
                     // key.inventory while riding a tamed mount opens its inventory.
                     if !self.open_ridden_mount_menu() {
-                        if self.creative {
+                        if self.open_replaced_screen("minecraft:inventory") {
+                            // A mod shows its own screen in the inventory's place (ui.replace-screen).
+                        } else if self.creative {
                             self.screen = Screen::Creative;
                             self.creative_screen.reopen();
                         } else {

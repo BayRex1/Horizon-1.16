@@ -523,6 +523,30 @@ fn ui_screens_settings_and_events() {
     assert!(mods.screen(0).is_none());
 }
 
+// `ui.replace-screen`: the mod's screen opens in the inventory's place, not over it, until it gives it back
+#[test]
+fn ui_replaces_the_inventory() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert_eq!(mods.replacement_owner("minecraft:inventory"), None);
+    assert!(mods.command("ui_replace on"));
+    assert_eq!(mods.replacement_owner("minecraft:inventory"), Some(0));
+    // Replacing opens nothing yet: the game shows it when the player opens the inventory.
+    assert!(mods.screen(0).is_none());
+    assert!(mods.show_replacement(0, "minecraft:inventory"));
+    assert_eq!(mods.screen(0).expect("the replacement").title, "Guest's inventory");
+    assert!(!mods.show_replacement(0, "minecraft:crafting_table"));
+    // A screen this Horizon can't replace is the call's error, and changes nothing.
+    assert!(mods.command("ui_replace bad"));
+    assert!(mods
+        .drain()
+        .iter()
+        .any(|o| matches!(o, Output::Feedback { text, error: true } if text.contains("can't be replaced"))));
+    assert_eq!(mods.replacement_owner("minecraft:pause"), None);
+    // Given back: the game opens its own inventory again.
+    assert!(mods.command("ui_replace off"));
+    assert_eq!(mods.replacement_owner("minecraft:inventory"), None);
+}
+
 #[test]
 fn render_shapes_and_shakes() {
     let mut mods = load("horizon_mods_test_ui_guest.hmod");

@@ -278,6 +278,9 @@ impl Game<'_> {
     pub(super) fn mods_chat(&mut self, _line: &str) {}
     pub(super) fn draw_mod_panels(&self, _batch: &mut HudBatch, _corners: &mut Corners) {}
     pub(super) fn open_mod_screen(&mut self, _owner: usize, _settings: bool) {}
+    pub(super) fn open_replaced_screen(&mut self, _vanilla: &str) -> bool {
+        false
+    }
     pub(super) fn close_mod_screen(&mut self, _tell: bool) {}
     pub(super) fn draw_mod_screen(&mut self, _batch: &mut HudBatch) {}
     pub(super) fn mod_screen_click(&mut self, _button: winit::event::MouseButton) {}
@@ -903,6 +906,19 @@ impl Game<'_> {
     }
     /// A mod pushes its screen (`ui.open-screen`), or Options > Mods opens
     /// its settings page (`settings`, the mod's `installed` index).
+    /// Opens the screen a mod put in place of the vanilla screen `vanilla`
+    /// (`ui.replace-screen`); false when no running mod replaced it, and the
+    /// game opens its own.
+    pub(super) fn open_replaced_screen(&mut self, vanilla: &str) -> bool {
+        let Some(owner) = self.mods.mods.replacement_owner(vanilla) else {
+            return false;
+        };
+        if !self.mods.mods.show_replacement(owner, vanilla) {
+            return false;
+        }
+        self.open_mod_screen(owner, false);
+        self.screen == Screen::Mod
+    }
     pub(super) fn open_mod_screen(&mut self, owner: usize, settings: bool) {
         if self.title.is_some() {
             return;

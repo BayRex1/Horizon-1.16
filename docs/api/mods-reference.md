@@ -255,6 +255,7 @@ A screen the mod owns: a title over widgets stacked down the middle, the Done bu
 | `open-screen` | `func(screen: screen)` | Show `screen` over the game; a second call while it is open replaces it. Only the last call of one hook counts. |
 | `close-screen` | `func()` | Close the mod's screen when it is open (the mod hears no `closed` for this: it was its own doing). |
 | `set-settings` | `func(widgets: list<widget>)` | The mod's page in Options > Mods, reached from a settings button on its row: the widgets it shows, an empty list for no page. The player opening the page is `ui-events::settings-opened`: push fresh widgets then; later calls update the page while it shows. |
+| `replace-screen` | `func(vanilla: string, replacement: option<screen>) -> result<_, string>` | Show the mod's own screen in place of a vanilla one: from now on, when the player would open `vanilla` (`minecraft:inventory`: the inventory key, in survival and creative alike), the game opens `replacement` as the mod's screen instead, not drawn over it. While it shows, `open-screen` updates it and leaving it is `ui-events::closed` as for any of the mod's screens; a later call replaces it, and none gives the vanilla screen back. The first mod (in load order) that replaces a screen gets it. Err for a screen this Horizon can't replace. |
 
 ## `ui-events`
 

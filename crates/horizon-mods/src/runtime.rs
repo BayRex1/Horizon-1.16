@@ -363,6 +363,9 @@ struct UiState {
     /// The calls since the last hook ended, for [`Output`].
     open: bool,
     close: bool,
+    /// `ui.replace-screen`: vanilla screen id → the mod's screen shown in
+    /// its place.
+    replacements: std::collections::BTreeMap<String, UiScreen>,
 }
 
 /// Capability `ui`'s panel beside container screens (`browser`).
@@ -1244,6 +1247,32 @@ impl Mods {
             .flat_map(|r| &r.store.data().shapes)
     }
     /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
+    /// The running mod that replaced the vanilla screen `vanilla`
+    /// (`ui.replace-screen`), first in load order: the game opens its screen
+    /// instead, with [`Mods::show_replacement`].
+    pub fn replacement_owner(&self, vanilla: &str) -> Option<usize> {
+        self.entries.iter().position(|e| {
+            e.status == Status::Running
+                && e.run
+                    .as_ref()
+                    .is_some_and(|r| r.store.data().ui.replacements.contains_key(vanilla))
+        })
+    }
+    /// Makes mod `i`'s replacement for `vanilla` its open screen
+    /// ([`Mods::screen`]): false when it has none.
+    pub fn show_replacement(&mut self, i: usize, vanilla: &str) -> bool {
+        let Some(run) = self.entries.get_mut(i).and_then(|e| e.run.as_mut()) else {
+            return false;
+        };
+        let ui = &mut run.store.data_mut().ui;
+        match ui.replacements.get(vanilla) {
+            Some(screen) => {
+                ui.screen = Some(screen.clone());
+                true
+            }
+            None => false,
+        }
+    }
     pub fn screen(&self, i: usize) -> Option<&UiScreen> {
         self.entries
             .get(i)?
@@ -1955,7 +1984,29 @@ impl ui::Host for State {
     fn set_settings(&mut self, widgets: Vec<ui::Widget>) {
         self.ui.settings = clip_widgets(widgets);
     }
+    fn replace_screen(&mut self, vanilla: String, replacement: Option<ui::Screen>) -> Result<(), String> {
+        if !REPLACEABLE_SCREENS.contains(&vanilla.as_str()) {
+            return Err(format!(
+                "{vanilla} can't be replaced (this Horizon replaces {})",
+                REPLACEABLE_SCREENS.join(", ")
+            ));
+        }
+        match replacement {
+            Some(mut screen) => {
+                screen.title = clip(screen.title);
+                screen.widgets = clip_widgets(screen.widgets);
+                self.ui.replacements.insert(vanilla, screen);
+            }
+            None => {
+                self.ui.replacements.remove(&vanilla);
+            }
+        }
+        Ok(())
+    }
 }
+
+/// The vanilla screens `ui.replace-screen` can put a mod's screen in place of.
+pub const REPLACEABLE_SCREENS: [&str; 1] = ["minecraft:inventory"];
 impl storage::Host for State {
     fn get(&mut self, key: String) -> Option<Vec<u8>> {
         storage_key_ok(&key)

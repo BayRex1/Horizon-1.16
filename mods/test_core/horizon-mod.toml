@@ -3,4 +3,5 @@ name = "Test Core Mod"
 version = "0.1.0"
 description = "Test mod for NeoForge-like core features"
 api = "0.1"
-capabilities = ["chat", "hud"]
+capabilities = ["chat", "hud", "ui"]
+experimental = ["ui"]

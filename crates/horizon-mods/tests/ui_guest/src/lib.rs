@@ -103,6 +103,7 @@ impl Mod for Guest {
             "ui_screen",
             "ui_settings",
             "ui_close",
+            "ui_replace",
             "render_hud",
             "render_clear",
             "render_shake",
@@ -138,6 +139,19 @@ impl Mod for Guest {
             }),
             "ui_settings" => ui::set_settings(&widgets()),
             "ui_close" => ui::close_screen(),
+            // `ui_replace on|off|bad`: the guest's screen in the inventory's place, given back, or a screen
+            // this Horizon can't replace (its error is the command's).
+            "ui_replace" => {
+                let screen = Screen {
+                    title: "Guest's inventory".into(),
+                    widgets: widgets(),
+                };
+                return match args {
+                    "on" => ui::replace_screen("minecraft:inventory", Some(&screen)).map(|()| None),
+                    "off" => ui::replace_screen("minecraft:inventory", None).map(|()| None),
+                    _ => ui::replace_screen("minecraft:pause", Some(&screen)).map(|()| None),
+                };
+            }
             "render_hud" => render::set_hud(&shapes()),
             "render_clear" => render::set_hud(&[]),
             // An FPS-counter-like box: as wide as its text plus 4.
