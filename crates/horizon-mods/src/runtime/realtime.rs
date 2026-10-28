@@ -153,13 +153,22 @@ impl Realtime {
         if self.opened >= 16 {
             return Err("UDP connect/resolve rate exceeded".into());
         }
-        if RESOLVERS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n < 4).then_some(n + 1)
-            })
-            .is_err()
-        {
-            return Err("DNS worker limit reached".into());
+        // Keep the Rust 1.95 baseline without using fetch_update, which is
+        // deprecated on newer toolchains in favor of try_update.
+        let mut active = RESOLVERS.load(Ordering::Relaxed);
+        loop {
+            if active >= 4 {
+                return Err("DNS worker limit reached".into());
+            }
+            match RESOLVERS.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => active = current,
+            }
         }
         let slot = ResolverSlot;
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
