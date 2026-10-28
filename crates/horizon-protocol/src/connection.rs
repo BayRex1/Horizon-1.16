@@ -203,6 +203,8 @@ pub struct Counters {
 pub struct ConnReader {
     stream: Stream,
     buffer: Vec<u8>,
+    /// Bytes of `buffer` already handed to a caller.
+    read: usize,
     decrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
@@ -275,6 +277,7 @@ impl Connection {
             reader: ConnReader {
                 stream,
                 buffer: Vec::new(),
+                read: 0,
                 decrypt: None,
                 threshold: None,
                 counters: counters.clone(),
@@ -304,7 +307,7 @@ impl Connection {
     pub fn enable_encryption(&mut self, secret: &[u8; 16]) {
         let mut decrypt = Cfb8::new(secret, secret);
         // Bytes already read past the last packet were sent encrypted.
-        decrypt.decrypt(&mut self.reader.buffer);
+        decrypt.decrypt(&mut self.reader.buffer[self.reader.read..]);
         self.reader.decrypt = Some(decrypt);
         self.writer.encrypt = Some(Cfb8::new(secret, secret));
     }
@@ -322,13 +325,24 @@ impl ConnReader {
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         loop {
-            if let Some(frame) = frame::split(&mut self.buffer)? {
-                let body = frame::decompress(frame, self.threshold)?;
-                let mut r = Reader::new(&body);
-                let id = r.varint()?;
-                let start = r.position();
-                self.counters.received.fetch_add(1, Ordering::Relaxed);
-                return Ok((id, body[start..].to_vec()));
+            if let Some((start, len)) = frame::split(&self.buffer, self.read)? {
+                let at = self.read + start;
+                let payload = {
+                    let body = frame::decompress(&self.buffer[at..at + len], self.threshold)?;
+                    let mut r = Reader::new(&body);
+                    let id = r.varint()?;
+                    let start = r.position();
+                    self.counters.received.fetch_add(1, Ordering::Relaxed);
+                    (id, body[start..].to_vec())
+                };
+                self.read = at + len;
+                // Compact only once the consumed prefix is worth moving: a
+                // drained buffer keeps its capacity either way.
+                if self.read > self.buffer.len() / 2 {
+                    self.buffer.drain(..self.read);
+                    self.read = 0;
+                }
+                return Ok(payload);
             }
             let mut chunk = [0u8; 16384];
             let n = self.stream.read(&mut chunk)?;
@@ -665,6 +679,32 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(20)))
             .unwrap();
         assert!(c.recv().is_err());
+    }
+
+    /// Frames that arrive together are read without moving the bytes behind
+    /// them, and the buffer keeps the capacity it grew to.
+    #[test]
+    fn recv_walks_a_cursor_and_keeps_the_buffer() {
+        let (a, b) = Pipe::pair();
+        let frames: Vec<u8> = (0..400u16)
+            .flat_map(|i| frame::encode(&[1, i as u8, i as u8, i as u8], None).unwrap())
+            .collect();
+        let writer = std::thread::spawn(move || {
+            let mut b = b;
+            b.write_all(&frames).unwrap();
+        });
+        let mut c = Connection::local(a);
+        let mut capacity = 0;
+        for i in 0..400u16 {
+            assert_eq!(c.recv().unwrap(), (1, vec![i as u8, i as u8, i as u8]));
+            if i == 20 {
+                capacity = c.reader.buffer.capacity();
+            }
+            // Never more than the half a frame consumed before the next compact.
+            assert!(c.reader.read <= c.reader.buffer.len() / 2);
+        }
+        assert_eq!(c.reader.buffer.capacity(), capacity);
+        writer.join().unwrap();
     }
 
     /// Encrypted bytes that arrive in the same read as the last plain packet
