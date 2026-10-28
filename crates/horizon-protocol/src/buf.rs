@@ -157,8 +157,12 @@ pub struct Writer {
     pub data: Vec<u8>,
 }
 impl Writer {
+    /// A body for one packet, sized for the usual 20-40 byte packets so they
+    /// do not grow through 8, 16, 32 and 64 bytes.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            data: Vec::with_capacity(64),
+        }
     }
     pub fn u8(&mut self, v: u8) {
         self.data.push(v);

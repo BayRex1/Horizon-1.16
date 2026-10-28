@@ -1113,15 +1113,24 @@ impl SharedFrames {
 
 /// Send one packet body: a large one compressed through [`SharedFrames`],
 /// so a chunk column sent to fifty players is compressed once, not fifty
-/// times. The bytes on the wire are the same.
-fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<()> {
+/// times. The bytes on the wire are the same. Frames are appended to `out`
+/// so one write can carry the whole batch.
+fn send_body(
+    writer: &mut ConnWriter,
+    body: &[u8],
+    out: &mut Vec<u8>,
+) -> horizon_protocol::Result<()> {
     match writer.threshold {
         Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
-            writer.send_contents(&SharedFrames::get().contents(body, t)?)
+            writer.append_contents(&SharedFrames::get().contents(body, t)?, out)
         }
-        _ => writer.send(body),
+        _ => writer.append(body, out),
     }
 }
+
+/// A batch is written out once it holds this much, at the end of a drained
+/// queue, never across a `recv_timeout`.
+const BATCH_BYTES: usize = 64 << 10;
 
 fn write_loop(
     mut writer: ConnWriter,
@@ -1133,30 +1142,62 @@ fn write_loop(
     let start = Instant::now();
     let mut sent_at: Option<(i64, Instant)> = None;
     let mut next = Instant::now() + KEEP_ALIVE_EVERY;
+    let mut batch: Vec<u8> = Vec::new();
     loop {
-        let mut write = |body: Vec<u8>| {
-            pending.fetch_sub(body.len(), Ordering::Relaxed);
-            send_body(&mut writer, &body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
-        };
+        let mut closing = None;
+        let mut stop = false;
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Out::Packet(body)) => {
-                if !write(body) {
-                    break;
+            Ok(first) => {
+                let mut queued = Some(first);
+                while let Some(out) = queued {
+                    match out {
+                        Out::Packet(body) => {
+                            pending.fetch_sub(body.len(), Ordering::Relaxed);
+                            if send_body(&mut writer, &body, &mut batch).is_err() {
+                                stop = true;
+                            }
+                        }
+                        Out::Packets(bodies) => {
+                            for body in bodies {
+                                if stop {
+                                    break;
+                                }
+                                pending.fetch_sub(body.len(), Ordering::Relaxed);
+                                if send_body(&mut writer, &body, &mut batch).is_err() {
+                                    stop = true;
+                                }
+                            }
+                        }
+                        Out::Disconnect(reason) => {
+                            closing = Some(reason);
+                            stop = true;
+                        }
+                        Out::Close => stop = true,
+                    }
+                    if stop || batch.len() >= BATCH_BYTES {
+                        break;
+                    }
+                    queued = rx.try_recv().ok();
                 }
             }
-            Ok(Out::Packets(bodies)) => {
-                if !bodies.into_iter().all(&mut write) {
-                    break;
-                }
-            }
-            Ok(Out::Disconnect(reason)) => {
-                let _ = writer
-                    .send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
-                std::thread::sleep(Duration::from_millis(50));
-                break;
-            }
-            Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => stop = true,
+        }
+        // One write for everything the queue held, before what comes after.
+        if writer.write_batch(&mut batch).is_err() {
+            stop = true;
+        }
+        if pending.load(Ordering::Relaxed) > MAX_PENDING {
+            stop = true;
+        }
+        if let Some(reason) = closing {
+            let _ =
+                writer.send(&play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
+            std::thread::sleep(Duration::from_millis(50));
+            break;
+        }
+        if stop {
+            break;
         }
         let now = Instant::now();
         if let Some((id, at)) = sent_at {
@@ -1296,6 +1337,40 @@ mod tests {
             cache.frames.values().map(|c| c.len()).sum::<usize>()
         );
         assert!(cache.bytes <= first * 2);
+    }
+
+    /// A queue drained by the writer thread leaves as one batch, in order and
+    /// byte-identical to encoding each packet on its own.
+    #[test]
+    fn a_drained_queue_goes_out_as_one_batch_in_order() {
+        use horizon_protocol::{connection::Pipe, frame};
+        use std::io::Read;
+        let (a, mut b) = Pipe::pair();
+        let mut c = Connection::local(a);
+        c.set_compression(64);
+        let (_, writer) = c.split();
+        let (tx, rx) = channel();
+        let alive = Arc::new(AtomicI64::new(-1));
+        let latency = Arc::new(AtomicI32::new(0));
+        let pending = Arc::new(AtomicUsize::new(0));
+        let handle = std::thread::spawn(move || write_loop(writer, rx, alive, latency, pending));
+        let bodies: Vec<Vec<u8>> = (0..40u8)
+            .map(|i| {
+                let mut body = vec![5u8];
+                body.extend(std::iter::repeat_n(i, 300));
+                body
+            })
+            .collect();
+        tx.send(Out::Packets(bodies.clone())).unwrap();
+        tx.send(Out::Close).unwrap();
+        handle.join().unwrap();
+        let mut raw = Vec::new();
+        b.read_to_end(&mut raw).unwrap();
+        let expected: Vec<u8> = bodies
+            .iter()
+            .flat_map(|body| frame::encode(body, Some(64)).unwrap())
+            .collect();
+        assert_eq!(raw, expected);
     }
 
     #[test]
