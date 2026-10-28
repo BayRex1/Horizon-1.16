@@ -25,9 +25,15 @@ pub const SPECTATOR: i32 = 3;
 /// A guest's inbox is capped by bytes, not packets: a client that outruns the
 /// 400-per-tick budget is dropped instead of growing a queue without bound.
 pub const INBOX_BYTES: usize = 1 << 20;
-/// What one queued packet counts as: the enum, its ids and a small payload.
-/// Larger payloads are under-counted, so this stays a floor on the real cost.
+/// The floor for one queued packet: the enum, its ids and a small payload.
+/// Larger payloads are charged their encoded size (see [`inbox_charge`]).
 const INBOX_PACKET_BYTES: usize = 256;
+
+/// What a queued packet counts against [`INBOX_BYTES`]: its encoded body, so a
+/// large book or custom payload is charged what it retains.
+fn inbox_charge(packet: &play::Serverbound) -> usize {
+    INBOX_PACKET_BYTES.max(packet.encode().len())
+}
 
 /// The body state a player's file keeps that lives on `PlayerMotion`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -399,17 +405,18 @@ impl Guest {
     /// Queue one inbound packet; false when the inbox is over its cap (the
     /// caller disconnects the guest, as a full socket would).
     pub fn queue_packet(&mut self, packet: play::Serverbound) -> bool {
-        if self.inbox_bytes + INBOX_PACKET_BYTES > INBOX_BYTES {
+        let bytes = inbox_charge(&packet);
+        if self.inbox_bytes + bytes > INBOX_BYTES {
             return false;
         }
-        self.inbox_bytes += INBOX_PACKET_BYTES;
+        self.inbox_bytes += bytes;
         self.inbox.push_back(packet);
         true
     }
     /// The next inbound packet, if any.
     pub fn pop_packet(&mut self) -> Option<play::Serverbound> {
         let packet = self.inbox.pop_front()?;
-        self.inbox_bytes = self.inbox_bytes.saturating_sub(INBOX_PACKET_BYTES);
+        self.inbox_bytes = self.inbox_bytes.saturating_sub(inbox_charge(&packet));
         Some(packet)
     }
     /// Drop what is queued (a guest over the cap is disconnected).
@@ -847,5 +854,21 @@ mod tests {
         assert!(g.queue_packet(keep_alive()));
         g.clear_inbox();
         assert_eq!((g.inbox.len(), g.inbox_bytes), (0, 0));
+    }
+
+    /// A large packet is charged what it retains, not a flat 256 bytes.
+    #[test]
+    fn large_packets_are_charged_by_payload() {
+        let mut g = guest();
+        let large = || play::Serverbound::Unknown(0, vec![0; 400_000]);
+        assert!(g.queue_packet(large()));
+        assert!(g.queue_packet(large()));
+        assert!(
+            !g.queue_packet(large()),
+            "a few large packets exhaust the cap"
+        );
+        assert!(g.inbox_bytes > INBOX_BYTES / 2);
+        assert!(g.pop_packet().is_some());
+        assert_eq!(g.inbox_bytes, 400_001);
     }
 }

@@ -213,6 +213,8 @@ impl Game<'_> {
         // The random-tick list is in place, not per level: its key could match
         // another level's.
         self.random_ticking_key = None;
+        // The uuid index is also in place: its ids are the old level's.
+        self.trial_uuid_index.borrow_mut().invalidate();
         swap(&mut self.level_events, &mut p.level_events);
         swap(&mut self.falling, &mut p.falling);
         swap(&mut self.paintings, &mut p.paintings);
