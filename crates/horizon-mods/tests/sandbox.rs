@@ -19,7 +19,8 @@ id = "test_guest"
 name = "Test Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["chat", "storage"]
+capabilities = ["chat", "storage", "network"]
+experimental = ["network"]
 "#;
 const UI_MANIFEST: &str = r#"
 id = "test_ui_guest"
@@ -87,6 +88,50 @@ fn mods_dir() -> &'static Path {
 
 fn load(name: &str) -> Mods {
     Mods::load(&[mods_dir().join(name)], |_| true, |c| c == "give")
+}
+
+#[test]
+fn network_hook_selects_versions_and_keeps_connection_state() {
+    use horizon_protocol::{Direction, State};
+    let mut mods = load("horizon_mods_test_guest.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert!(
+        mods.network_translator("localhost", None)
+            .unwrap()
+            .is_none()
+    );
+    let first = mods
+        .network_translator("localhost", Some("test"))
+        .unwrap()
+        .unwrap();
+    let second = mods
+        .network_translator("localhost", Some("test"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first
+            .translate(State::Play, Direction::Clientbound, &[1])
+            .unwrap(),
+        vec![vec![2, 1], vec![1]]
+    );
+    assert_eq!(
+        first
+            .translate(State::Play, Direction::Clientbound, &[1])
+            .unwrap(),
+        vec![vec![2, 2], vec![1]]
+    );
+    assert_eq!(
+        second
+            .translate(State::Play, Direction::Clientbound, &[1])
+            .unwrap(),
+        vec![vec![2, 1], vec![1]]
+    );
+    assert_eq!(
+        first
+            .translate(State::Login, Direction::Serverbound, &[3])
+            .unwrap(),
+        vec![vec![3]]
+    );
 }
 
 fn player() -> Snapshot {

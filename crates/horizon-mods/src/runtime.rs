@@ -1,5 +1,8 @@
 //! Loading and calling mods with wasmtime's component model.
 use crate::manifest::{Manifest, Package, Side};
+use horizon_protocol::{
+    Direction as PacketDirection, State as PacketState, connection::PacketTranslator,
+};
 use server_bindings::{
     HorizonServerMod,
     exports::horizon::mods::server_events::Registration as ServerRegistration,
@@ -90,6 +93,15 @@ mod recipes_bindings {
         world: "recipes-host",
     });
 }
+mod network_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "network-host",
+        with: {
+            "horizon:mods/log": super::bindings::horizon::mods::log,
+        },
+    });
+}
 /// Capability `ui`'s recipe viewer panel (WIT `interface browser`).
 pub use recipes_bindings::horizon::mods::browser::{
     Click as BrowserClick, Event as BrowserEvent, ItemKey as BrowserItemKey,
@@ -110,6 +122,14 @@ const FUEL_INIT: u64 = 2_000_000_000;
 const FUEL_TICK: u64 = 50_000_000;
 const FUEL_FRAME: u64 = 10_000_000;
 const FUEL_EVENT: u64 = 100_000_000;
+/// Network hooks copy complete packet bodies through the component ABI, and
+/// protocol adapters may need to visit every entry in a chunk or registry.
+/// Give larger packets proportionate fuel while retaining a hard CPU bound.
+const FUEL_PACKET_BASE: u64 = 5_000_000;
+const FUEL_PACKET_PER_BYTE: u64 = 128;
+const FUEL_PACKET_MAX: u64 = 250_000_000;
+const MAX_PACKET_OUTPUTS: usize = 16;
+const MAX_ACTIVE_NETWORK_MODS: usize = 8;
 /// Blocks a mod may set per `world.set-blocks` call.
 pub const BLOCKS_PER_CALL: usize = 4096;
 /// Chat lines a mod may show per call, HUD lines and their length.
@@ -428,6 +448,36 @@ struct State {
     limits: StoreLimits,
     world: WorldSlot,
 }
+impl State {
+    fn new(m: &Manifest, path: &Path, snapshot: Arc<Snapshot>, world: WorldSlot) -> Self {
+        Self {
+            name: m.name.clone(),
+            id: m.id.clone(),
+            snapshot,
+            out: Vec::new(),
+            panel: None,
+            ui: UiState::default(),
+            shapes: Vec::new(),
+            corner: None,
+            zoom: None,
+            minimap: None,
+            far_terrain: None,
+            input: InputState::default(),
+            browser: BrowserState::default(),
+            data_dir: path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(crate::manifest::STORAGE_DIR)
+                .join(&m.id),
+            storage_budget: STORAGE_WRITE_BUDGET,
+            limits: StoreLimitsBuilder::new()
+                .memory_size(MEMORY)
+                .instances(16)
+                .build(),
+            world,
+        }
+    }
+}
 
 /// The installed mods and the engine running them. `Mods::default()` is
 /// the state with none: no engine, and every hook a no-op.
@@ -443,7 +493,163 @@ pub struct Mods {
     generation: u64,
 }
 
+struct NetworkRun {
+    id: String,
+    store: Store<State>,
+    hooks: network_bindings::NetworkHost,
+}
+
+/// Per-connection mod instances. The mutex serializes both directions so a
+/// mod can keep protocol state even though the reader and writer use different
+/// threads. A trapped or malformed conversion closes the connection.
+pub struct NetworkTranslator {
+    runs: Mutex<Vec<NetworkRun>>,
+}
+impl PacketTranslator for NetworkTranslator {
+    fn translate(
+        &self,
+        state: PacketState,
+        direction: PacketDirection,
+        body: &[u8],
+    ) -> horizon_protocol::Result<Vec<Vec<u8>>> {
+        use horizon_protocol::{Error, frame::MAX_UNCOMPRESSED};
+        use network_bindings::exports::horizon::mods::network_events::{Direction, Phase};
+        let phase = match state {
+            PacketState::Handshake => Phase::Handshake,
+            PacketState::Status => Phase::Status,
+            PacketState::Login => Phase::Login,
+            PacketState::Configuration => Phase::Configuration,
+            PacketState::Play => Phase::Play,
+        };
+        let flow = match direction {
+            PacketDirection::Clientbound => Direction::Clientbound,
+            PacketDirection::Serverbound => Direction::Serverbound,
+        };
+        let mut bodies = vec![body.to_vec()];
+        let mut runs = self
+            .runs
+            .lock()
+            .map_err(|_| Error::new("network mod lock poisoned"))?;
+        for run in runs.iter_mut() {
+            let mut next = Vec::new();
+            for body in bodies {
+                if body.is_empty() || body.len() > MAX_UNCOMPRESSED {
+                    return Err(Error::new(format!(
+                        "network mod {} received an invalid packet size",
+                        run.id
+                    )));
+                }
+                run.store
+                    .set_fuel(packet_fuel(body.len()))
+                    .map_err(|e| Error::new(e.to_string()))?;
+                let output = run
+                    .hooks
+                    .horizon_mods_network_events()
+                    .call_packet(&mut run.store, phase, flow, &body)
+                    .map_err(|e| {
+                        Error::new(format!(
+                            "network mod {}: {} ({state:?} {direction:?}, {} bytes)",
+                            run.id,
+                            reason(&e),
+                            body.len()
+                        ))
+                    })?
+                    .map_err(|e| Error::new(format!("network mod {}: {e}", run.id)))?;
+                if output.len() > MAX_PACKET_OUTPUTS
+                    || next.len() + output.len() > MAX_PACKET_OUTPUTS
+                {
+                    return Err(Error::new(format!(
+                        "network mod {} returned too many packets",
+                        run.id
+                    )));
+                }
+                for packet in output {
+                    if packet.is_empty() || packet.len() > MAX_UNCOMPRESSED {
+                        return Err(Error::new(format!(
+                            "network mod {} returned an invalid packet size",
+                            run.id
+                        )));
+                    }
+                    next.push(packet);
+                }
+            }
+            bodies = next;
+        }
+        Ok(bodies)
+    }
+}
+
+fn packet_fuel(bytes: usize) -> u64 {
+    FUEL_PACKET_BASE
+        .saturating_add((bytes as u64).saturating_mul(FUEL_PACKET_PER_BYTE))
+        .min(FUEL_PACKET_MAX)
+}
+
 impl Mods {
+    /// Make independent instances of enabled network mods for one remote
+    /// connection. A mod decides in `start` whether to handle the address and
+    /// selected target version. Instances are dropped on disconnect.
+    pub fn network_translator(
+        &mut self,
+        address: &str,
+        target_version: Option<&str>,
+    ) -> Result<Option<Arc<dyn PacketTranslator>>, String> {
+        let candidates: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|e| e.status == Status::Running)
+            .filter(|e| {
+                e.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.capabilities.contains(&crate::Capability::Network))
+            })
+            .map(|e| e.path.clone())
+            .collect();
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let snapshot = self.snapshot.clone();
+        let world = self.world.clone();
+        let (engine, linker) = self.engine()?;
+        let mut runs = Vec::new();
+        for path in candidates {
+            if runs.len() == MAX_ACTIVE_NETWORK_MODS {
+                return Err(format!(
+                    "at most {MAX_ACTIVE_NETWORK_MODS} network mods may handle one connection"
+                ));
+            }
+            let package = Package::read(&path)?;
+            let wasm = package.wasm.as_ref().ok_or("network mod has no code")?;
+            let component = Component::new(engine, wasm).map_err(|e| reason(&e))?;
+            let mut store = Store::new(
+                engine,
+                State::new(&package.manifest, &path, snapshot.clone(), world.clone()),
+            );
+            store.limiter(|s| &mut s.limits);
+            store.set_fuel(FUEL_EVENT).map_err(|e| e.to_string())?;
+            let instance = linker
+                .instantiate(&mut store, &component)
+                .map_err(|e| reason(&e))?;
+            let hooks = network_bindings::NetworkHost::new(&mut store, &instance)
+                .map_err(|e| reason(&e))?;
+            let active = hooks
+                .horizon_mods_network_events()
+                .call_start(&mut store, address, target_version)
+                .map_err(|e| reason(&e))??;
+            if active {
+                runs.push(NetworkRun {
+                    id: package.manifest.id,
+                    store,
+                    hooks,
+                });
+            }
+        }
+        Ok((!runs.is_empty()).then(|| {
+            Arc::new(NetworkTranslator {
+                runs: Mutex::new(runs),
+            }) as Arc<dyn PacketTranslator>
+        }))
+    }
     /// Changes whenever the running mods (so their commands) change.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -602,39 +808,21 @@ impl Mods {
         if let Some(why) = crate::api_level::too_new(level, function) {
             return Err(why);
         }
-        let data_dir = path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(crate::manifest::STORAGE_DIR)
-            .join(&m.id);
-        let state = State {
-            name: m.name.clone(),
-            id: m.id.clone(),
-            snapshot,
-            out: Vec::new(),
-            panel: None,
-            ui: UiState::default(),
-            shapes: Vec::new(),
-            corner: None,
-            zoom: None,
-            minimap: None,
-            far_terrain: None,
-            input: InputState::default(),
-            browser: BrowserState::default(),
-            data_dir,
-            storage_budget: STORAGE_WRITE_BUDGET,
-            limits: StoreLimitsBuilder::new()
-                .memory_size(MEMORY)
-                .instances(16)
-                .build(),
-            world,
-        };
+        let state = State::new(m, path, snapshot, world);
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(FUEL_INIT).map_err(|e| e.to_string())?;
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|e| reason(&e))?;
+        if m.capabilities.contains(&crate::Capability::Network) {
+            network_bindings::NetworkHost::new(&mut store, &instance).map_err(|e| {
+                format!(
+                    "network capability needs network-events export: {}",
+                    reason(&e)
+                )
+            })?;
+        }
         let (mut hooks, ui) = if server {
             let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
             let r = exports

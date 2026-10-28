@@ -456,6 +456,21 @@ interface events {
     chat: func(text: string);
 }
 
+/// Capability `network` (experimental): packet bodies after decryption and
+/// decompression, before Horizon's packet codec. A separate mod instance is
+/// created for each remote connection. The host enforces packet size, output
+/// count, memory and instruction limits. A failure closes the connection.
+interface network-events {
+    enum phase { handshake, status, login, configuration, play }
+    enum direction { clientbound, serverbound }
+    /// Called before the handshake. Return true to handle this connection.
+    /// A mod can use `target-version` to offer an explicit version choice.
+    start: func(address: string, target-version: option<string>) -> result<bool, string>;
+    /// A body begins with the VarInt packet id. Return zero or more complete
+    /// bodies in the other protocol. Packet order is preserved.
+    packet: func(phase: phase, direction: direction, body: list<u8>) -> result<list<list<u8>>, string>;
+}
+
 /// Capability `recipes` (experimental): the recipes and items the game
 /// knows, for recipe viewers. In single player and on Horizon's servers
 /// they are the world's; on any other server they are vanilla 26.3's (a
@@ -816,6 +831,13 @@ world horizon-ui-mod {
     import recipes;
     import browser;
     export ui-events;
+    export network-events;
+}
+
+/// Only the network export is called in the connection's own mod instance.
+world network-host {
+    import log;
+    export network-events;
 }
 
 /// The game's side of `horizon-ui-mod` beyond `horizon-mod`.

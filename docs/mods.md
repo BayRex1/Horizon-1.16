@@ -93,6 +93,17 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `input` | `input` | `claim-items(ids)`: the use button on those items is the mod's (`use-start`, `use-stop` with the ticks held; the game doesn't place, eat or swing); `register-key(name, label, key)`: up to 16 keys (`key.keyboard.r`), heard while playing as `key-down` / `key-up` (the game's own mapping on that key still runs; a screen opening lets held keys up), mouse buttons as `key.mouse.4`. The player rebinds them on the mod's page in Options > Mods, where the game lists them first as Key Binds rows (click, then press a key or mouse button; Esc binds none), even for a mod without `ui`; the choice is kept in `horizon-mods.txt` (`key.<mod>.<name>:key.keyboard.z`) and wins over `register-key`'s default; `claim-wheel(on)`: the wheel's steps become `wheel` events and the hotbar doesn't move (the one input a mod takes from the game; a mod's keys never do); `held()`; `mapping(name)`: a movement or click mapping's key label and whether it is held; `clicks-per-second()`; `poll()` returns the events, at most 256 kept. **Experimental:** `experimental = ["input"]` |
 | `recipes` | `recipes` | `items()`: every item in the registry's order, with its name in the player's language and its tags; `all()`: every recipe (crafting, smelting, blasting, smoking, campfire, stonecutting, smithing, brewing), its slots as the stacks that fit each, its results, cooking time and experience, and the recipe book's id for it; `known()`: the book ids the player's recipe book holds; `place(book-id, all)`: the recipe book's click on a recipe, in the open inventory's or crafting table's grid (refused for a recipe the player's book doesn't hold, as vanilla's server refuses it); `give(stack)`: in creative mode, the stack into the player's inventory, as from the creative inventory. The recipes are the world's in single player and on Horizon's servers, vanilla 26.3's on any other server (a client is sent no others), while `known` follows that server's book. The game makes the tables once, when a mod first reads them. **Experimental:** `experimental = ["recipes"]` |
 
+`network` is an experimental client capability (`capabilities = ["network"]`,
+`experimental = ["network"]`). It lets a mod read, drop and replace complete
+packet bodies on remote connections. The body starts with a VarInt packet ID;
+incoming packets have been decrypted and decompressed, and outgoing packets
+have not yet been compressed or encrypted. The mod receives the phase and
+direction on every call. A separate instance is made for each connection, and
+its `network_start(address, target_version)` selects whether it runs. A mod
+can emit up to 16 packets per input, each at most 8 MiB. Failure closes the
+connection with a diagnostic. Network mods do not get raw sockets or account
+tokens. See the [`network-events`](api/mods-reference.md#network-events) API reference.
+
 | Hook (export) | When |
 |---|---|
 | `init() -> result<registration, string>` | once, after loading; an error keeps the mod off and is shown |

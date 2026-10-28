@@ -38,6 +38,9 @@ wit_bindgen::generate!({
 });
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
+pub use exports::horizon::mods::network_events::{
+    Direction as NetworkDirection, Guest as __NetworkEventsGuest, Phase as NetworkPhase,
+};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
 pub use horizon::mods::{
     browser, chat, command, game, hud, input, log, recipes, render, storage, ui,
@@ -68,6 +71,24 @@ pub trait Mod: Sized + 'static {
     /// The player opened the mod's settings page (capability `ui`): call
     /// [`ui::set_settings`] for fresh widgets.
     fn ui_settings_opened(&mut self) {}
+    /// Creates an independent instance for one remote connection. `None`
+    /// declines it. Called only when the manifest declares `network`.
+    fn network_start(
+        _address: &str,
+        _target_version: Option<&str>,
+    ) -> Result<Option<Self>, String> {
+        Ok(None)
+    }
+    /// Converts a full packet body after decrypt/decompress or before
+    /// compress/encrypt. Empty output drops the packet.
+    fn network_packet(
+        &mut self,
+        _phase: NetworkPhase,
+        _direction: NetworkDirection,
+        body: Vec<u8>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        Ok(vec![body])
+    }
 }
 
 impl Registration {
@@ -122,6 +143,7 @@ macro_rules! export_mod {
             use ::std::cell::RefCell;
             ::std::thread_local! {
                 static STATE: RefCell<Option<$t>> = const { RefCell::new(None) };
+                static NETWORK_STATE: RefCell<Option<$t>> = const { RefCell::new(None) };
             }
             fn with(f: impl FnOnce(&mut $t)) {
                 STATE.with(|s| {
@@ -163,6 +185,28 @@ macro_rules! export_mod {
                     with(|m| $crate::Mod::ui_settings_opened(m))
                 }
             }
+            impl $crate::__NetworkEventsGuest for Export {
+                fn start(address: String, target_version: Option<String>) -> Result<bool, String> {
+                    let state =
+                        <$t as $crate::Mod>::network_start(&address, target_version.as_deref())?;
+                    let active = state.is_some();
+                    NETWORK_STATE.with(|s| *s.borrow_mut() = state);
+                    Ok(active)
+                }
+                fn packet(
+                    phase: $crate::NetworkPhase,
+                    direction: $crate::NetworkDirection,
+                    body: Vec<u8>,
+                ) -> Result<Vec<Vec<u8>>, String> {
+                    NETWORK_STATE.with(|s| {
+                        let mut state = s.borrow_mut();
+                        let Some(m) = state.as_mut() else {
+                            return Err("network mod was not started".into());
+                        };
+                        <$t as $crate::Mod>::network_packet(m, phase, direction, body)
+                    })
+                }
+            }
             // Only WebAssembly has the component's exports: a host build (cargo test or
             // clippy on the workspace) checks the mod without them, which macOS
             // couldn't link (its exported-symbols list cuts names at the `#`).
@@ -172,6 +216,7 @@ macro_rules! export_mod {
             let _ = (
                 <Export as $crate::__Guest>::init,
                 <Export as $crate::__UiEventsGuest>::select,
+                <Export as $crate::__NetworkEventsGuest>::start,
             );
         };
     };
