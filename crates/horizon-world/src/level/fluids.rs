@@ -14,7 +14,6 @@ use horizon_core::{
     position::BlockPos,
     random::RandomSource,
 };
-use std::collections::HashMap;
 
 /// `LiquidBlock.POSSIBLE_FLOW_DIRECTIONS`.
 const POSSIBLE_FLOW_DIRECTIONS: [Direction; 5] = [
@@ -23,6 +22,14 @@ const POSSIBLE_FLOW_DIRECTIONS: [Direction; 5] = [
     Direction::North,
     Direction::East,
     Direction::West,
+];
+/// `Direction.Plane.HORIZONTAL` in enum declaration order: `getSpread`
+/// returns an EnumMap, which iterates this way.
+const SPREAD_ORDER: [Direction; 4] = [
+    Direction::North,
+    Direction::South,
+    Direction::West,
+    Direction::East,
 ];
 
 fn is_water(kind: FluidKind) -> bool {
@@ -44,16 +51,33 @@ fn flowing_of(kind: FluidKind) -> FluidKind {
 }
 
 /// `FlowingFluid.SpreadContext`: per-spread caches keyed by horizontal offset.
+/// The slope search stays within `SLOPE_RADIUS` of the origin, so a fixed
+/// table indexed by `(dx, dz)` serves it without hashing or allocating.
 struct SpreadContext {
     origin: BlockPos,
-    states: HashMap<i16, BlockStateId>,
-    holes: HashMap<i16, bool>,
+    states: [Option<BlockStateId>; SPREAD_CELLS],
+    holes: [Option<bool>; SPREAD_CELLS],
 }
+/// `slope_find_distance` (4 for water and nether lava, 2 for overworld lava).
+const SLOPE_RADIUS: i32 = 4;
+const SPREAD_WIDTH: i32 = 2 * SLOPE_RADIUS + 1;
+const SPREAD_CELLS: usize = (SPREAD_WIDTH * SPREAD_WIDTH) as usize;
 impl SpreadContext {
-    fn key(&self, pos: BlockPos) -> i16 {
-        let x = pos.x.wrapping_sub(self.origin.x).wrapping_add(128) & 0xff;
-        let z = pos.z.wrapping_sub(self.origin.z).wrapping_add(128) & 0xff;
-        ((x << 8) | z) as i16
+    fn new(origin: BlockPos) -> Self {
+        Self {
+            origin,
+            states: [None; SPREAD_CELLS],
+            holes: [None; SPREAD_CELLS],
+        }
+    }
+    /// The cache slot of `pos`, if the slope search can reach it.
+    fn key(&self, pos: BlockPos) -> Option<usize> {
+        let dx = pos.x.wrapping_sub(self.origin.x);
+        let dz = pos.z.wrapping_sub(self.origin.z);
+        if dx.unsigned_abs() > SLOPE_RADIUS as u32 || dz.unsigned_abs() > SLOPE_RADIUS as u32 {
+            return None;
+        }
+        Some(((dx + SLOPE_RADIUS) * SPREAD_WIDTH + (dz + SLOPE_RADIUS)) as usize)
     }
 }
 
@@ -363,23 +387,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && self.can_hold_specific_fluid(test, flowing_of(kind))
     }
     fn context_state(&self, context: &mut SpreadContext, pos: BlockPos) -> BlockStateId {
-        let key = context.key(pos);
-        if let Some(state) = context.states.get(&key) {
-            return *state;
+        let Some(key) = context.key(pos) else {
+            return self.state(pos);
+        };
+        if let Some(state) = context.states[key] {
+            return state;
         }
         let state = self.state(pos);
-        context.states.insert(key, state);
+        context.states[key] = Some(state);
         state
     }
     fn context_is_hole(&self, kind: FluidKind, context: &mut SpreadContext, pos: BlockPos) -> bool {
-        let key = context.key(pos);
-        if let Some(hole) = context.holes.get(&key) {
-            return *hole;
+        let Some(key) = context.key(pos) else {
+            let state = self.context_state(context, pos);
+            let below_state = self.below_state(pos);
+            return self.is_water_hole(kind, state, below_state);
+        };
+        if let Some(hole) = context.holes[key] {
+            return hole;
         }
         let state = self.context_state(context, pos);
         let below_state = self.below_state(pos);
         let hole = self.is_water_hole(kind, state, below_state);
-        context.holes.insert(key, hole);
+        context.holes[key] = Some(hole);
         hole
     }
     fn slope_distance(
@@ -418,17 +448,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         lowest
     }
-    /// `FlowingFluid.getSpread` (EnumMap: iteration in Direction order).
+    /// `FlowingFluid.getSpread` (EnumMap: iteration in Direction declaration
+    /// order, so the sort of the old Vec of four directions is gone).
     fn spread_targets(
         &self,
         kind: FluidKind,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Vec<(Direction, FluidState)> {
+        fluid: FluidState,
+    ) -> ([(Direction, FluidState); 4], usize) {
         let mut lowest = 1000;
-        let mut result: Vec<(Direction, FluidState)> = Vec::new();
+        let mut result = [(Direction::Down, fluid); 4];
+        let mut len = 0;
         let mut context: Option<SpreadContext> = None;
-        for direction in HORIZONTAL {
+        for direction in SPREAD_ORDER {
             let test_pos = rel(pos, direction);
             let test_state = self.state(test_pos);
             let test_fluid = self.b.fluid(test_state);
@@ -439,28 +472,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if !self.can_hold_specific_fluid(test_state, new_fluid.kind()) {
                 continue;
             }
-            let context = context.get_or_insert_with(|| SpreadContext {
-                origin: pos,
-                states: HashMap::new(),
-                holes: HashMap::new(),
-            });
+            let context =
+                context.get_or_insert_with(|| SpreadContext::new(pos));
             let distance = if self.context_is_hole(kind, context, test_pos) {
                 0
             } else {
                 self.slope_distance(kind, test_pos, 1, direction.opposite(), test_state, context)
             };
             if distance < lowest {
-                result.clear();
+                len = 0;
             }
             if distance <= lowest {
                 if self.can_be_replaced_with(test_fluid, test_pos, new_fluid.kind(), direction) {
-                    result.push((direction, new_fluid));
+                    result[len] = (direction, new_fluid);
+                    len += 1;
                 }
                 lowest = distance;
             }
         }
-        result.sort_by_key(|(direction, _)| *direction as u8);
-        result
+        (result, len)
     }
     fn source_neighbour_count(&self, kind: FluidKind, pos: BlockPos) -> i32 {
         HORIZONTAL
@@ -514,7 +544,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             neighbour = 7;
         }
         if neighbour > 0 {
-            for (direction, new_fluid) in self.spread_targets(kind, pos, state) {
+            let (targets, len) = self.spread_targets(kind, pos, state, fluid);
+            for &(direction, new_fluid) in &targets[..len] {
                 let neighbour_pos = rel(pos, direction);
                 let neighbour_state = self.state(neighbour_pos);
                 self.spread_to(kind, neighbour_pos, neighbour_state, direction, new_fluid);
@@ -744,4 +775,15 @@ pub(crate) fn merged_face_occludes(
     !block
         .join_is_not_empty(&union, ShapeOp::ONLY_FIRST)
         .unwrap_or(true)
+}
+
+#[cfg(test)]
+impl<L: LevelAccess + ?Sized> Sim<'_, L> {
+    /// The sides a water tick at `pos` would spread to, in order.
+    pub(crate) fn spread_target_directions(&self, pos: BlockPos) -> Vec<Direction> {
+        let state = self.state(pos);
+        let (targets, len) =
+            self.spread_targets(FluidKind::Water, pos, state, self.b.fluid(state));
+        targets[..len].iter().map(|&(d, _)| d).collect()
+    }
 }
