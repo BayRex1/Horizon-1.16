@@ -1826,6 +1826,8 @@ struct Game<'a> {
     /// `tick_items`'s removed mask and cell grid, reused across ticks.
     item_removed: Vec<bool>,
     item_cells: horizon_client::entities::ItemCells,
+    /// The trial spawners' uuid → entity index, rebuilt once per tick.
+    trial_uuid_index: std::cell::RefCell<trial_spawner::UuidIndex>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
@@ -13985,6 +13987,7 @@ impl<'a> Game<'a> {
             item_candidates: Vec::new(),
             item_removed: Vec::new(),
             item_cells: Default::default(),
+            trial_uuid_index: Default::default(),
             creative_screen: prepared.creative_screen,
             control: None,
             agent_control_on: false,
