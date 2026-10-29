@@ -6,10 +6,9 @@ use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, OnceLock};
 
-/// Minecraft Java 1.16.5 Overworld starts at Y=0.
-pub const MIN_Y: i32 = 0;
-/// Minecraft Java 1.16.5 Overworld is 256 blocks tall.
-pub const HEIGHT: i32 = 256;
+/// Resident chunk storage currently uses the modern world-height layout.
+pub const MIN_Y: i32 = -64;
+pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;
 
 /// Biomes are 4x4x4 containers over the biome table (67 entries: a 7-bit
