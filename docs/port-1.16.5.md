@@ -26,6 +26,7 @@ Keep this as an isolated branch until the old protocol and gameplay path have te
 - [x] Add an isolated protocol-754 module with handshake, status request/ping, and username-only Login Start frame encoders plus unit tests. This is groundwork only; these encoders are not yet wired into the live connection.
 - [ ] Add protocol tests using captured/generated fixtures and verify status ping, offline/local login where supported, and disconnect handling.
 - [x] Add isolated protocol-754 Play packet IDs and keep-alive encode/decode helpers with unit tests. This is packet groundwork only; it does not yet implement the Play-state loop.
+- [x] Add protocol-754 player position/look decoding, teleport-confirm encoding, and player position/rotation encoding with unit tests. The networking loop still needs to dispatch these codecs and apply movement state.
 
 ### Milestone 3 — playable world
 
