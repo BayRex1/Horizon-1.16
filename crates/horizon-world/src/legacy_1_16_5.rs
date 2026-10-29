@@ -87,8 +87,7 @@ mod tests {
         assert_eq!(blocks[0].max_state_id, 0);
         assert!(blocks.windows(2).all(|pair| pair[0].id < pair[1].id));
         assert!(blocks.iter().all(|block| {
-            block.min_state_id <= block.default_state
-                && block.default_state <= block.max_state_id
+            block.min_state_id <= block.default_state && block.default_state <= block.max_state_id
         }));
         assert_eq!(blocks.last().map(|block| block.max_state_id), Some(17111));
     }
@@ -100,8 +99,18 @@ mod tests {
             .expect("oak stairs must exist");
         assert_eq!(stairs.min_state_id, 1954);
         assert_eq!(stairs.max_state_id, 2033);
-        assert!(stairs.states.iter().any(|property| property.name == "facing"));
-        assert!(stairs.states.iter().any(|property| property.name == "waterlogged"));
+        assert!(
+            stairs
+                .states
+                .iter()
+                .any(|property| property.name == "facing")
+        );
+        assert!(
+            stairs
+                .states
+                .iter()
+                .any(|property| property.name == "waterlogged")
+        );
     }
 
     #[test]
@@ -111,8 +120,17 @@ mod tests {
         assert_eq!(biomes[0].id, 0);
         assert_eq!(biomes[0].name, "ocean");
         assert!(biomes.windows(2).all(|pair| pair[0].id < pair[1].id));
-        for name in ["plains", "the_void", "soul_sand_valley", "crimson_forest", "basalt_deltas"] {
-            assert!(biome_by_name(name).expect("data must parse").is_some(), "missing biome {name}");
+        for name in [
+            "plains",
+            "the_void",
+            "soul_sand_valley",
+            "crimson_forest",
+            "basalt_deltas",
+        ] {
+            assert!(
+                biome_by_name(name).expect("data must parse").is_some(),
+                "missing biome {name}"
+            );
         }
     }
 }
