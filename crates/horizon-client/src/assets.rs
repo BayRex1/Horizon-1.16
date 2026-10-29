@@ -247,7 +247,6 @@ impl RenderAssets {
     }
 }
 
-
 #[cfg(test)]
 mod resource_version_tests {
     use super::*;
@@ -265,6 +264,9 @@ mod resource_version_tests {
         let message = error.to_string();
         assert!(message.contains("2586"), "{message}");
         assert!(message.contains(&DATA_VERSION.to_string()), "{message}");
-        assert!(message.contains(horizon_core::version::VERSION_ID), "{message}");
+        assert!(
+            message.contains(horizon_core::version::VERSION_ID),
+            "{message}"
+        );
     }
 }
