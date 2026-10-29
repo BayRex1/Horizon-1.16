@@ -124,14 +124,18 @@ account's secrets from the keychain.
   ownership answer, whether it needs signing in again) go to the OS keychain: Keychain on macOS,
   Credential Manager on Windows, the Secret Service (GNOME Keyring, KWallet) on Linux. Service name
   `dev.playhorizon.launcher`. Every account's secrets are one item, `vault`
-  (JSON by Minecraft UUID), read once per run: macOS asks before each item a changed launcher reads,
-  so one prompt, not one per account. Each change re-reads it and writes back only itself, under a
-  lock file every launcher process shares (`vault.lock` in the data folder): the window, the
-  command line and the MCP server never undo each other's sign-ins. An item that doesn't read is
-  an error, never written over. Credential Manager takes at most 2560 bytes per item: there the
-  vault is split over `vault`, `vault.1`, `vault.2`... Accounts kept the older way, an item per
-  account (`<uuid>`, `<uuid>.1`...), are copied into the vault as they are read and left where
-  they are, for older launchers; signing out removes both.
+  (JSON by Minecraft UUID), read once per run and again whenever another launcher process changed
+  it (each change leaves a new mark in `vault.stamp` beside the lock file): macOS asks before each
+  item a changed launcher reads, so one prompt, not one per account. Each change, and each copy of
+  an older item into the vault, re-reads it and writes back only itself, under a lock file every
+  launcher process shares (`vault.lock` in the data folder): the window, the command line and the
+  MCP server never undo each other's sign-ins or sign-outs. An item that doesn't read is an error,
+  never written over. Credential Manager takes at most 2560 bytes per item: there the vault is
+  written in pieces of a new generation (`vault@<gen>.0`, `vault@<gen>.1`...) and then `vault` is
+  switched to them in one write, so a write cut off halfway leaves the last whole vault. Accounts
+  kept the older way, an item per account (`<uuid>`, `<uuid>.1`...), are copied into the vault as
+  they are read and left where they are, for older launchers; signing out removes both, under the
+  same lock.
 - `accounts.json` in the launcher's data folder keeps only public data: UUID, name, skin URL, which
   account is selected. Never a token.
 - No keychain available (a Linux box without a Secret Service, a locked keychain): sign-in still

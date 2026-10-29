@@ -667,30 +667,21 @@ impl SecretStore for SystemStore {
 
 /// Keychain on macOS, Credential Manager on Windows (the keyring crate). Credential Manager takes at
 /// most 2560 bytes of UTF-16 per item and a sign-in's secrets are longer, so there a secret is kept
-/// in pieces: the first under the account's key, the rest under `key.1`, `key.2`... The keychain
-/// takes it whole: each item read is a prompt when the launcher changed, so one item.
+/// in pieces (`pieced`). The keychain takes it whole: each item read is a prompt when the launcher
+/// changed, so one item.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct SystemStore;
 
-/// Bytes of UTF-8 per keychain item: at most twice as many in UTF-16, well under 2560.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Bytes of UTF-8 per Credential Manager item: at most twice as many in UTF-16, well under 2560.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const PIECE: usize = 1000;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn piece_key(key: &str, n: usize) -> String {
-    if n == 0 {
-        key.to_string()
-    } else {
-        format!("{key}.{n}")
-    }
-}
-
-/// `secret` cut into pieces of at most `PIECE` bytes, on character boundaries (Windows only).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn split_secret(mut secret: &str) -> Vec<&str> {
+/// `secret` cut into pieces of at most `max` bytes, on character boundaries.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn split_secret(mut secret: &str, max: usize) -> Vec<&str> {
     let mut pieces = Vec::new();
-    while cfg!(windows) && secret.len() > PIECE {
-        let mut cut = PIECE;
+    while secret.len() > max {
+        let mut cut = max;
         while !secret.is_char_boundary(cut) {
             cut -= 1;
         }
@@ -702,66 +693,144 @@ fn split_secret(mut secret: &str) -> Vec<&str> {
     pieces
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn read_item(key: &str) -> Result<Option<String>, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+/// A secret longer than one item, kept so that a write cut off halfway (a crash, power) leaves the
+/// last whole one: the pieces of a new generation are written first (`key@<gen>.0`, `key@<gen>.1`...),
+/// then the head item `key` is switched to them in one write ("\u{1}pieces <gen> <count>"), then the
+/// old generation goes. Older launchers' pieces (`key`, `key.1`, `key.2`...) still read.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod pieced {
+    /// One system item each.
+    pub trait Items {
+        fn read(&self, key: &str) -> Result<Option<String>, String>;
+        fn write(&self, key: &str, value: &str) -> Result<(), String>;
+        /// False when there was none.
+        fn remove(&self, key: &str) -> Result<bool, String>;
+    }
+
+    const HEAD: &str = "\u{1}pieces ";
+
+    /// The generation and piece count a head item names, if it is one.
+    fn head(value: &str) -> Option<(&str, usize)> {
+        let (generation, count) = value.strip_prefix(HEAD)?.split_once(' ')?;
+        Some((generation, count.parse().ok()?))
+    }
+
+    fn piece(key: &str, generation: &str, i: usize) -> String {
+        format!("{key}@{generation}.{i}")
+    }
+
+    pub fn read(items: &dyn Items, key: &str) -> Result<Option<String>, String> {
+        let Some(first) = items.read(key)? else {
+            return Ok(None);
+        };
+        if let Some((generation, count)) = head(&first) {
+            let mut out = String::new();
+            for i in 0..count {
+                let part = items.read(&piece(key, generation, i))?;
+                out.push_str(&part.ok_or("A piece of a keychain item is missing.")?);
+            }
+            return Ok(Some(out));
+        }
+        // An older launcher's pieces.
+        let mut out = first;
+        for n in 1.. {
+            match items.read(&format!("{key}.{n}"))? {
+                Some(part) => out.push_str(&part),
+                None => break,
+            }
+        }
+        Ok(Some(out))
+    }
+
+    pub fn write(items: &dyn Items, key: &str, value: &str, max: usize) -> Result<(), String> {
+        let before = items.read(key)?;
+        let parts = super::split_secret(value, max);
+        if parts.len() == 1 {
+            // One item: written in one go.
+            items.write(key, value)?;
+        } else {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let generation = format!("{:x}{:x}", nanos, std::process::id());
+            for (i, part) in parts.iter().enumerate() {
+                items.write(&piece(key, &generation, i), part)?;
+            }
+            // The switch: until here the head names the last whole value.
+            items.write(key, &format!("{HEAD}{generation} {}", parts.len()))?;
+        }
+        if let Some(before) = before {
+            remove_pieces(items, key, &before);
+        }
+        Ok(())
+    }
+
+    pub fn delete(items: &dyn Items, key: &str) -> Result<(), String> {
+        if let Some(before) = items.read(key)? {
+            remove_pieces(items, key, &before);
+        }
+        items.remove(key)?;
+        Ok(())
+    }
+
+    /// The pieces `before` (a head item's old value) used, gone: best effort, they're unread now.
+    fn remove_pieces(items: &dyn Items, key: &str, before: &str) {
+        match head(before) {
+            Some((generation, count)) => {
+                for i in 0..count {
+                    let _ = items.remove(&piece(key, generation, i));
+                }
+            }
+            None => {
+                for n in 1.. {
+                    if !items.remove(&format!("{key}.{n}")).unwrap_or(false) {
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
+/// The keyring crate's items.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn write_item(key: &str, secret: &str) -> Result<(), String> {
-    keyring::Entry::new(SERVICE, key)
-        .and_then(|e| e.set_password(secret))
-        .map_err(|e| e.to_string())
-}
+struct Keyring;
 
-/// Removes one item; false when there was none.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn remove_item(key: &str) -> Result<bool, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
-        Ok(()) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(e.to_string()),
+impl pieced::Items for Keyring {
+    fn read(&self, key: &str) -> Result<Option<String>, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn write(&self, key: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(SERVICE, key)
+            .and_then(|e| e.set_password(value))
+            .map_err(|e| e.to_string())
+    }
+    fn remove(&self, key: &str) -> Result<bool, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SecretStore for SystemStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let Some(mut secret) = read_item(key)? else {
-            return Ok(None);
-        };
-        for n in 1.. {
-            match read_item(&piece_key(key, n))? {
-                Some(piece) => secret.push_str(&piece),
-                None => break,
-            }
-        }
-        Ok(Some(secret))
+        pieced::read(&Keyring, key)
     }
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        let pieces = split_secret(secret);
-        for (n, piece) in pieces.iter().enumerate() {
-            write_item(&piece_key(key, n), piece)?;
-        }
-        // Pieces left over from a longer secret would be read back as part of this one.
-        for n in pieces.len().. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        // Only Credential Manager needs pieces.
+        let max = if cfg!(windows) { PIECE } else { usize::MAX };
+        pieced::write(&Keyring, key, secret, max)
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        for n in 0.. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        pieced::delete(&Keyring, key)
     }
     fn persistent(&self) -> bool {
         true
@@ -771,12 +840,14 @@ impl SecretStore for SystemStore {
 /// Every account's secrets in one keychain item (`VAULT`, JSON by key): one prompt where the
 /// system asks before each item a changed launcher reads (macOS), not one per account and piece.
 ///
-/// Reads come from memory, loaded once per run (a failed or refused read is remembered too, so it
-/// isn't asked again). Each change re-reads the item, applies only itself and writes it back,
-/// under this process's lock and a lock file every launcher process shares (`lock`): the window,
-/// the command line and the MCP server never write over each other's sign-ins. An item that
-/// doesn't read as the vault is an error, never written over. Secrets kept the older way, an item
-/// per account, are copied in as they are read and left where they are, for older launchers.
+/// Reads come from memory, read again only when another launcher process changed the vault since
+/// (`vault.stamp` beside the lock file says so); a failed or refused read is remembered until then,
+/// so it isn't asked again. Each change (and each copy of an older item into the vault) re-reads
+/// the item, applies only itself and writes it back, under this process's lock and a lock file
+/// every launcher process shares (`lock`): the window, the command line and the MCP server never
+/// write over or undo each other's sign-ins and sign-outs. An item that doesn't read as the vault
+/// is an error, never written over. Secrets kept the older way, an item per account, are copied
+/// in as they are read and left where they are, for older launchers; signing out removes both.
 pub struct Vault<S: SecretStore> {
     inner: S,
     lock: Option<PathBuf>,
@@ -787,7 +858,9 @@ pub struct Vault<S: SecretStore> {
 struct VaultState {
     /// The vault as last read or written; an error if it couldn't be read.
     read: Option<Result<std::collections::BTreeMap<String, String>, String>>,
-    /// Keys looked for the older way this run (found or not): looked for once.
+    /// The stamp the vault had then (`stamp`).
+    stamp: Option<String>,
+    /// Keys looked for the older way since then (found or not): looked for once.
     legacy_checked: std::collections::BTreeSet<String>,
 }
 
@@ -827,11 +900,32 @@ impl<S: SecretStore> Vault<S> {
         Some(file)
     }
 
-    /// `f` on the vault as the keychain has it now, written back: one change, nothing else's
-    /// undone.
+    /// Where every change leaves a new mark, for the other processes to see their copy is old.
+    fn stamp_path(&self) -> Option<PathBuf> {
+        Some(self.lock.as_ref()?.with_extension("stamp"))
+    }
+
+    fn stamp(&self) -> Option<String> {
+        std::fs::read_to_string(self.stamp_path()?).ok()
+    }
+
+    /// The vault in memory, read again if another process changed it since.
+    fn current<'a>(&self, state: &'a mut VaultState) -> &'a mut VaultState {
+        let stamp = self.stamp();
+        if state.read.is_none() || state.stamp != stamp {
+            let _held = self.lock_file();
+            state.read = Some(self.read_now());
+            state.stamp = stamp;
+            state.legacy_checked.clear();
+        }
+        state
+    }
+
+    /// `f` on the vault as the keychain has it now (and the store itself, for the older items),
+    /// written back if it says so: one change, nothing else's undone, no other process between.
     fn change<T>(
         &self,
-        f: impl FnOnce(&mut std::collections::BTreeMap<String, String>) -> T,
+        f: impl FnOnce(&mut std::collections::BTreeMap<String, String>, &S) -> Result<(T, bool), String>,
     ) -> Result<T, String> {
         let mut state = self
             .state
@@ -839,11 +933,23 @@ impl<S: SecretStore> Vault<S> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _held = self.lock_file();
         let mut vault = self.read_now()?;
-        let out = f(&mut vault);
-        self.inner.set(
-            VAULT,
-            &serde_json::to_string(&vault).map_err(|e| e.to_string())?,
-        )?;
+        let (out, write) = f(&mut vault, &self.inner)?;
+        if write {
+            self.inner.set(
+                VAULT,
+                &serde_json::to_string(&vault).map_err(|e| e.to_string())?,
+            )?;
+            // The other processes' copies are old now.
+            if let Some(path) = self.stamp_path() {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos());
+                let mark = format!("{nanos:x}-{}", std::process::id());
+                if std::fs::write(&path, &mark).is_ok() {
+                    state.stamp = Some(mark);
+                }
+            }
+        }
         state.read = Some(Ok(vault));
         Ok(out)
     }
@@ -851,15 +957,12 @@ impl<S: SecretStore> Vault<S> {
 
 impl<S: SecretStore> SecretStore for Vault<S> {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let legacy = {
-            let mut state = self
+        {
+            let mut guard = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.read.is_none() {
-                let _held = self.lock_file();
-                state.read = Some(self.read_now());
-            }
+            let state = self.current(&mut guard);
             let vault = state
                 .read
                 .as_ref()
@@ -869,28 +972,38 @@ impl<S: SecretStore> SecretStore for Vault<S> {
             if let Some(secret) = vault.get(key) {
                 return Ok(Some(secret.clone()));
             }
-            // Not in the vault: kept the older way? Asked once a run.
+            // Not in the vault: kept the older way? Looked for once.
             if !state.legacy_checked.insert(key.to_owned()) {
                 return Ok(None);
             }
-            self.inner.get(key)?
-        };
-        let Some(old) = legacy else {
-            return Ok(None);
-        };
-        // Copied in, the older item left for older launchers. Another process may have put a
-        // newer one in meanwhile: that one stands.
-        let secret = self.change(|v| v.entry(key.to_owned()).or_insert(old.clone()).clone());
-        Ok(Some(secret.unwrap_or(old)))
+        }
+        // Copied in under the lock, so a sign-out elsewhere can't be undone by this copy: the
+        // older item is read in there, and left for older launchers.
+        self.change(|v, inner| match v.get(key) {
+            Some(secret) => Ok((Some(secret.clone()), false)),
+            None => match inner.get(key)? {
+                Some(old) => {
+                    v.insert(key.to_owned(), old.clone());
+                    Ok((Some(old), true))
+                }
+                None => Ok((None, false)),
+            },
+        })
     }
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        self.change(|v| v.insert(key.to_owned(), secret.to_owned()))?;
-        Ok(())
+        self.change(|v, _| {
+            v.insert(key.to_owned(), secret.to_owned());
+            Ok(((), true))
+        })
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        self.change(|v| v.remove(key))?;
-        // Signed out everywhere: the older launchers' item too.
-        self.inner.delete(key)
+        // Out of the vault and, still under the lock, the older launchers' item too: nothing can
+        // copy it back in between.
+        self.change(|v, inner| {
+            v.remove(key);
+            inner.delete(key)?;
+            Ok(((), true))
+        })
     }
     fn persistent(&self) -> bool {
         self.inner.persistent()
