@@ -534,7 +534,6 @@ pub fn to_client_runtime_chunk(
     })
 }
 
-
 /// Load a saved 1.16.5 chunk from the world's root `region/` directory and
 /// adapt its section coordinates for the current client's vertical layout.
 /// This only decodes data; it does not yet insert the chunk into the live
