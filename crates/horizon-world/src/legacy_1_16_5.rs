@@ -499,13 +499,10 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
     })
 }
 
-/// Convert a legacy chunk into the vertical section coordinate system expected
-/// by the current client (whose world starts at Y=-64).
-///
-/// The storage-level `ChunkData` adapter intentionally keeps section Y in the
-/// original 1.16.5 range 0..15. The renderer's decoder instead computes its
-/// section slot relative to MIN_Y=-64, so client-facing NBT must use Y=4..19.
-/// This returns a separate NBT value and never mutates the legacy source file.
+/// Adapt a legacy chunk to the current client's NBT schema without changing
+/// its absolute section coordinates. Section Y is an absolute 16-block index:
+/// a legacy section at Y=0 still belongs at world Y=0 even though Horizon's
+/// section array starts at Y=-64. This never mutates the legacy source file.
 pub fn to_client_runtime_chunk(
     root: &crate::nbt::NamedTag,
 ) -> std::io::Result<crate::nbt::NamedTag> {
@@ -526,7 +523,7 @@ pub fn to_client_runtime_chunk(
         if !(0..SECTION_COUNT as i8).contains(y) {
             return Err(invalid(format!("legacy section Y outside 0..15: {y}")));
         }
-        *y += 4;
+        // Keep absolute section coordinates; the decoder maps Y=0 to slot 4.
     }
     Ok(NamedTag {
         name: adapted.name,
@@ -535,7 +532,7 @@ pub fn to_client_runtime_chunk(
 }
 
 /// Load a saved 1.16.5 chunk from the world's root `region/` directory and
-/// adapt its section coordinates for the current client's vertical layout.
+/// adapt its section schema for the current client without rewriting the source.
 /// This only decodes data; it does not yet insert the chunk into the live
 /// streaming renderer or change the on-disk legacy chunk.
 pub fn load_client_runtime_chunk(
@@ -1024,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn client_chunk_loader_reads_legacy_region_without_rewriting_it() {
+    fn client_chunk_loader_preserves_legacy_section_coordinates_without_rewriting_it() {
         use crate::nbt::{Limits, Tag};
         use crate::region::RegionFile;
         use horizon_core::position::ChunkPos;
@@ -1045,11 +1042,11 @@ mod tests {
         };
         assert_eq!(
             sections.first().and_then(|s| s.get("Y")),
-            Some(&Tag::Byte(4))
+            Some(&Tag::Byte(0))
         );
         assert_eq!(
             sections.last().and_then(|s| s.get("Y")),
-            Some(&Tag::Byte(19))
+            Some(&Tag::Byte(15))
         );
 
         let mut region = RegionFile::open(directory.join("region/r.0.0.mca")).unwrap();
@@ -1374,7 +1371,7 @@ mod tests {
     }
 
     #[test]
-    fn client_chunk_adapter_offsets_legacy_sections_into_modern_vertical_range() {
+    fn client_chunk_adapter_preserves_absolute_section_coordinates() {
         use crate::nbt::Tag;
 
         let root = generate_bootstrap_chunk(123, 0, 0);
