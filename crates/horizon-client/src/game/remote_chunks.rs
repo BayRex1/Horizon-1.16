@@ -478,6 +478,7 @@ mod tests {
             }
         }
         assert_eq!(legacy_biome_cells(&column, 16, &map).unwrap(), [0; 64]);
+        assert!(legacy_biome_cells(&column, 5, &[0]).is_err());
         column.full_chunk = false;
         assert_eq!(legacy_biome_cells(&column, 5, &map).unwrap(), [0; 64]);
     }
