@@ -266,16 +266,12 @@ impl Game<'_> {
                 for quart_y in 0..4 {
                     for quart_z in 0..4 {
                         for quart_x in 0..4 {
-                            let source_index = (quart_x * 4 + quart_z) * 64
-                                + legacy_y * 4
-                                + quart_y;
+                            let source_index =
+                                (quart_x * 4 + quart_z) * 64 + legacy_y * 4 + quart_y;
                             let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
                             let legacy_biome = chunk.biomes[source_index];
                             biome_cells[target_index] = if legacy_biome >= 0 {
-                                biome_map
-                                    .get(legacy_biome as usize)
-                                    .copied()
-                                    .unwrap_or(0)
+                                biome_map.get(legacy_biome as usize).copied().unwrap_or(0)
                             } else {
                                 0
                             };
