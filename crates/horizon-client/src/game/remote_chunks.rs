@@ -223,6 +223,9 @@ impl Game<'_> {
     /// after the 1.16.5 registry has been mapped to the client's render IDs.
     /// Until that registry mapping exists, accepting arbitrary legacy IDs
     /// would render unrelated modern blocks.
+    // The protocol-754 packet dispatch is not wired into the live game loop yet.
+    // Keep this bridge available for that integration without failing workspace clippy.
+    #[allow(dead_code)]
     pub(super) fn remote_legacy_chunk(
         &mut self,
         chunk: horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
