@@ -230,6 +230,7 @@ impl Game<'_> {
         &mut self,
         chunk: horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
         block_state_map: &[u32],
+        biome_map: &[u32],
     ) -> std::result::Result<(), String> {
         if !self.remote_chunk_in_range(chunk.x, chunk.z) {
             return Ok(());
@@ -257,9 +258,34 @@ impl Game<'_> {
                     0
                 };
             }
+            // Protocol 754 sends a 4x4x64 biome volume for full chunks.
+            // Its index is (quart_x * 4 + quart_z) * 64 + quart_y; the
+            // resident section uses (quart_y << 4) | (quart_z << 2) | quart_x.
+            let mut biome_cells = [0u32; 64];
+            if chunk.full_chunk && chunk.biomes.len() == 1024 {
+                for quart_y in 0..4 {
+                    for quart_z in 0..4 {
+                        for quart_x in 0..4 {
+                            let source_index = (quart_x * 4 + quart_z) * 64
+                                + legacy_y * 4
+                                + quart_y;
+                            let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
+                            let legacy_biome = chunk.biomes[source_index];
+                            biome_cells[target_index] = if legacy_biome >= 0 {
+                                biome_map
+                                    .get(legacy_biome as usize)
+                                    .copied()
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            };
+                        }
+                    }
+                }
+            }
             let mut section = Section {
                 blocks: PalettedContainer::from_values(block_strategy(), &values),
-                biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
+                biomes: PalettedContainer::from_values(BIOME_STRATEGY, &biome_cells),
                 light: Light::Uniform(0xF0),
             };
             section.compact();
