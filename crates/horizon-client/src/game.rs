@@ -12463,7 +12463,7 @@ impl Game<'_> {
             Some(renderer) => {
                 horizon_client::graphics::lod_distance_capped(distance, &renderer.info)
             }
-            None => distance.min(1024),
+            None => distance.min(horizon_client::lod::MAX_CHUNKS),
         }
     }
     /// Only enabled LOD worlds extend the renderer's range, never simulation.

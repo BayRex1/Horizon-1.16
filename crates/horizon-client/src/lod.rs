@@ -29,8 +29,17 @@ const SAMPLE_JOBS: usize = 4;
 /// terrain starts one sample job at most this often and no detail: it would
 /// otherwise take the cores the near chunks and the frame need.
 const HELD_SAMPLE_STEP: std::time::Duration = std::time::Duration::from_millis(500);
-/// The coarsest tile level: `Plan` roots cover at most 1024 chunks around.
-const MAX_LEVEL: u8 = 10;
+/// The coarsest tile level: `Plan` roots cover at most `MAX_CHUNKS` chunks
+/// around (a level-22 tile is 67 million blocks wide: the whole world).
+const MAX_LEVEL: u8 = 22;
+/// Tiles this far from the camera (1024 chunks, as far as far terrain went
+/// before it covered the world) are planned with `WORLD_SPLIT`.
+const WORLD_START: i32 = 1024 * 16;
+/// How many tile widths away from the camera a tile of the world-wide terrain
+/// splits (`Plan::visit`: cells then span about 1/48 of the distance).
+const WORLD_SPLIT: i32 = 3;
+/// The farthest `Plan` reaches, in chunks.
+pub const MAX_CHUNKS: u32 = 1 << 22;
 /// Top solid face and optional fluid face, in absolute block coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Surface {
@@ -338,7 +347,7 @@ impl Plan {
         elevation: i32,
         reduced: bool,
     ) -> Self {
-        let range = distance.min(1024) as i32 * 16;
+        let range = distance.min(MAX_CHUNKS) as i32 * 16;
         let mut level = 0;
         while (16 << level) < range {
             level += 1;
@@ -373,7 +382,16 @@ impl Plan {
         // Keep distant cells small on screen; finest tiles retain individual
         // blocks. Reduced keeps them twice as large (a quarter of the cells).
         let split = if previous.split.contains(&key) { 10 } else { 8 };
-        let threshold = key.size() * if reduced { split / 2 } else { split };
+        // Beyond the old 1024-chunk limit the cells are as large as `reduced`'s:
+        // the whole world is 22 levels, not all of them worth full cells.
+        let threshold = key.size()
+            * if key.distance(camera) >= WORLD_START {
+                WORLD_SPLIT
+            } else if reduced {
+                split / 2
+            } else {
+                split
+            };
         if key.level > 0
             && (key.distance(camera) < detail * 16 + 16
                 || key.distance(camera).max(self.elevation) < threshold)
@@ -1527,6 +1545,36 @@ mod tests {
             .origin(),
             [-32, 0, -64]
         );
+    }
+    #[test]
+    fn world_wide_plans_stay_small_and_cover_every_level() {
+        for (camera, elevation) in [
+            ([0, 0], 0),
+            ([115, 135], 49_000_000),
+            ([-30_000_000, 29_999_000], 90),
+        ] {
+            let plan =
+                Plan::with_previous(camera, 12, MAX_CHUNKS, &Plan::default(), elevation, false);
+            let leaves = plan
+                .nodes
+                .iter()
+                .filter(|k| !plan.split.contains(k))
+                .count();
+            let top = plan.nodes.iter().map(|k| k.level).max().unwrap();
+            eprintln!(
+                "{camera:?} y={elevation}: {} nodes, {leaves} leaves, top level {top}",
+                plan.nodes.len()
+            );
+            let reduced =
+                Plan::with_previous(camera, 12, MAX_CHUNKS, &Plan::default(), elevation, true);
+            eprintln!("  reduced: {} nodes", reduced.nodes.len());
+            let _ = top;
+            let mut per = [0usize; 23];
+            for k in &plan.nodes {
+                per[k.level as usize] += 1;
+            }
+            eprintln!("  per level {per:?}");
+        }
     }
     #[test]
     fn aerial_distance_avoids_unseen_full_detail_outside_the_near_area() {
