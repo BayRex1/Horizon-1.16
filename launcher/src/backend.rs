@@ -1587,6 +1587,7 @@ pub fn preparer(
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
                 java_home: Some(java_home.clone()),
+                output: None,
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }

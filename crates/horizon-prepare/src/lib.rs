@@ -11,6 +11,7 @@
 //! run, keyed by the sha256 of their inputs and outputs recorded in the manifest, as before.
 
 pub mod artifacts;
+mod check;
 pub mod exporters;
 mod files;
 mod inventory;
@@ -20,8 +21,9 @@ mod sounds;
 mod survival;
 mod worker;
 
+pub use check::{check, STAMP};
 pub use files::clone_or_copy;
-pub use sounds::{fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
+pub use sounds::{add_assets, fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
 
 use pyjson::Value;
 use sha2::Digest;
@@ -90,6 +92,17 @@ pub struct Options {
     /// The Java runtime to try after JAVA_HOME and the PATH (the launcher's pick, e.g. Minecraft's
     /// own Java it downloaded from Mojang).
     pub java_home: Option<PathBuf>,
+    /// Where the resources go (`--output`); None for `root`'s `.local/horizon-client/<version>`.
+    /// The exporters' scratch files stay in `root`'s `.local/` either way.
+    pub output: Option<PathBuf>,
+}
+
+/// The prepared resources' folder: `output`, else `root`'s `.local/horizon-client/<version>`.
+pub fn resources_dir(root: &Path, version: &str, output: Option<&Path>) -> PathBuf {
+    match output {
+        Some(output) => output.to_path_buf(),
+        None => root.join(".local/horizon-client").join(version),
+    }
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -417,7 +430,7 @@ impl Run<'_> {
     }
 }
 
-/// Prepares the resources; returns their folder (`.local/horizon-client/<version>`).
+/// Prepares the resources; returns their folder (`resources_dir`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     prepare_impl(options, log, false)
 }
@@ -460,7 +473,12 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         }
     };
     let local = root.join(".local");
-    let resources = local.join("horizon-client").join(&lock.version);
+    let resources = match &options.output {
+        Some(output) => {
+            std::path::absolute(output).map_err(|e| format!("{}: {e}", output.display()))?
+        }
+        None => resources_dir(root, &lock.version, None),
+    };
     mkdir(&resources)?;
     let manifest_path = resources.join("horizon-resources.json");
     let oracle = root.join(PARITY).join("VanillaHeightmapOracle.java");
@@ -504,6 +522,7 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         return Ok(run.bundle()?.to_path_buf());
     }
     steps(&run, &lock, &oracle, options.minecraft_dir.as_deref())?;
+    check::write_stamp(&resources)?;
     log(&format!(
         "Prepared Horizon native-client resources: {}",
         resources.display()
@@ -722,7 +741,7 @@ fn steps(
     // and every data-pack resource (worldgen, recipes, loot tables, tags), and
     // the vanilla pack's icon (`pack.png`) for the pack screen.
     (run.log)("Copying the client's assets and data");
-    let mut indexed = sounds::Assets::load(repo, minecraft, run.log);
+    let mut indexed = sounds::Assets::load(repo, Some(root), minecraft, run.log);
     let (version, count) = extract_client_resources(&run.client, root, indexed.as_mut().ok())?;
     sounds::optional_imports(indexed.as_mut().map_err(|e| e.as_str()), run.log);
 

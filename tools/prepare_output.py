@@ -18,8 +18,8 @@ It only grows: the last line is the current version, and a change to the output 
 The digest covers every file of the preparation, canonicalised where the preparer is not deterministic between
 runs (verified across the CI runners): JSON is compared as data (key order, the order of each `tags` list of
 creative-inventory.json, and the addresses in `$$Lambda/0x...` class names don't count); logs, compiled classes,
-the sounds (copied from the player's launcher by another step) and the manifest's file hashes (raw bytes) don't
-count. The manifest's own scalar fields (schema, data version, jar hashes, file count) do.
+the sounds (copied from the player's launcher by another step), the stamp naming the OUTPUT_VERSION
+(horizon-prepare.json) and the manifest's file hashes (raw bytes) don't count. The manifest's own scalar fields (schema, data version, jar hashes, file count) do.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSIONS = 'crates/horizon-prepare/output-versions.txt'
 LIB = 'crates/horizon-prepare/src/lib.rs'
 MANIFEST = 'horizon-resources.json'
+# The OUTPUT_VERSION that made the preparation (crates/horizon-prepare/src/check.rs), for --check.
+STAMP = 'horizon-prepare.json'
 LAMBDA = re.compile(r'\$\$Lambda/0x[0-9a-fA-F]+')
 CONSTANT = re.compile(r'^pub const OUTPUT_VERSION: u32 = (\d+);', re.M)
 
@@ -71,7 +73,7 @@ def canonical(rel: str, data: bytes) -> bytes:
 def skipped(rel: str) -> bool:
     parts = rel.split('/')
     return rel.endswith(('.log', '.class')) or parts[:3] == ['assets', 'minecraft', 'sounds'] \
-        or rel == 'assets/minecraft/sounds.json'
+        or rel in ('assets/minecraft/sounds.json', STAMP)
 
 
 def digest(resources: Path) -> tuple[str, int]:

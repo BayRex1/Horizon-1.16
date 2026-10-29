@@ -35,6 +35,15 @@ Preparation is `horizon-prepare` (`crates/horizon-prepare`, Rust): it needs no P
 the JDK, for the small exporters that call Mojang's own code. Release folders ship it beside
 `horizon-client`, and the launcher prepares with it and copies the sounds as part of preparing.
 
+`--output DIR` puts the resources elsewhere (the exporters' scratch files stay in the version
+folder's `.local/`), for preparing and for the asset commands alike. `horizon-prepare --check`
+exits 0 when the resources are complete and current for this preparer, and otherwise prints
+each gap with the command that fills it and exits 1; it runs no Java and reads no game files.
+A preparation stamps its resources with the preparer's `OUTPUT_VERSION`
+(`horizon-prepare.json`); resources prepared before the stamp existed report an unknown
+version until they are prepared again. Exit codes: 0 done, 1 failed or gaps found, 2 a refused
+command line.
+
 ```sh
 cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
 cargo run --release -p horizon-prepare -- sounds

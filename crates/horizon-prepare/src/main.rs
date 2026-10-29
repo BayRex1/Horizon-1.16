@@ -15,13 +15,14 @@ const VERSION: &str = match option_env!("HORIZON_VERSION") {
 const HELP: &str = "\
 horizon-prepare: prepare Horizon's resources from your own Minecraft Java Edition
 
-Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
+Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH] [--output PATH]
+       horizon-prepare --check [--root PATH] [--output PATH]
        horizon-prepare compile-exporters [--root PATH]
-       horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
-       horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
-       horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
-       horizon-prepare packs [--minecraft-dir PATH] [--root PATH]
-       horizon-prepare languages [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare sounds [--minecraft-dir PATH] [--root PATH] [--output PATH]
+       horizon-prepare panorama [--minecraft-dir PATH] [--root PATH] [--output PATH]
+       horizon-prepare fonts [--minecraft-dir PATH] [--root PATH] [--output PATH]
+       horizon-prepare packs [--minecraft-dir PATH] [--root PATH] [--output PATH]
+       horizon-prepare languages [--minecraft-dir PATH] [--root PATH] [--output PATH]
 
   --prepare             Import the pinned game files from your own copy first
   --server-jar PATH     The pinned server jar you downloaded yourself
@@ -30,11 +31,17 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
                         (default: HORIZON_MINECRAFT_DIR, or the launcher's own)
   --root PATH           The Horizon folder to prepare (default: the folder this program is
                         in, else the nearest folder above the current one with research-lock.json)
+  --output PATH         Where the resources go (default: <root>/.local/horizon-client/<version>);
+                        the exporters' scratch files stay in <root>/.local
+  --check               Exit 0 when the resources are complete and current for this preparer,
+                        else 1, printing what each gap needs; runs no Java and reads no game files
 
 Needs Minecraft played once from the official launcher, and Java of the version
 research-lock.json pins. Releases use a runtime; development or changed exporters need a JDK.
 compile-exporters builds and validates a release bundle from the already imported pinned jars.
-The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+The resources go to <root>/.local/horizon-client/<version>, or --output; pass that to
+horizon-client --resources. Exit codes: 0 done, 1 failed (or --check found gaps), 2 a refused
+command line (docs/api/launch.md).
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -69,8 +76,10 @@ fn main() -> ExitCode {
         minecraft_dir: None,
         server_jar: None,
         java_home: None,
+        output: None,
     };
     let mut root = None;
+    let mut check = false;
     let mut args = std::env::args_os().skip(1).peekable();
     let assets = args.next_if(|a| {
         matches!(
@@ -96,7 +105,7 @@ fn main() -> ExitCode {
             }
         };
         let parsed = match flag.as_str() {
-            "--prepare" | "--server-jar" if assets.is_some() => {
+            "--prepare" | "--server-jar" | "--check" if assets.is_some() => {
                 Err(format!("{flag} is for preparing, not for asset copying"))
             }
             "--prepare" if inline.is_none() => {
@@ -106,6 +115,11 @@ fn main() -> ExitCode {
             "--server-jar" => value("--server-jar").map(|v| options.server_jar = Some(v)),
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
+            "--output" => value("--output").map(|v| options.output = Some(v)),
+            "--check" if inline.is_none() => {
+                check = true;
+                Ok(())
+            }
             "-h" | "--help" => {
                 print!("{HELP}");
                 return ExitCode::SUCCESS;
@@ -128,6 +142,13 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     options.root = root;
+    if check {
+        if options.import || options.server_jar.is_some() {
+            eprintln!("horizon-prepare: error: --check prepares nothing; leave out --prepare and --server-jar");
+            return ExitCode::from(2);
+        }
+        return check_resources(&options);
+    }
     let log = |line: &str| {
         let mut out = std::io::stdout().lock();
         let _ = writeln!(out, "{line}");
@@ -136,25 +157,39 @@ fn main() -> ExitCode {
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
         Some("compile-exporters") => horizon_prepare::compile_exporters(&options, &log)
             .inspect(|dir| log(&dir.display().to_string())),
-        Some("sounds") => {
-            horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
-        }
-        Some("panorama") => {
-            horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log)
-        }
-        Some("fonts") => {
-            horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log)
-        }
-        Some("packs") => {
-            horizon_prepare::packs(&options.root, options.minecraft_dir.as_deref(), &log)
-        }
-        Some("languages") => {
-            horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log)
+        Some(kind @ ("sounds" | "panorama" | "fonts" | "packs" | "languages")) => {
+            horizon_prepare::add_assets(
+                kind,
+                &options.root,
+                options.output.as_deref(),
+                options.minecraft_dir.as_deref(),
+                &log,
+            )
         }
         _ => horizon_prepare::prepare(&options, &log),
     };
     match result {
         Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--check`: each gap on its own line on stdout, exit 1 when there is one.
+fn check_resources(options: &horizon_prepare::Options) -> ExitCode {
+    let resources = horizon_prepare::artifacts::Lock::read(&options.root).map(|lock| {
+        horizon_prepare::resources_dir(&options.root, &lock.version, options.output.as_deref())
+    });
+    match resources.and_then(|resources| horizon_prepare::check(&options.root, &resources)) {
+        Ok(lacking) if lacking.is_empty() => ExitCode::SUCCESS,
+        Ok(lacking) => {
+            for line in lacking {
+                println!("{line}");
+            }
+            ExitCode::FAILURE
+        }
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
