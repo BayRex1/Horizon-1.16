@@ -246,6 +246,24 @@ pub(super) enum Next {
 }
 
 impl Game<'_> {
+    /// Route one decoded protocol-754 Play event into the resident world.
+    ///
+    /// The network loop can hand events here without knowing about renderer
+    /// internals. Position, disconnect and keep-alive events are handled by
+    /// the protocol layer; only chunk payloads enter the world-storage path.
+    #[allow(dead_code)]
+    pub(super) fn remote_legacy_play_event(
+        &mut self,
+        event: horizon_protocol::legacy_1_16_5::PlayEvent,
+        block_state_map: &[u32],
+        biome_map: &[u32],
+    ) -> std::result::Result<(), String> {
+        if let horizon_protocol::legacy_1_16_5::PlayEvent::ChunkReceived { column } = event {
+            self.remote_legacy_chunk(column, block_state_map, biome_map)?;
+        }
+        Ok(())
+    }
+
     /// Install a decoded protocol-754 chunk into resident world storage.
     ///
     /// This is the renderer bridge for the legacy decoder. The 1.16.5 block
