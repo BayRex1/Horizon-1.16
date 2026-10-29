@@ -105,7 +105,9 @@ pub fn decode_play_keep_alive(payload: &[u8]) -> crate::Result<i64> {
     let mut r = crate::buf::Reader::new(payload);
     let token = r.i64()?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 keep-alive packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 keep-alive packet",
+        ));
     }
     Ok(token)
 }
@@ -144,10 +146,14 @@ pub fn decode_player_position_look(payload: &[u8]) -> crate::Result<PlayerPositi
         teleport_id: r.varint()?,
     };
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 player-position packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 player-position packet",
+        ));
     }
     if result.flags & !0x1f != 0 {
-        return Err(crate::Error::new("invalid flags in 1.16.5 player-position packet"));
+        return Err(crate::Error::new(
+            "invalid flags in 1.16.5 player-position packet",
+        ));
     }
     Ok(result)
 }
@@ -172,10 +178,7 @@ pub fn encode_player_position_rotation(
     pitch: f32,
     on_ground: bool,
 ) -> crate::Result<Vec<u8>> {
-    if ![x, y, z].iter().all(|v| v.is_finite())
-        || !yaw.is_finite()
-        || !pitch.is_finite()
-    {
+    if ![x, y, z].iter().all(|v| v.is_finite()) || !yaw.is_finite() || !pitch.is_finite() {
         return Err(crate::Error::new("non-finite player position or rotation"));
     }
     let mut packet = crate::buf::Writer::new();
@@ -210,31 +213,60 @@ impl LegacyChunkSection {
             (0, vec![r.varint()?])
         } else if wire_bits <= 4 {
             let n = r.count(1usize << 4)?;
-            (4, (0..n).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?)
+            (
+                4,
+                (0..n)
+                    .map(|_| r.varint())
+                    .collect::<crate::Result<Vec<_>>>()?,
+            )
         } else if wire_bits <= 8 {
             let n = r.count(1usize << wire_bits)?;
-            (wire_bits, (0..n).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?)
+            (
+                wire_bits,
+                (0..n)
+                    .map(|_| r.varint())
+                    .collect::<crate::Result<Vec<_>>>()?,
+            )
         } else {
             (wire_bits, Vec::new())
         };
-        let expected = if bits_per_block == 0 { 0 } else { 4096usize.div_ceil(64 / bits_per_block as usize) };
+        let expected = if bits_per_block == 0 {
+            0
+        } else {
+            4096usize.div_ceil(64 / bits_per_block as usize)
+        };
         let count = r.count(4096)?;
         if count != expected {
-            return Err(crate::Error::new(format!("invalid 1.16.5 block storage length: expected {expected}, got {count}")));
+            return Err(crate::Error::new(format!(
+                "invalid 1.16.5 block storage length: expected {expected}, got {count}"
+            )));
         }
         let data = r.fixed_longs(count)?;
-        Ok(Self { non_air_blocks, bits_per_block, palette, data })
+        Ok(Self {
+            non_air_blocks,
+            bits_per_block,
+            palette,
+            data,
+        })
     }
 
     /// Resolve a block-state registry ID for the local section index (0..4095).
     pub fn block_state(&self, index: usize) -> Option<i32> {
-        if index >= 4096 { return None; }
-        if self.bits_per_block == 0 { return self.palette.first().copied(); }
+        if index >= 4096 {
+            return None;
+        }
+        if self.bits_per_block == 0 {
+            return self.palette.first().copied();
+        }
         let bits = self.bits_per_block as usize;
         let per_long = 64 / bits;
         let word = *self.data.get(index / per_long)? as u64;
         let palette_index = ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
-        if self.palette.is_empty() { Some(palette_index as i32) } else { self.palette.get(palette_index).copied() }
+        if self.palette.is_empty() {
+            Some(palette_index as i32)
+        } else {
+            self.palette.get(palette_index).copied()
+        }
     }
 }
 
@@ -285,14 +317,29 @@ pub fn decode_chunk_data(payload: &[u8]) -> crate::Result<LegacyChunkColumn> {
         }
     }
     if section_reader.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 chunk section data"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 chunk section data",
+        ));
     }
     let entity_count = r.count(4096)?;
-    let block_entities = (0..entity_count).map(|_| r.nbt()).collect::<crate::Result<Vec<_>>>()?;
+    let block_entities = (0..entity_count)
+        .map(|_| r.nbt())
+        .collect::<crate::Result<Vec<_>>>()?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 chunk packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 chunk packet",
+        ));
     }
-    Ok(LegacyChunkColumn { x, z, full_chunk, section_mask, heightmaps, biomes, sections, block_entities })
+    Ok(LegacyChunkColumn {
+        x,
+        z,
+        full_chunk,
+        section_mask,
+        heightmaps,
+        biomes,
+        sections,
+        block_entities,
+    })
 }
 
 /// Minimal player state maintained while processing protocol-754 Play packets.
@@ -337,22 +384,53 @@ pub fn handle_play_packet(
         play::clientbound::CHUNK_DATA => {
             let chunk = decode_chunk_data(payload)?;
             let count = chunk.sections.iter().filter(|s| s.is_some()).count();
-            Ok(PlayEvent::ChunkReceived { x: chunk.x, z: chunk.z, sections: count })
+            Ok(PlayEvent::ChunkReceived {
+                x: chunk.x,
+                z: chunk.z,
+                sections: count,
+            })
         }
         play::clientbound::PLAYER_POSITION_LOOK => {
             let update = decode_player_position_look(payload)?;
-            if update.flags & 0x01 != 0 { state.x += update.x; } else { state.x = update.x; }
-            if update.flags & 0x02 != 0 { state.y += update.y; } else { state.y = update.y; }
-            if update.flags & 0x04 != 0 { state.z += update.z; } else { state.z = update.z; }
-            if update.flags & 0x08 != 0 { state.yaw += update.yaw; } else { state.yaw = update.yaw; }
-            if update.flags & 0x10 != 0 { state.pitch += update.pitch; } else { state.pitch = update.pitch; }
+            if update.flags & 0x01 != 0 {
+                state.x += update.x;
+            } else {
+                state.x = update.x;
+            }
+            if update.flags & 0x02 != 0 {
+                state.y += update.y;
+            } else {
+                state.y = update.y;
+            }
+            if update.flags & 0x04 != 0 {
+                state.z += update.z;
+            } else {
+                state.z = update.z;
+            }
+            if update.flags & 0x08 != 0 {
+                state.yaw += update.yaw;
+            } else {
+                state.yaw = update.yaw;
+            }
+            if update.flags & 0x10 != 0 {
+                state.pitch += update.pitch;
+            } else {
+                state.pitch = update.pitch;
+            }
             if ![state.x, state.y, state.z].iter().all(|v| v.is_finite())
-                || !state.yaw.is_finite() || !state.pitch.is_finite() {
+                || !state.yaw.is_finite()
+                || !state.pitch.is_finite()
+            {
                 return Err(crate::Error::new("server sent non-finite 1.16.5 player position"));
             }
             connection.send(&encode_teleport_confirm(update.teleport_id)?)?;
             connection.send(&encode_player_position_rotation(
-                state.x, state.y, state.z, state.yaw, state.pitch, state.on_ground
+                state.x,
+                state.y,
+                state.z,
+                state.yaw,
+                state.pitch,
+                state.on_ground,
             )?)?;
             Ok(PlayEvent::PositionUpdated(*state))
         }
@@ -370,7 +448,9 @@ pub fn run_play_loop(login: OfflineLogin) -> crate::Result<(String, PlayerState)
         let (packet_id, payload) = connection.recv()?;
         match handle_play_packet(&mut connection, packet_id, &payload, &mut state)? {
             PlayEvent::Disconnected(reason) => return Ok((reason, state)),
-            PlayEvent::PositionUpdated(_) | PlayEvent::ChunkReceived { .. } | PlayEvent::Ignored => {}
+            PlayEvent::PositionUpdated(_)
+            | PlayEvent::ChunkReceived { .. }
+            | PlayEvent::Ignored => {}
         }
     }
 }
@@ -380,7 +460,9 @@ pub fn decode_play_disconnect(payload: &[u8]) -> crate::Result<String> {
     let mut r = crate::buf::Reader::new(payload);
     let reason = r.string(32767)?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 play-disconnect packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 play-disconnect packet",
+        ));
     }
     Ok(reason)
 }
@@ -659,7 +741,10 @@ mod tests {
         let body = encode_play_keep_alive(token).unwrap();
         let mut r = Reader::new(&body);
         assert_eq!(r.varint().unwrap(), play::serverbound::KEEP_ALIVE);
-        assert_eq!(decode_play_keep_alive(&body[r.position()..]).unwrap(), token);
+        assert_eq!(
+            decode_play_keep_alive(&body[r.position()..]).unwrap(),
+            token
+        );
     }
 
     #[test]
@@ -698,20 +783,45 @@ mod tests {
         payload.u8(0x1f);
         payload.varint(1);
         let update = decode_player_position_look(&payload.data).unwrap();
-        let mut state = PlayerState { x: 10.0, y: 60.0, z: 8.0, yaw: 90.0, pitch: 0.0, on_ground: false };
-        if update.flags & 0x01 != 0 { state.x += update.x; }
-        if update.flags & 0x02 != 0 { state.y += update.y; }
-        if update.flags & 0x04 != 0 { state.z += update.z; }
-        if update.flags & 0x08 != 0 { state.yaw += update.yaw; }
-        if update.flags & 0x10 != 0 { state.pitch += update.pitch; }
-        assert_eq!(state, PlayerState { x: 12.0, y: 63.0, z: 4.0, yaw: 100.0, pitch: 5.0, on_ground: false });
+        let mut state = PlayerState {
+            x: 10.0,
+            y: 60.0,
+            z: 8.0,
+            yaw: 90.0,
+            pitch: 0.0,
+            on_ground: false,
+        };
+        if update.flags & 0x01 != 0 {
+            state.x += update.x;
+        }
+        if update.flags & 0x02 != 0 {
+            state.y += update.y;
+        }
+        if update.flags & 0x04 != 0 {
+            state.z += update.z;
+        }
+        if update.flags & 0x08 != 0 {
+            state.yaw += update.yaw;
+        }
+        if update.flags & 0x10 != 0 {
+            state.pitch += update.pitch;
+        }
+        assert_eq!(
+            state,
+            PlayerState {
+                x: 12.0,
+                y: 63.0,
+                z: 4.0,
+                yaw: 100.0,
+                pitch: 5.0,
+                on_ground: false
+            }
+        );
     }
 
     #[test]
     fn player_position_rotation_rejects_nan() {
-        assert!(encode_player_position_rotation(
-            f64::NAN, 64.0, 0.0, 0.0, 0.0, true
-        ).is_err());
+        assert!(encode_player_position_rotation(f64::NAN, 64.0, 0.0, 0.0, 0.0, true).is_err());
         let body = encode_player_position_rotation(1.0, 65.0, 2.0, 45.0, 0.0, true).unwrap();
         assert_eq!(body[0], play::serverbound::PLAYER_POSITION_ROTATION as u8);
     }
