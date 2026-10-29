@@ -27,7 +27,7 @@ impl Ingredient {
     pub fn of(items: Vec<String>) -> Self {
         Self(items.iter().cloned().collect(), items)
     }
-    fn parse(v: &Value, items: &Items) -> Option<Self> {
+    pub(crate) fn parse(v: &Value, items: &Items) -> Option<Self> {
         let mut list: Vec<String> = Vec::new();
         let mut add = |s: &str| {
             let more: Vec<String> = match s.strip_prefix('#') {
@@ -40,9 +40,8 @@ impl Ingredient {
                 }
             }
         };
-        match v {
+        let mut add_val = |val: &Value| match val {
             Value::String(s) => add(s),
-            Value::Array(a) => a.iter().filter_map(Value::as_str).for_each(&mut add),
             Value::Object(o) => {
                 if let Some(s) = o.get("item").and_then(Value::as_str) {
                     add(s);
@@ -51,6 +50,11 @@ impl Ingredient {
                     add(&format!("#{t}"));
                 }
             }
+            _ => {}
+        };
+        match v {
+            Value::String(_) | Value::Object(_) => add_val(v),
+            Value::Array(a) => a.iter().for_each(&mut add_val),
             _ => return None,
         }
         (!list.is_empty()).then(|| Self::of(list))
@@ -1798,5 +1802,18 @@ mod tests {
     fn dyes_blend_like_dyed_item_color() {
         // One red dye on an undyed item gives the dye's own colour.
         assert_eq!(apply_dyes(None, &[14]), 0xB02E26);
+    }
+    #[test]
+    fn ingredient_parses_objects_and_arrays_of_objects() {
+        let items = Items::for_tests(HashMap::new());
+        let json: serde_json::Value = serde_json::json!({
+            "single_obj": {"item": "minecraft:diamond"},
+            "tag_obj": {"tag": "minecraft:planks"},
+            "arr_obj": [{"item": "minecraft:stick"}, {"item": "minecraft:string"}]
+        });
+        let a = Ingredient::parse(&json["single_obj"], &items).unwrap();
+        assert_eq!(a.1, vec!["minecraft:diamond"]);
+        let b = Ingredient::parse(&json["arr_obj"], &items).unwrap();
+        assert_eq!(b.1, vec!["minecraft:stick", "minecraft:string"]);
     }
 }
