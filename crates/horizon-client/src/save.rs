@@ -280,6 +280,14 @@ pub fn import_legacy_1_16_5(
         .collect::<Vec<_>>();
     region_paths.sort();
 
+    // Resolve the old numeric biome registry once, rather than reparsing the
+    // version-pinned JSON for every chunk.
+    let legacy_biome_names: HashMap<u32, String> =
+        horizon_world::legacy_1_16_5::biomes()?
+            .into_iter()
+            .map(|biome| (biome.id, biome.name))
+            .collect();
+
     let mut chunks = Vec::new();
     for path in region_paths {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -306,7 +314,46 @@ pub fn import_legacy_1_16_5(
                     continue;
                 }
                 let adapted = horizon_world::legacy_1_16_5::to_client_runtime_chunk(&root)?;
-                if let Some(chunk) = decode_with(&adapted, assets.registry, biomes, None) {
+                if let Some(mut chunk) = decode_with(&adapted, assets.registry, biomes, None) {
+                    // Java 1.16.5 stores a 16x16 horizontal biome grid for the
+                    // entire column. Sample its centre in each 4x4 cell and
+                    // expand it vertically into Horizon's 3D quart-biome grid.
+                    if let Some(Tag::Compound(level)) = root.tag.get("Level")
+                        && let Some(Tag::IntArray(old_biomes)) = level.get("Biomes")
+                        && old_biomes.len() == 256
+                    {
+                        for qz in 0..4 {
+                            for qx in 0..4 {
+                                let sample_x = qx * 4 + 2;
+                                let sample_z = qz * 4 + 2;
+                                let old_id = old_biomes[sample_z * 16 + sample_x] as u32;
+                                let name = legacy_biome_names
+                                    .get(&old_id)
+                                    .map(String::as_str)
+                                    .unwrap_or("plains");
+                                let current_name = match name {
+                                    "mountains" => "windswept_hills",
+                                    "gravelly_mountains" => "windswept_gravelly_hills",
+                                    "modified_gravelly_mountains" => "modified_gravelly_hills",
+                                    "giant_tree_taiga" => "old_growth_pine_taiga",
+                                    "giant_spruce_taiga" => "old_growth_spruce_taiga",
+                                    "tall_birch_forest" | "tall_birch_hills" => "old_growth_birch_forest",
+                                    "shattered_savanna" | "shattered_savanna_plateau" => "windswept_savanna",
+                                    "snowy_tundra" => "snowy_plains",
+                                    "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
+                                    "stone_shore" => "stony_shore",
+                                    "snowy_mountains" => "snowy_slopes",
+                                    "wooded_badlands_plateau" | "modified_wooded_badlands_plateau" => "wooded_badlands",
+                                    "modified_badlands_plateau" => "badlands",
+                                    other => other,
+                                };
+                                let biome_id = biomes.id(&format!("minecraft:{current_name}"));
+                                for qy in 16..80 {
+                                    chunk.set_biome_cell(qx, qy, qz, biome_id);
+                                }
+                            }
+                        }
+                    }
                     chunks.push(Arc::new(chunk));
                 }
             }
