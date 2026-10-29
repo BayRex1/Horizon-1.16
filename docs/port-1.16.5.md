@@ -23,14 +23,14 @@ Implementation order:
 
 - [x] Fix the Rust compile error in the legacy biome helper (return `Ok(cells)`).
 - [x] Keep CI green on the current branch before adding more changes.
-- [ ] Trace Create World -> WorldRequest -> PreparedWorld -> integrated game tick -> streaming -> renderer.
-- [ ] Mark each data/version dependency in that path that assumes 26.3.
+- [x] Trace Create World -> WorldRequest -> PreparedWorld -> integrated game tick -> streaming -> renderer.
+- [x] Mark the first data/version dependency: `Assets::load` rejects resource bundles whose `data_version` differs from the single compiled `horizon_world::DATA_VERSION`; the preparer is pinned by `research-lock.json` to 26.3 / Java 25. The current Create World UI and integrated server are present, but they do not make the game 1.16.5-compatible.
 - [ ] Establish a local-world test that does not require a network connection.
 
 ## Milestone 2 — 1.16.5 local world bootstrap
 
-- [ ] Read the target version metadata and registry information from the user's legally obtained 1.16.5 installation.
-- [ ] Build a version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags.
+- [ ] Read the target version metadata and registry information from the user's legally obtained 1.16.5 installation. This requires a separate pinned 1.16.5 preparation path; do not simply change `DATA_VERSION` or relabel the 26.3 bundle.
+- [ ] Build a version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags. Keep the existing 26.3 resource format working until the 1.16.5 bundle is parsed and validated end-to-end.
 - [ ] Make the Create World flow construct a world with 1.16.5 defaults: overworld dimension height, seed, game mode, difficulty, structures and bonus-chest options.
 - [ ] Ensure the first local chunks are generated in-process; no TCP connection or remote chunk packet is involved.
 - [ ] Add deterministic tests for a fixed seed and key terrain/spawn invariants.
