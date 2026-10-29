@@ -1395,7 +1395,7 @@ mod tests {
         let Tag::Compound(level) = root.tag.get("Level").expect("legacy Level") else {
             panic!("legacy Level should be a compound");
         };
-        let Tag::List(legacy_sections) = level.get("Sections").expect("legacy sections") else {
+        let Tag::List(legacy_sections) = level.get(&crate::nbt::JavaString::from("Sections")).expect("legacy sections") else {
             panic!("legacy sections should be a list");
         };
         assert_eq!(
