@@ -517,13 +517,14 @@ impl HandWorld for GameHands<'_, '_> {
         if self.is_air(pos) {
             return false;
         }
-        // Item.canDestroyBlock: swords, tridents and maces cannot break
-        // blocks in creative.
-        let held = self.game.held().map(|s| s.item.to_string());
-        if self.game.creative
-            && held.is_some_and(|i| {
-                i.ends_with("_sword") || i == "minecraft:trident" || i == "minecraft:mace"
-            })
+        let state = self.game.world.block(pos[0], pos[1], pos[2]);
+        let is_fire = self.game.res.facts().get(state).has_class("BaseFireBlock");
+        // Item.canAttackBlock: weapons cannot break blocks in creative, except fire.
+        if !self
+            .game
+            .res
+            .items()
+            .can_attack_block(self.game.held(), self.game.creative, is_fire)
         {
             return false;
         }

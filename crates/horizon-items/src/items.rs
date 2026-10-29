@@ -826,6 +826,15 @@ impl Items {
         self.get(&held.item)
             .is_none_or(|info| info.can_destroy_blocks_in_creative)
     }
+    /// `Item.canAttackBlock`: weapons cannot break blocks in creative, except fire.
+    pub fn can_attack_block(
+        &self,
+        held: Option<&ItemStack>,
+        creative: bool,
+        is_fire: bool,
+    ) -> bool {
+        is_fire || self.can_destroy_block(held, creative)
+    }
     /// `Tool.getMiningSpeed` for the held item (1.0 without a tool component).
     pub fn mining_speed(&self, held: Option<&ItemStack>, block: &str) -> f32 {
         let Some(info) = held.and_then(|s| self.get(&s.item)) else {
@@ -1968,6 +1977,34 @@ mod tests {
         );
         // 46 is vanilla's count for this seed; an extra level draw gives 28.
         assert_eq!(drops[0].count, 46);
+    }
+
+    #[test]
+    fn can_attack_block_allows_extinguishing_fire_in_creative() {
+        let items = Items::for_tests(HashMap::new());
+        let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
+        let mut data = crate::item_data::StackData::default();
+        let tool = horizon_world::nbt::Tag::compound([(
+            "can_destroy_blocks_in_creative",
+            horizon_world::nbt::Tag::Byte(0),
+        )]);
+        data.set_other("minecraft:tool", Some(tool));
+        sword.extra = Some(Box::new(data));
+
+        // Survival mode allows breaking blocks and attacking fire with a sword.
+        assert!(items.can_destroy_block(Some(&sword), false));
+        assert!(items.can_attack_block(Some(&sword), false, false));
+        assert!(items.can_attack_block(Some(&sword), false, true));
+
+        // Creative mode forbids breaking normal blocks with a sword, but allows extinguishing fire.
+        assert!(!items.can_destroy_block(Some(&sword), true));
+        assert!(!items.can_attack_block(Some(&sword), true, false));
+        assert!(items.can_attack_block(Some(&sword), true, true));
+
+        // Creative mode with an empty hand allows both.
+        assert!(items.can_destroy_block(None, true));
+        assert!(items.can_attack_block(None, true, false));
+        assert!(items.can_attack_block(None, true, true));
     }
 }
 

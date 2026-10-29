@@ -4490,15 +4490,6 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
-        if !self
-            .res
-            .items()
-            .can_destroy_block(self.held(), self.creative)
-        {
-            self.stop_remote_mining();
-            self.mining = None;
-            return;
-        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -4510,8 +4501,18 @@ impl Game<'_> {
             self.mining = None;
             return;
         };
-        let face = face_direction(hit.face);
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+        let is_fire = self.res.facts().get(state).has_class("BaseFireBlock");
+        if !self
+            .res
+            .items()
+            .can_attack_block(self.held(), self.creative, is_fire)
+        {
+            self.stop_remote_mining();
+            self.mining = None;
+            return;
+        }
+        let face = face_direction(hit.face);
         if self.res.facts().is_air(state) {
             return;
         }
