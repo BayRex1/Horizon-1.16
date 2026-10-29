@@ -361,7 +361,9 @@ pub enum PlayEvent {
     PositionUpdated(PlayerState),
     Disconnected(String),
     /// A decoded column ready for the client world's registry/render bridge.
-    ChunkReceived { column: LegacyChunkColumn },
+    ChunkReceived {
+        column: LegacyChunkColumn,
+    },
     Ignored,
 }
 
