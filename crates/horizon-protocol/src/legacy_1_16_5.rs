@@ -83,7 +83,7 @@ pub mod play {
         /// Disconnect while in the world.
         pub const DISCONNECT: i32 = 0x19;
         /// Keep-alive request carrying a signed 64-bit token.
-        pub const KEEP_ALIVE: i32 = 0x21;
+        pub const KEEP_ALIVE: i32 = 0x1f;
         /// Chunk column data (light data follows in the same packet on 1.16.5).
         pub const CHUNK_DATA: i32 = 0x20;
         /// Server correction of player position and rotation.
@@ -96,7 +96,7 @@ pub mod play {
         /// Confirm a server-issued player teleport.
         pub const TELEPORT_CONFIRM: i32 = 0x00;
         /// Report player position and rotation.
-        pub const PLAYER_POSITION_ROTATION: i32 = 0x12;
+        pub const PLAYER_POSITION_ROTATION: i32 = 0x13;
     }
 }
 
@@ -833,12 +833,12 @@ mod tests {
     #[test]
     fn play_packet_ids_match_protocol_754_layout() {
         assert_eq!(play::clientbound::DISCONNECT, 0x19);
-        assert_eq!(play::clientbound::KEEP_ALIVE, 0x21);
+        assert_eq!(play::clientbound::KEEP_ALIVE, 0x1f);
         assert_eq!(play::clientbound::CHUNK_DATA, 0x20);
         assert_eq!(play::clientbound::PLAYER_POSITION_LOOK, 0x34);
         assert_eq!(play::serverbound::TELEPORT_CONFIRM, 0x00);
         assert_eq!(play::serverbound::KEEP_ALIVE, 0x10);
-        assert_eq!(play::serverbound::PLAYER_POSITION_ROTATION, 0x12);
+        assert_eq!(play::serverbound::PLAYER_POSITION_ROTATION, 0x13);
         assert!(decode_play_keep_alive(&[0; 9]).is_err());
         assert!(decode_play_disconnect(&[2, b'{', b'}', 0]).is_err());
     }
