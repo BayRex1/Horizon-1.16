@@ -472,10 +472,29 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
             JavaString::from("BlockLight"),
             Tag::ByteArray(vec![0; 2048]),
         );
-        fields.insert(
-            JavaString::from("SkyLight"),
-            Tag::ByteArray(vec![0xff; 2048]),
-        );
+        let mut sky_light = vec![0u8; 2048];
+        for local_y in 0..16usize {
+            let world_y = index as i32 * SECTION_HEIGHT + local_y as i32;
+            for z in 0..16usize {
+                for x in 0..16usize {
+                    let column_height = surface[x | (z << 4)] - 1;
+                    let light = if world_y <= column_height {
+                        0
+                    } else if world_y <= SEA_LEVEL {
+                        (world_y - SEA_LEVEL + 14).clamp(0, 15) as u8
+                    } else {
+                        15
+                    };
+                    let block_index = x | (z << 4) | (local_y << 8);
+                    if block_index & 1 == 0 {
+                        sky_light[block_index >> 1] |= light;
+                    } else {
+                        sky_light[block_index >> 1] |= light << 4;
+                    }
+                }
+            }
+        }
+        fields.insert(JavaString::from("SkyLight"), Tag::ByteArray(sky_light));
         section_tags.push(Tag::Compound(fields));
     }
 
@@ -744,6 +763,18 @@ mod tests {
             }),
             Some(16)
         );
+        let Tag::List(sections) = level.get("Sections").unwrap() else {
+            panic!("sections must be a list")
+        };
+        let Tag::ByteArray(top_sky) = sections[15].get("SkyLight").unwrap() else {
+            panic!("sky light must be a byte array")
+        };
+        assert_eq!(top_sky.len(), 2048);
+        assert!(top_sky.iter().all(|value| *value == 0xff));
+        let Tag::ByteArray(bottom_sky) = sections[0].get("SkyLight").unwrap() else {
+            panic!("sky light must be a byte array")
+        };
+        assert!(bottom_sky.iter().all(|value| *value == 0));
 
         let encoded = nbt::write_named(&first, Limits::default()).unwrap();
         let (decoded, used) = nbt::read_named(&encoded, Limits::default()).unwrap();
