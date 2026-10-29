@@ -109,6 +109,10 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 ## Trust
 
+Proposed microphone and network services for native voice mods are described in
+[Native voice permissions](native-voice-permissions.md). This is a design proposal,
+not an implemented permission system or a sandbox for native code.
+
 - **Off by default.** The command needs `--trust-native-code`; the window shows a warning in red before every
   build: the mods run with full access to the computer, and their ids and versions. The Mods page says who made
   each one, and "Not made or endorsed by the Horizon project" for any mod not Horizon's own.
