@@ -308,6 +308,144 @@ impl LegacyBlockSection {
     }
 }
 
+
+/// Build a deterministic, playable-bootstrap terrain chunk in the Java 1.16.5
+/// Anvil NBT schema. This is intentionally a simple seeded height field, not
+/// claimed to match vanilla's multi-noise terrain generator bit-for-bit.
+pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate::nbt::NamedTag {
+    use crate::nbt::{JavaString, NamedTag, Tag};
+    use horizon_core::storage::PackedStorage;
+
+    fn terrain_height(seed: i64, x: i32, z: i32) -> i32 {
+        let mut value = (seed as u64)
+            ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ (z as i64 as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        61 + (value % 13) as i32
+    }
+
+    fn compound(entries: impl IntoIterator<Item = (String, Tag)>) -> Tag {
+        Tag::Compound(entries.into_iter().map(|(key, value)| (JavaString::from(key.as_str()), value)).collect())
+    }
+    let air = LegacyBlockState::new("air");
+    let bedrock = LegacyBlockState::new("bedrock");
+    let stone = LegacyBlockState::new("stone");
+    let dirt = LegacyBlockState::new("dirt");
+    let grass = LegacyBlockState::new("grass_block");
+    let water = LegacyBlockState::new("water");
+    let mut sections: Vec<LegacyBlockSection> = (0..SECTION_COUNT)
+        .map(|_| LegacyBlockSection::uniform(air.clone()))
+        .collect();
+    let mut surface = vec![0i32; 256];
+
+    for z in 0..16 {
+        for x in 0..16 {
+            let world_x = chunk_x.wrapping_mul(16).wrapping_add(x as i32);
+            let world_z = chunk_z.wrapping_mul(16).wrapping_add(z as i32);
+            let height = terrain_height(seed, world_x, world_z);
+            surface[x | (z << 4)] = height + 1;
+            for y in 0..=height {
+                let state = if y == 0 {
+                    &bedrock
+                } else if y == height {
+                    &grass
+                } else if y >= height - 2 {
+                    &dirt
+                } else {
+                    &stone
+                };
+                sections[(y / 16) as usize]
+                    .set(x, (y % 16) as usize, z, state.clone())
+                    .expect("generated section coordinates are in bounds");
+            }
+            for y in height + 1..=SEA_LEVEL {
+                sections[(y / 16) as usize]
+                    .set(x, (y % 16) as usize, z, water.clone())
+                    .expect("generated water coordinates are in bounds");
+            }
+        }
+    }
+
+    let mut section_tags = Vec::with_capacity(SECTION_COUNT);
+    for (index, section) in sections.iter().enumerate() {
+        let Tag::Compound(mut fields) = section.to_nbt() else { unreachable!() };
+        fields.insert(JavaString::from("Y"), Tag::Byte(index as i8));
+        fields.insert(JavaString::from("BlockLight"), Tag::ByteArray(vec![0; 2048]));
+        fields.insert(JavaString::from("SkyLight"), Tag::ByteArray(vec![0xff; 2048]));
+        section_tags.push(Tag::Compound(fields));
+    }
+
+    let mut heightmap = PackedStorage::new(9, 256).expect("valid legacy heightmap storage");
+    for (index, height) in surface.iter().enumerate() {
+        heightmap.set(index, *height as u32).expect("height fits 9 bits");
+    }
+    let heightmap_data = Tag::LongArray(heightmap.words().iter().map(|word| *word as i64).collect());
+    let heightmaps = compound([
+        ("MOTION_BLOCKING".to_owned(), heightmap_data.clone()),
+        ("WORLD_SURFACE".to_owned(), heightmap_data),
+    ]);
+    let post_processing = Tag::List((0..SECTION_COUNT).map(|_| Tag::List(Vec::new())).collect());
+    let structures = compound([
+        ("Starts".to_owned(), compound(std::iter::empty())),
+        ("References".to_owned(), compound(std::iter::empty())),
+    ]);
+    let level = compound([
+        ("xPos".to_owned(), Tag::Int(chunk_x)),
+        ("zPos".to_owned(), Tag::Int(chunk_z)),
+        ("LastUpdate".to_owned(), Tag::Long(0)),
+        ("InhabitedTime".to_owned(), Tag::Long(0)),
+        ("Status".to_owned(), Tag::String(JavaString::from("minecraft:full"))),
+        ("Biomes".to_owned(), Tag::IntArray(vec![1; 256])),
+        ("Heightmaps".to_owned(), heightmaps),
+        ("Sections".to_owned(), Tag::List(section_tags)),
+        ("Entities".to_owned(), Tag::List(Vec::new())),
+        ("TileEntities".to_owned(), Tag::List(Vec::new())),
+        ("TileTicks".to_owned(), Tag::List(Vec::new())),
+        ("LiquidTicks".to_owned(), Tag::List(Vec::new())),
+        ("PostProcessing".to_owned(), post_processing),
+        ("Structures".to_owned(), structures),
+        ("LightPopulated".to_owned(), Tag::Byte(1)),
+        ("TerrainPopulated".to_owned(), Tag::Byte(1)),
+        ("isLightOn".to_owned(), Tag::Byte(1)),
+    ]);
+    NamedTag {
+        name: JavaString::default(),
+        tag: compound([
+            ("DataVersion".to_owned(), Tag::Int(2730)),
+            ("Level".to_owned(), level),
+        ]),
+    }
+}
+
+/// Persist one generated chunk to its Anvil region file using the 1.16.5
+/// gzip/zlib-compatible region container. Existing chunk records are replaced
+/// by RegionFile's normal in-place write path.
+pub fn save_bootstrap_chunk(
+    directory: impl AsRef<std::path::Path>,
+    seed: i64,
+    chunk_x: i32,
+    chunk_z: i32,
+) -> std::io::Result<()> {
+    use crate::{
+        compression::Compression,
+        nbt::Limits,
+        region::{ChunkRecord, RegionFile},
+    };
+    use horizon_core::position::ChunkPos;
+    let chunk_pos = ChunkPos::new(chunk_x, chunk_z);
+    let region_pos = chunk_pos.region();
+    let directory = directory.as_ref();
+    std::fs::create_dir_all(directory)?;
+    let path = directory.join(format!("r.{}.{}.mca", region_pos.x, region_pos.z));
+    let root = generate_bootstrap_chunk(seed, chunk_x, chunk_z);
+    let record = ChunkRecord::from_nbt(&root, Compression::Zlib, 0, Limits::default())?;
+    let mut region = RegionFile::open_writable(path, true)?;
+    region.write(chunk_pos, &record)?;
+    region.sync()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
