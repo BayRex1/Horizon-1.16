@@ -451,6 +451,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bootstrap_chunk_is_seeded_and_uses_1165_root_schema() {
+        use crate::nbt::{self, Limits, Tag};
+        let first = generate_bootstrap_chunk(1234, 0, 0);
+        let same = generate_bootstrap_chunk(1234, 0, 0);
+        let other = generate_bootstrap_chunk(5678, 0, 0);
+        assert_eq!(first, same);
+        assert_ne!(first, other);
+        assert_eq!(first.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+        let level = first.tag.get("Level").expect("chunk Level");
+        assert_eq!(level.get("xPos"), Some(&Tag::Int(0)));
+        assert_eq!(level.get("zPos"), Some(&Tag::Int(0)));
+        assert_eq!(level.get("Status"), Some(&Tag::String(crate::nbt::JavaString::from("minecraft:full"))));
+        assert_eq!(level.get("Biomes").and_then(|tag| match tag {
+            Tag::IntArray(values) => Some(values.len()),
+            _ => None,
+        }), Some(256));
+        assert_eq!(level.get("Sections").and_then(|tag| match tag {
+            Tag::List(values) => Some(values.len()),
+            _ => None,
+        }), Some(16));
+
+        let encoded = nbt::write_named(&first, Limits::default()).unwrap();
+        let (decoded, used) = nbt::read_named(&encoded, Limits::default()).unwrap();
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded, first);
+    }
+
+    #[test]
+    fn saved_bootstrap_chunk_can_be_reopened_from_anvil_region() {
+        use crate::{nbt::Limits, region::RegionFile};
+        use horizon_core::position::ChunkPos;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "horizon-legacy-world-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        save_bootstrap_chunk(&directory, 42, -1, 2).unwrap();
+        let chunk_pos = ChunkPos::new(-1, 2);
+        let path = directory.join(format!("r.{}.{}.mca", chunk_pos.region().x, chunk_pos.region().z));
+        let mut region = RegionFile::open(path).unwrap();
+        let record = region.read(chunk_pos).unwrap().expect("saved chunk record");
+        let decoded = record.nbt(Limits::default()).unwrap();
+        assert_eq!(decoded.tag.get("DataVersion"), Some(&crate::nbt::Tag::Int(2730)));
+        assert_eq!(decoded.tag.get("Level").and_then(|level| level.get("xPos")), Some(&crate::nbt::Tag::Int(-1)));
+        assert_eq!(decoded.tag.get("Level").and_then(|level| level.get("zPos")), Some(&crate::nbt::Tag::Int(2)));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn legacy_section_palette_round_trips_1165_nbt_schema() {
         use crate::nbt::{JavaString, Tag};
 
