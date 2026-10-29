@@ -310,9 +310,9 @@ impl Game<'_> {
         }
 
         let mut column = Chunk::empty(chunk.x, chunk.z);
-        // Java 1.16.5 has sections Y=0..255. Horizon's resident columns span
-        // -64..319, so legacy section 0 is stored at resident section index 4.
-        const LEGACY_SECTION_OFFSET: usize = ((0 - MIN_Y) / 16) as usize;
+        // Both the protocol-754 chunk and this branch's resident world use
+        // section indices 0..15 for Y=0..255.
+        const LEGACY_SECTION_OFFSET: usize = 0;
         for (legacy_y, source) in chunk.sections.iter().enumerate() {
             let Some(source) = source else { continue };
             let target_y = LEGACY_SECTION_OFFSET + legacy_y;
