@@ -83,3 +83,24 @@ py -3 tools/prepare_1_16_5.py `
 You do not need Linux or a running Minecraft server. This script is for developers preparing source data; someone testing a prebuilt Horizon Windows package should not need to run it at all.
 
 The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. The remaining critical work is a 1.16.5 Java-side exporter compatible with that release's obfuscated classes, followed by Rust adapters for its block-state IDs, biome registry, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
+
+
+## Public research sources — no manual JAR downloads for the tester
+
+The port can be researched and implemented using public technical references and versioned data repositories. These are development inputs; the tester on Windows 7 should receive a prebuilt client and should not run this preparation script.
+
+- **Versioned generated game data:** [misode/mcmeta](https://github.com/misode/mcmeta). Its repository describes versioned snapshots of generated data and assets, with a `summary` branch containing condensed block-state data and registries. Select the exact 1.16.5 revision/branch before importing anything; do not use the repository's current-version data for this port.
+- **Block, item, biome and protocol reference data:** [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data). Its supported-version list includes Java 1.16.5 and it provides machine-readable data useful for building Rust lookup tables and protocol fixtures. Treat it as reference data, not as the terrain generator itself.
+- **Chunk storage and network representation:** [Minecraft Wiki — Java Edition protocol/Chunk format](https://minecraft.wiki/w/Java_Edition_protocol/Chunk_format). Use the version-specific sections to implement palettes, block-state indices, biome data and chunk-section serialization.
+- **World-generation concepts and data-pack schema:** [Minecraft Wiki — Custom world generation](https://minecraft.wiki/w/Custom_world_generation), [Noise settings](https://minecraft.wiki/w/Noise_settings), and [Biome definition (Java Edition)](https://minecraft.wiki/w/Biome_definition_(Java_Edition)). These explain the data model, but the exact 1.16.5 defaults and algorithm behavior must be verified against versioned data.
+- **Historical 1.16.5 worldgen examples:** [KubeJS 1.16.5 worldgen reference](https://kubejs.com/wiki/tutorials/worldgen/1605) and [slicedlime/examples](https://github.com/slicedlime/examples) can help clarify feature ordering and legacy worldgen conventions.
+
+### How to use these sources
+
+1. Import only data verified to match Java 1.16.5 (data version 2586); record source URL, version and checksum for each generated table.
+2. Generate Rust tables for block identifiers/states, biome identifiers/properties, tags and collision shapes from machine-readable sources where possible.
+3. Implement the 1.16.5 terrain algorithm in Rust: noise settings and density calculations, biome selection, caves/carvers, surface rules, placed features and structures. Public documentation alone does not guarantee bit-for-bit seed parity.
+4. Add deterministic fixture tests for known seeds and compare biome/terrain samples against independently generated 1.16.5 reference outputs.
+5. Keep the JAR staging script optional as a verification/fallback tool for developers. It is not a runtime dependency and is not something the Windows 7 tester should have to use.
+
+**Important:** public reference data can remove the need for a developer to manually download the JARs for every iteration, but it does not make a complete generator appear automatically. The Rust implementation and seed-based validation remain required. Check each source's license/terms before copying or redistributing its data.
