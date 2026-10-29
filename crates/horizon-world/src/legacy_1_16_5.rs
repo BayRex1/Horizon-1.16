@@ -875,6 +875,33 @@ pub fn save_bootstrap_chunk(
     region.sync()
 }
 
+/// Load one saved 1.16.5 chunk from a world folder and adapt it for runtime block access.
+pub fn load_runtime_chunk(
+    world_directory: impl AsRef<std::path::Path>,
+    chunk_x: i32,
+    chunk_z: i32,
+) -> std::io::Result<crate::chunk::ChunkData> {
+    use crate::{
+        compression::invalid,
+        nbt::Limits,
+        region::RegionFile,
+    };
+    use horizon_core::position::ChunkPos;
+
+    let chunk_pos = ChunkPos::new(chunk_x, chunk_z);
+    let region_pos = chunk_pos.region();
+    let path = world_directory
+        .as_ref()
+        .join("region")
+        .join(format!("r.{}.{}.mca", region_pos.x, region_pos.z));
+    let mut region = RegionFile::open(path)?;
+    let record = region
+        .read(chunk_pos)?
+        .ok_or_else(|| invalid("legacy chunk is not present in world region"))?;
+    let root = record.nbt(Limits::default())?;
+    to_runtime_chunk(&root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1025,6 +1052,15 @@ mod tests {
             .unwrap();
         let chunk_nbt = spawn_chunk.nbt(Limits::default()).unwrap();
         assert_eq!(chunk_nbt.tag.get("DataVersion"), Some(&Tag::Int(2586)));
+        let runtime = load_runtime_chunk(&world, 0, 0).unwrap();
+        assert_eq!(
+            runtime
+                .block(horizon_core::position::BlockPos::new(8, 0, 8))
+                .unwrap()
+                .unwrap()
+                .name,
+            "minecraft:bedrock"
+        );
 
         std::fs::remove_dir_all(base).unwrap();
     }
