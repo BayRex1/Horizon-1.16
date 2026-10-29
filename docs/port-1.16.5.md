@@ -31,7 +31,7 @@ Implementation order:
 
 - [x] Add `tools/prepare_1_16_5.py`: it pins official 1.16.5 manifest/client/server SHA-1 values, validates the player's local files, and stages client `assets/minecraft` plus server `data/minecraft` inputs. It never downloads or commits the game jars/assets.
 - [ ] Turn the staged inputs into a complete Horizon bundle. The staging tool intentionally does not emit `horizon-resources.json` because the version-specific registry/state exporter and worldgen adapters are not implemented yet.
-- [ ] Build a version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags. Keep the existing 26.3 resource format working until the 1.16.5 bundle is parsed and validated end-to-end.
+- [ ] Build a complete version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags. The initial block/biome reference dataset and isolated Rust parser are now present; they are not yet wired into world generation. Keep the existing 26.3 resource format working until the 1.16.5 bundle is parsed and validated end-to-end.
 - [ ] Make the Create World flow construct a world with 1.16.5 defaults: overworld dimension height, seed, game mode, difficulty, structures and bonus-chest options.
 - [ ] Ensure the first local chunks are generated in-process; no TCP connection or remote chunk packet is involved.
 - [ ] Add deterministic tests for a fixed seed and key terrain/spawn invariants.
@@ -104,3 +104,13 @@ The port can be researched and implemented using public technical references and
 5. Keep the JAR staging script optional as a verification/fallback tool for developers. It is not a runtime dependency and is not something the Windows 7 tester should have to use.
 
 **Important:** public reference data can remove the need for a developer to manually download the JARs for every iteration, but it does not make a complete generator appear automatically. The Rust implementation and seed-based validation remain required. Check each source's license/terms before copying or redistributing its data.
+
+
+## Milestone — initial 1.16.x registry reference data
+
+- [x] Add a compact machine-readable block registry reference at `crates/horizon-world/data/legacy_1_16_5/blocks.json` (763 block types; state ID range 0–17111).
+- [x] Add a biome registry reference at `crates/horizon-world/data/legacy_1_16_5/biomes.json` (79 biome entries, including Nether biomes).
+- [x] Add `horizon_world::legacy_1_16_5` accessors that parse the bundled reference data, plus tests for registry ordering, state ranges, selected block properties, and required biomes.
+- [x] Record source/version caveats in `crates/horizon-world/data/legacy_1_16_5/source.json`.
+
+**Source caveat:** PrismarineJS currently exposes Java block/biome dumps under 1.16.2 rather than a separate 1.16.5 directory. These are useful as a 1.16.5 reference because no new block types were introduced in the intervening patch releases, but they are explicitly kept isolated and are not claimed as a complete 1.16.5 world-generation dataset. Biome numeric IDs must not be confused with the later 1.16.5 network registry ordering without a version-specific mapping. The next step is to import the exact 1.16.5 worldgen JSON (noise settings, density functions, carvers, features, biome definitions) from a versioned source and adapt the Rust generator to the 1.16.5 0..255 height range.
