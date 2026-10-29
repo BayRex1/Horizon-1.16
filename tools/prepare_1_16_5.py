@@ -13,6 +13,7 @@ import json
 import shutil
 import sys
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -153,8 +154,8 @@ def main() -> int:
                         help="Minecraft game directory (default: ~/.minecraft or platform equivalent)")
     parser.add_argument("--client-jar", type=Path,
                         help="override the official launcher's 1.16.5 client jar")
-    parser.add_argument("--server-jar", type=Path, required=True,
-                        help="the official 1.16.5 server jar downloaded by the user")
+    parser.add_argument("--server-jar", type=Path,
+                        help="optional local official 1.16.5 server jar (downloaded automatically if omitted)")
     parser.add_argument("--manifest", type=Path,
                         help="override versions/1.16.5/1.16.5.json")
     parser.add_argument("--out", type=Path, required=True,
@@ -172,7 +173,17 @@ def main() -> int:
     manifest = args.manifest or game_dir / "versions" / VERSION / f"{VERSION}.json"
     client = args.client_jar or game_dir / "versions" / VERSION / f"{VERSION}.jar"
     try:
-        result = stage(client, args.server_jar.expanduser(), manifest.expanduser(), args.out.expanduser())
+        if args.server_jar:
+            server = args.server_jar.expanduser()
+            result = stage(client, server, manifest.expanduser(), args.out.expanduser())
+        else:
+            # This is a developer-only preparation step; users testing a packaged build
+            # do not need Python, the server jar, or a Minecraft server running.
+            with tempfile.TemporaryDirectory(prefix="horizon-1.16.5-") as temp_dir:
+                server = Path(temp_dir) / "minecraft_server.1.16.5.jar"
+                print(f"Downloading official Minecraft {VERSION} data jar...")
+                urllib.request.urlretrieve(SERVER_URL, server)
+                result = stage(client, server, manifest.expanduser(), args.out.expanduser())
     except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         print(f"1.16.5 resource staging failed: {exc}", file=sys.stderr)
         return 1
