@@ -272,7 +272,7 @@ impl LegacyChunkSection {
 
 /// A partial 1.16.5 chunk column. Heightmaps and block-entity NBT are preserved
 /// as tags; lighting data arrives in separate packets and is not included here.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LegacyChunkColumn {
     pub x: i32,
     pub z: i32,
@@ -360,7 +360,8 @@ pub struct PlayerState {
 pub enum PlayEvent {
     PositionUpdated(PlayerState),
     Disconnected(String),
-    ChunkReceived { x: i32, z: i32, sections: usize },
+    /// A decoded column ready for the client world's registry/render bridge.
+    ChunkReceived { column: LegacyChunkColumn },
     Ignored,
 }
 
@@ -384,13 +385,8 @@ pub fn handle_play_packet(
             Ok(PlayEvent::Disconnected(decode_play_disconnect(payload)?))
         }
         play::clientbound::CHUNK_DATA => {
-            let chunk = decode_chunk_data(payload)?;
-            let count = chunk.sections.iter().filter(|s| s.is_some()).count();
-            Ok(PlayEvent::ChunkReceived {
-                x: chunk.x,
-                z: chunk.z,
-                sections: count,
-            })
+            let column = decode_chunk_data(payload)?;
+            Ok(PlayEvent::ChunkReceived { column })
         }
         play::clientbound::PLAYER_POSITION_LOOK => {
             let update = decode_player_position_look(payload)?;
@@ -443,20 +439,30 @@ pub fn handle_play_packet(
 }
 
 /// Run the protocol-754 Play receive loop until the server disconnects or the
-/// socket errors. World packets are still ignored until chunk and registry
-/// support is implemented.
-pub fn run_play_loop(login: OfflineLogin) -> crate::Result<(String, PlayerState)> {
+/// socket errors. The callback receives decoded chunks and position updates in
+/// network order, so a client can enqueue them for its world/render thread.
+pub fn run_play_loop_with_events<F>(
+    login: OfflineLogin,
+    mut on_event: F,
+) -> crate::Result<(String, PlayerState)>
+where
+    F: FnMut(PlayEvent),
+{
     let mut connection = login.connection;
     let mut state = PlayerState::default();
     loop {
         let (packet_id, payload) = connection.recv()?;
-        match handle_play_packet(&mut connection, packet_id, &payload, &mut state)? {
-            PlayEvent::Disconnected(reason) => return Ok((reason, state)),
-            PlayEvent::PositionUpdated(_)
-            | PlayEvent::ChunkReceived { .. }
-            | PlayEvent::Ignored => {}
+        let event = handle_play_packet(&mut connection, packet_id, &payload, &mut state)?;
+        if let PlayEvent::Disconnected(reason) = event {
+            return Ok((reason, state));
         }
+        on_event(event);
     }
+}
+
+/// Convenience receive loop for protocol tests that do not need world events.
+pub fn run_play_loop(login: OfflineLogin) -> crate::Result<(String, PlayerState)> {
+    run_play_loop_with_events(login, |_| {})
 }
 
 /// Decode the JSON string carried by the Play Disconnect packet.
