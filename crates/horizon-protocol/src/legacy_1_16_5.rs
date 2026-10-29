@@ -99,6 +99,26 @@ pub fn encode_handshake(host: &str, port: u16, next_state: i32) -> crate::Result
     crate::frame::encode(&packet.data, None)
 }
 
+/// Encode the legacy Login Start packet (username only; no UUID field in 1.16.5).
+///
+/// This builds the packet body and frame but does not perform online-mode
+/// encryption or send it over a live connection.
+pub fn encode_login_start(username: &str) -> crate::Result<Vec<u8>> {
+    use crate::buf::Writer;
+
+    if username.is_empty()
+        || username.len() > 16
+        || !username.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return Err(crate::Error::new("invalid 1.16.5 username"));
+    }
+
+    let mut packet = Writer::new();
+    packet.varint(login::serverbound::START);
+    packet.string(username);
+    crate::frame::encode(&packet.data, None)
+}
+
 /// Encode the server-list status request packet with its outer frame.
 pub fn encode_status_request() -> crate::Result<Vec<u8>> {
     crate::frame::encode(&[status::serverbound::REQUEST as u8], None)
@@ -149,6 +169,25 @@ mod tests {
         assert!(encode_handshake("", 25565, 1).is_err());
         assert!(encode_handshake("localhost", 25565, 3).is_err());
         assert!(encode_handshake("bad\0host", 25565, 1).is_err());
+    }
+
+    #[test]
+    fn encodes_legacy_login_start_without_uuid() {
+        use crate::buf::Reader;
+        let frame = encode_login_start("BayRex_16").unwrap();
+        assert_eq!(frame[0] as usize, frame.len() - 1);
+        let mut packet = Reader::new(&frame[1..]);
+        assert_eq!(packet.varint().unwrap(), login::serverbound::START);
+        assert_eq!(packet.string(16).unwrap(), "BayRex_16");
+        assert_eq!(packet.remaining(), 0);
+    }
+
+    #[test]
+    fn rejects_invalid_legacy_login_names() {
+        assert!(encode_login_start("").is_err());
+        assert!(encode_login_start("this_name_is_too_long").is_err());
+        assert!(encode_login_start("bad-name").is_err());
+        assert!(encode_login_start("name with space").is_err());
     }
 
     #[test]
