@@ -453,10 +453,10 @@ where
     loop {
         let (packet_id, payload) = connection.recv()?;
         let event = handle_play_packet(&mut connection, packet_id, &payload, &mut state)?;
-        if let PlayEvent::Disconnected(reason) = event {
-            return Ok((reason, state));
+        match event {
+            PlayEvent::Disconnected(reason) => return Ok((reason, state)),
+            other => on_event(other),
         }
-        on_event(event);
     }
 }
 
