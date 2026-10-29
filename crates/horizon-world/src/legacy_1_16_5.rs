@@ -1044,11 +1044,20 @@ mod tests {
         let Tag::List(sections) = loaded.tag.get("sections").expect("sections") else {
             panic!("client sections should be a list");
         };
-        assert_eq!(sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(4)));
-        assert_eq!(sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(19)));
+        assert_eq!(
+            sections.first().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(4))
+        );
+        assert_eq!(
+            sections.last().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(19))
+        );
 
         let mut region = RegionFile::open(directory.join("region/r.0.0.mca")).unwrap();
-        let record = region.read(ChunkPos::new(0, 0)).unwrap().expect("source chunk remains");
+        let record = region
+            .read(ChunkPos::new(0, 0))
+            .unwrap()
+            .expect("source chunk remains");
         let original = record.nbt(Limits::default()).unwrap();
         assert_eq!(
             original.tag.get("DataVersion"),
@@ -1056,7 +1065,10 @@ mod tests {
             "the on-disk chunk must remain in legacy format"
         );
         assert_eq!(
-            original.tag.get("Level").and_then(|level| level.get("Sections"))
+            original
+                .tag
+                .get("Level")
+                .and_then(|level| level.get("Sections"))
                 .and_then(|sections| match sections {
                     Tag::List(values) => values.first()?.get("Y"),
                     _ => None,
