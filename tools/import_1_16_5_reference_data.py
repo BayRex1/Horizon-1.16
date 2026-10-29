@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 MC_META_ROOT = "https://raw.githubusercontent.com/misode/mcmeta/1.16.5-data"
-MCDATA_ROOT = "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16"
+MCDATA_ROOT = "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc"
 VERSION = "1.16.5"
 DATA_VERSION = 2586
 PROTOCOL_VERSION = 754
@@ -33,8 +33,9 @@ WORLDGEN_DIRS = (
     "worldgen/template_pool",
 )
 REFERENCE_FILES = (
-    "biomes.json",
-    "version.json",
+    ("1.16.2", "blocks.json"),
+    ("1.16.2", "biomes.json"),
+    ("1.16.5", "version.json"),
 )
 
 
@@ -102,17 +103,17 @@ def import_data(output: Path) -> dict:
             url = f"{MC_META_ROOT}/{relative}"
             files[relative] = write_json_file(url, output / relative)
 
-    for name in REFERENCE_FILES:
-        url = f"{MCDATA_ROOT}/{name}"
-        relative = f"reference/minecraft-data-1.16/{name}"
+    for version_dir, name in REFERENCE_FILES:
+        url = f"{MCDATA_ROOT}/{version_dir}/{name}"
+        relative = f"reference/minecraft-data-{version_dir}/{name}"
         files[relative] = write_json_file(url, output / relative)
 
-    version_info = json_bytes((output / "reference/minecraft-data-1.16/version.json").read_bytes(),
-                              "minecraft-data 1.16 version.json")
+    version_info = json_bytes((output / "reference/minecraft-data-1.16.5/version.json").read_bytes(),
+                              "minecraft-data 1.16.5 version.json")
     if not isinstance(version_info, dict):
         raise ValueError("Unexpected minecraft-data version metadata")
-    if version_info.get("minecraftVersion") != "1.16" or int(version_info.get("version", -1)) != 735:
-        raise ValueError(f"Unexpected 1.16 base-reference metadata: {version_info!r}")
+    if version_info.get("minecraftVersion") != "1.16.5" or int(version_info.get("version", -1)) != PROTOCOL_VERSION:
+        raise ValueError(f"Unexpected 1.16.5 protocol metadata: {version_info!r}")
 
     biome_dir = output / "data/minecraft/worldgen/biome"
     biome_names = sorted(p.stem for p in biome_dir.glob("*.json"))
@@ -123,7 +124,8 @@ def import_data(output: Path) -> dict:
         "reference_protocol_note": "The minecraft-data 1.16 base metadata is protocol 735; it is not used as a 1.16.5 protocol definition. Target protocol remains 754.",
         "source_revisions": {
             "worldgen": "misode/mcmeta@1.16.5-data (exact target version)",
-            "reference": "PrismarineJS/minecraft-data@master/data/pc/1.16 (shared 1.16-era biome reference; not a 1.16.5 protocol fixture)",
+            "block_registry": "PrismarineJS/minecraft-data@master/data/pc/1.16.2 (block/biome reference data; patch-level parity caveat retained)",
+            "version": "PrismarineJS/minecraft-data@master/data/pc/1.16.5/version.json",
         },
         "counts": counts,
         "biome_count": len(biome_names),
@@ -131,7 +133,7 @@ def import_data(output: Path) -> dict:
         "files": files,
         "status": "reference-data-imported-generator-not-yet-ported",
         "remaining_work": [
-            "derive exact 1.16.5 block-state registry and defaults",
+            "verify 1.16.2-derived block registry parity against exact 1.16.5 before gameplay use",
             "adapt Rust biome source and noise/density functions to 1.16.5",
             "implement carvers, surface builders, placed features and structures",
             "compare fixed-seed output against a trusted 1.16.5 reference",
