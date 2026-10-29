@@ -3228,7 +3228,7 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
-        // Offline looks (a launcher's offline name, the splitscreen players'): for players the
+        // Offline looks (a launcher's offline name): for players the
         // services give no skin.
         for (uuid, look) in horizon_client::skins::local_looks() {
             if resolved.iter().any(|(u, _)| *u == uuid) {

@@ -24,8 +24,7 @@ pub struct Textures {
     pub signed: bool,
 }
 
-/// An offline name's own skin (the launcher's `HORIZON_OFFLINE_SKIN`, or a splitscreen
-/// player's): no Minecraft services behind it, so no URL. Decoded as a downloaded skin is, under
+/// An offline name's own skin (the launcher's `HORIZON_OFFLINE_SKIN`): no Minecraft services behind it, so no URL. Decoded as a downloaded skin is, under
 /// `location` in the skin slots.
 pub struct LocalLook {
     pub location: String,
@@ -33,8 +32,7 @@ pub struct LocalLook {
     pub slim: bool,
 }
 
-/// The offline looks of this process, by the name's offline UUID: every game in it sees them,
-/// so splitscreen players see each other's.
+/// The offline looks of this process, by the name's offline UUID: every game in it sees them.
 static LOCAL_LOOKS: std::sync::Mutex<std::collections::BTreeMap<u128, std::sync::Arc<LocalLook>>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
