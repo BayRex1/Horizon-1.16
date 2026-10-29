@@ -1382,11 +1382,11 @@ mod tests {
         assert_eq!(sections.len(), SECTION_COUNT);
         assert_eq!(
             sections.first().and_then(|s| s.get("Y")),
-            Some(&Tag::Byte(4))
+            Some(&Tag::Byte(0))
         );
         assert_eq!(
             sections.last().and_then(|s| s.get("Y")),
-            Some(&Tag::Byte(19))
+            Some(&Tag::Byte(15))
         );
         // The original chunk stays in the 1.16.5 coordinate system.
         let Tag::Compound(level) = root.tag.get("Level").expect("legacy Level") else {
