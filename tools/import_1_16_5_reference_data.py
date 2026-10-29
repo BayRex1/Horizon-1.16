@@ -34,7 +34,6 @@ WORLDGEN_DIRS = (
 )
 REFERENCE_FILES = (
     "biomes.json",
-    "protocol.json",
     "version.json",
 )
 
@@ -112,8 +111,8 @@ def import_data(output: Path) -> dict:
                               "minecraft-data 1.16 version.json")
     if not isinstance(version_info, dict):
         raise ValueError("Unexpected minecraft-data version metadata")
-    if int(version_info.get("version", -1)) not in (735, 736, 751, 753, 754):
-        raise ValueError(f"Unexpected protocol version metadata: {version_info!r}")
+    if version_info.get("minecraftVersion") != "1.16" or int(version_info.get("version", -1)) != 735:
+        raise ValueError(f"Unexpected 1.16 base-reference metadata: {version_info!r}")
 
     biome_dir = output / "data/minecraft/worldgen/biome"
     biome_names = sorted(p.stem for p in biome_dir.glob("*.json"))
@@ -121,9 +120,10 @@ def import_data(output: Path) -> dict:
         "target": VERSION,
         "data_version": DATA_VERSION,
         "protocol_version": PROTOCOL_VERSION,
+        "reference_protocol_note": "The minecraft-data 1.16 base metadata is protocol 735; it is not used as a 1.16.5 protocol definition. Target protocol remains 754.",
         "source_revisions": {
-            "worldgen": "misode/mcmeta@1.16.5-data",
-            "reference": "PrismarineJS/minecraft-data@master/data/pc/1.16",
+            "worldgen": "misode/mcmeta@1.16.5-data (exact target version)",
+            "reference": "PrismarineJS/minecraft-data@master/data/pc/1.16 (shared 1.16-era biome reference; not a 1.16.5 protocol fixture)",
         },
         "counts": counts,
         "biome_count": len(biome_names),
