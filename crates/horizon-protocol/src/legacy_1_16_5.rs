@@ -133,6 +133,50 @@ pub fn encode_status_ping(payload: i64) -> crate::Result<Vec<u8>> {
     crate::frame::encode(&packet.data, None)
 }
 
+
+/// Decode the 1.16.5 Set Compression packet payload (threshold as VarInt).
+pub fn decode_set_compression(payload: &[u8]) -> crate::Result<i32> {
+    let mut r = crate::buf::Reader::new(payload);
+    let threshold = r.varint()?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 set-compression packet"));
+    }
+    Ok(threshold)
+}
+
+/// Decode the 1.16.5 Login Success payload. In protocol 754 the UUID is a
+/// canonical UUID string followed by the username (not the newer binary UUID).
+pub fn decode_login_success(payload: &[u8]) -> crate::Result<(String, String)> {
+    let mut r = crate::buf::Reader::new(payload);
+    let uuid = r.string(36)?;
+    let username = r.string(16)?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 login-success packet"));
+    }
+    if uuid.len() != 36
+        || !uuid.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+    {
+        return Err(crate::Error::new("invalid UUID in 1.16.5 login-success packet"));
+    }
+    Ok((uuid, username))
+}
+
+/// Decode the JSON string carried by the 1.16.5 Login Disconnect packet.
+pub fn decode_login_disconnect(payload: &[u8]) -> crate::Result<String> {
+    let mut r = crate::buf::Reader::new(payload);
+    let reason = r.string(32767)?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 login-disconnect packet"));
+    }
+    Ok(reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,4 +269,30 @@ mod tests {
         assert_eq!(login::serverbound::START, 0);
         assert_eq!(login::serverbound::PLUGIN_RESPONSE, 2);
     }
+
+    #[test]
+    fn decodes_legacy_login_success_and_compression() {
+        use crate::buf::Writer;
+        let mut payload = Writer::new();
+        payload.string("123e4567-e89b-12d3-a456-426614174000");
+        payload.string("BayRex");
+        assert_eq!(
+            decode_login_success(&payload.data).unwrap(),
+            ("123e4567-e89b-12d3-a456-426614174000".to_owned(), "BayRex".to_owned())
+        );
+        assert_eq!(decode_set_compression(&[0x80, 0x01]).unwrap(), 128);
+        assert!(decode_set_compression(&[1, 0]).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_legacy_login_success() {
+        use crate::buf::Writer;
+        let mut payload = Writer::new();
+        payload.string("not-a-uuid");
+        payload.string("BayRex");
+        assert!(decode_login_success(&payload.data).is_err());
+        assert_eq!(decode_login_disconnect(&[2, b'{', b'}']).unwrap(), "{}");
+        assert!(decode_login_disconnect(&[2, b'{', b'}', 0]).is_err());
+    }
+
 }
