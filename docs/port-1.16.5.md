@@ -70,15 +70,16 @@ Protocol-754 groundwork already exists in `crates/horizon-protocol/src/legacy_1_
 
 ## Version-specific preparation — first implementation
 
-The 1.16.5 input stager is separate from the existing 26.3 preparer, so the current version's research lock and generated constants stay untouched. It checks the official manifest and jar SHA-1 values before extracting anything, rejects unsafe archive paths, and writes a report that explicitly marks the output as staged inputs rather than a playable bundle.
+The 1.16.5 input stager is a developer tool, separate from the existing 26.3 preparer, so the current version's research lock and generated constants stay untouched. It checks official hashes before extracting anything, rejects unsafe archive paths, and writes a report that explicitly marks the output as staged inputs rather than a playable bundle. A local server jar is optional: if omitted, the script downloads the pinned official 1.16.5 server jar into a temporary directory and removes it afterward.
 
-Example (Linux; use paths for your own launcher install):
+Example (Windows PowerShell; use the path to your Minecraft launcher install):
 
-```sh
-python3 tools/prepare_1_16_5.py \
-  --minecraft-dir ~/.minecraft \
-  --server-jar ~/Downloads/minecraft_server.1.16.5.jar \
-  --out .local/horizon-client/1.16.5-inputs
+```powershell
+py -3 tools/prepare_1_16_5.py `
+  --minecraft-dir "$env:APPDATA\.minecraft" `
+  --out ".local\horizon-client\1.16.5-inputs"
 ```
+
+You do not need Linux or a running Minecraft server. This script is for developers preparing source data; someone testing a prebuilt Horizon Windows package should not need to run it at all.
 
 The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. The remaining critical work is a 1.16.5 Java-side exporter compatible with that release's obfuscated classes, followed by Rust adapters for its block-state IDs, biome registry, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
