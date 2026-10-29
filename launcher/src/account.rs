@@ -1026,6 +1026,26 @@ impl Accounts {
     fn path() -> PathBuf {
         crate::backend::data_dir().join("accounts.json")
     }
+    /// Hold across the complete load/modify/save transaction, never just the write.
+    pub fn lock() -> Result<std::fs::File, String> {
+        Self::lock_at(&Self::path().with_extension("lock"))
+    }
+
+    fn lock_at(path: &std::path::Path) -> Result<std::fs::File, String> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        file.lock().map_err(|e| e.to_string())?;
+        Ok(file)
+    }
+
     pub fn load() -> Self {
         std::fs::read_to_string(Self::path())
             .ok()

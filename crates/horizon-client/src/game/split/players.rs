@@ -127,6 +127,10 @@ impl<'a> Split<'a> {
                 g.game.open_split_settings();
             }
         }
+        let taken = self.taken();
+        for g in self.guests.iter_mut().filter(|g| on_profiles(&g.game)) {
+            g.game.ui.options.split_profiles.taken = taken.clone();
+        }
         let open = |g: &Guest<'_>| on_profiles(&g.game) && !g.game.ui.options.split_profiles.filled;
         if !self.guests.iter().any(open) {
             return;
@@ -415,6 +419,10 @@ impl<'a> Split<'a> {
     pub(super) fn remove_guest(&mut self, k: usize) {
         // Its turn's buttons and options go back to their owners before the order shifts.
         self.turn(0);
+        if self.focus == k + 1 {
+            self.handoff(0);
+            self.turn(0);
+        }
         let guest = self.guests.remove(k);
         let i = k + 1;
         if self.focus == i {

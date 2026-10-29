@@ -1527,6 +1527,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
 
 /// `account …`: names and UUIDs only; tokens are never printed.
 fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
+    let _transaction = Accounts::lock()?;
     let mut accounts = Accounts::load();
     let find = |accounts: &Accounts, who: &str| {
         accounts

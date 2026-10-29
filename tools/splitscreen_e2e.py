@@ -348,6 +348,53 @@ def scenario_picker():
         g.quit()
 
 
+def scenario_profile_availability():
+    print('profile_availability: long profile lists and a profile freed while another picker stays open')
+    def seed(home):
+        for name in ['Ada', 'Bea', 'Cal', 'Dee', 'Eve', 'Fay', 'Gia', 'Hal', 'Ivy']:
+            (home / 'splitscreen' / 'profiles' / name).mkdir(parents=True)
+    g = Game(3, pick=True, seed=seed)
+    try:
+        menu = lambda n: (g.ctl(n, 'state').get('menu') or {})
+        g.wait(lambda: all(menu(n).get('mode') == 'splitscreen-profiles' for n in [2, 3]),
+               'both pickers')
+        g.press(2, 'Next')
+        g.press(2, 'Next')
+        g.press(2, 'Ivy')
+        g.wait(lambda: g.ctl(2, 'state').get('player') is not None, 'Ivy playing')
+        g.wait(lambda: 'Ivy' in menu(3).get('taken', []), 'Ivy disabled in the open picker')
+        check('the ninth profile joins', True, True)
+        g.ctl(2, 'disconnect')
+        g.wait(lambda: not g.alive(2), 'Ivy leaving')
+        g.wait(lambda: 'Ivy' not in menu(3).get('taken', []), 'Ivy available without reopening')
+        g.press(3, 'Next')
+        g.press(3, 'Next')
+        g.press(3, 'Ivy')
+        g.wait(lambda: g.ctl(3, 'state').get('player') is not None, 'Ivy joining again')
+        check('the open picker can select the freed profile', True, True)
+    finally:
+        g.quit()
+
+
+def scenario_gui_scales():
+    print('gui_scales: each player keeps its own GUI scale across turns and settings changes')
+    g = Game(2)
+    try:
+        g.ctl(1, 'options-set', 'guiScale', '1')
+        g.ctl(2, 'options-set', 'guiScale', '2')
+        for n in [1, 2]:
+            g.ctl(n, 'key', 'esc', 'tap')
+        def sizes():
+            return [g.ctl(n, 'ui')['gui_size'] for n in [1, 2]]
+        g.wait(lambda: sizes()[0][0] == 2 * sizes()[1][0], 'independent GUI scales')
+        check('P1 GUI twice as wide at scale 1', sizes()[0][0], 2 * sizes()[1][0])
+        g.ctl(2, 'options-set', 'guiScale', '1')
+        g.wait(lambda: sizes()[0] == sizes()[1], 'P2 scale changed independently')
+        check('equal scales give equal GUI sizes', sizes()[0], sizes()[1])
+    finally:
+        g.quit()
+
+
 def scenario_fullscreen():
     print('fullscreen: a profile that was fullscreen joins')
 
@@ -802,6 +849,8 @@ SCENARIOS = {
     'pointer': scenario_pointer,
     'launcher': scenario_launcher,
     'pausemenu': scenario_pausemenu,
+    'profile_availability': scenario_profile_availability,
+    'gui_scales': scenario_gui_scales,
 }
 
 # Related scenarios, for `--only @name`.

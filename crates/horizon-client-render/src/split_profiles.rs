@@ -14,8 +14,8 @@ use crate::{
     ui,
 };
 
-/// ponytail: the first few profiles only; a scrolling list when someone has more.
-const SHOWN: usize = 6;
+/// Leave room for navigation, creation and cancellation in a 240-pixel menu.
+const SHOWN: usize = 4;
 pub const NAME_MAX: usize = 16;
 
 /// A player name the server takes, and the launcher keeps as an offline name: 3 to 16
@@ -64,6 +64,7 @@ pub struct SplitProfiles {
     pub place: Option<String>,
     /// A profile's name, or `None` for Cancel. Taken once.
     choice: Option<Option<String>>,
+    page: usize,
     /// New Profile...: the name being typed.
     new: Option<ui::EditBox>,
 }
@@ -83,6 +84,8 @@ enum Target {
     Cancel,
     Create,
     Back,
+    Previous,
+    Next,
 }
 
 /// A button: where, what it says, whether it can be pressed, what it does.
@@ -127,8 +130,9 @@ impl SplitProfiles {
         let mut buttons: Vec<_> = self
             .names
             .iter()
-            .take(SHOWN)
             .enumerate()
+            .skip(self.page * SHOWN)
+            .take(SHOWN)
             .map(|(i, name)| {
                 // A Microsoft account signs in as itself.
                 let mut label = name.clone();
@@ -138,11 +142,26 @@ impl SplitProfiles {
                 if self.current.as_ref() == Some(name) {
                     label.push_str(" - you");
                 }
-                let y = 44.0 + i as f32 * 24.0;
+                let y = 44.0 + (i % SHOWN) as f32 * 24.0;
                 button(y, label, !self.taken.contains(name), Target::Profile(i))
             })
             .collect();
-        let y = 52.0 + self.names.len().min(SHOWN) as f32 * 24.0;
+        let mut y = 52.0 + self.names.len().min(SHOWN) as f32 * 24.0;
+        if self.names.len() > SHOWN {
+            buttons.push((
+                [x, y, 98.0, 20.0],
+                "Previous".into(),
+                self.page > 0,
+                Target::Previous,
+            ));
+            buttons.push((
+                [x + 102.0, y, 98.0, 20.0],
+                "Next".into(),
+                (self.page + 1) * SHOWN < self.names.len(),
+                Target::Next,
+            ));
+            y += 24.0;
+        }
         buttons.push(button(y, "New Profile...".into(), true, Target::New));
         let cancel = lang::get_or("gui.cancel", "Cancel");
         buttons.push(button(y + 24.0, cancel, true, Target::Cancel));
@@ -179,7 +198,7 @@ impl SplitProfiles {
             STYLE.title(batch, atlas, &Text::literal(title));
             self.draw_bumpers(batch, atlas, style);
             // Under Cancel: where names are renamed, skinned and forgotten.
-            let y = 52.0 + self.names.len().min(SHOWN) as f32 * 24.0 + 54.0;
+            let y = buttons.last().map_or(0.0, |b| b.0[1] + 30.0);
             line(batch, "Accounts are managed in the launcher", y, grey);
             // Why the last pick can't play, wrapped to the view (a quarter of a window is narrow).
             let width = |text: &str| HudBatch::text_width(atlas, text).ceil();
@@ -266,6 +285,8 @@ impl SplitProfiles {
                 field.max_length = NAME_MAX;
                 self.new = Some(field);
             }
+            Target::Previous => self.page = self.page.saturating_sub(1),
+            Target::Next => self.page += 1,
             Target::Create => self.create(),
             Target::Back => self.new = None,
             Target::Cancel => {
@@ -372,6 +393,22 @@ mod tests {
             ["a", "verylongwordindeed", "b"]
         );
         assert!(wrap("", 60.0, width).is_empty());
+    }
+
+    #[test]
+    fn every_profile_can_be_picked_across_pages() {
+        let atlas = atlas();
+        let mut p = SplitProfiles {
+            names: (0..11).map(|i| format!("Player{i}")).collect(),
+            ..Default::default()
+        };
+        p.accounts = vec!["Player10".into()];
+        press(&mut p, &atlas, "Next");
+        press(&mut p, &atlas, "Next");
+        press(&mut p, &atlas, "Player10 (Microsoft)");
+        assert_eq!(p.take_choice(), Some(Some("Player10".into())));
+        press(&mut p, &atlas, "Previous");
+        assert!(p.buttons(427.0, 240.0).iter().any(|b| b.1 == "Player4"));
     }
 
     #[test]

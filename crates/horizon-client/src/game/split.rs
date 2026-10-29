@@ -262,6 +262,13 @@ impl<'a> Split<'a> {
     /// Player `i`'s turn (0 = P1): its options file, and its own buttons and focus targets, which
     /// screens record while drawing and the control socket and the controller's cursor read.
     fn turn(&mut self, i: usize) {
+        if let Some(game) = self.game(i) {
+            horizon_client::hud::GUI_SCALE.store(
+                game.settings.gui_scale,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+
         if i == self.turn {
             return;
         }
@@ -330,6 +337,54 @@ impl<'a> Split<'a> {
         game.keyboard_mouse = i == focus;
         let id = game.window.as_ref()?.id();
         Some((game, id))
+    }
+
+    /// Give keyboard and mouse to one player, releasing the previous owner's held controls.
+    fn handoff(&mut self, next: usize) {
+        if next != self.focus {
+            self.turn(self.focus);
+            if let Some(game) = self.game_mut(self.focus) {
+                for key in std::mem::take(&mut game.physical_keys) {
+                    game.mod_key(key, false, false);
+                    game.native_key_event(key, false, false);
+                }
+                for key in std::mem::take(&mut game.keys) {
+                    if let Err(e) = game.mapped_key(key, false, false) {
+                        log::warn!("Horizon: splitscreen: releasing input: {e}");
+                    }
+                }
+                for button in std::mem::take(&mut game.physical_buttons) {
+                    game.mod_mouse_key(button, false);
+                    game.extras_mouse(button, false);
+                }
+                game.keys.clear();
+                game.modifiers = Default::default();
+                game.left = false;
+                game.right = false;
+                game.inventory_mouse_release(false);
+                game.inventory_mouse_release(true);
+                game.inventory_pick_release();
+                game.loom_release();
+                game.creative_screen.release();
+                game.ui.options.release();
+                game.dragging = false;
+                game.stats_release();
+                game.world_options_release();
+                game.advancements_mouse(false, [0, 0]);
+                if let Some(title) = &mut game.title {
+                    title.release();
+                    title.release_field();
+                }
+                game.capture(false);
+                game.keyboard_mouse = false;
+            }
+        }
+        self.focus = next;
+        for i in 0..self.players() {
+            if let Some(game) = self.game_mut(i) {
+                game.keyboard_mouse = i == next;
+            }
+        }
     }
 
     fn captured(&self, i: usize) -> bool {
@@ -593,7 +648,7 @@ impl ApplicationHandler for Split<'_> {
                     && clicked != self.focus
                     && !self.captured(self.focus)
                 {
-                    self.focus = clicked;
+                    self.handoff(clicked);
                     self.tag(clicked, Some("Keyboard and mouse"));
                     let position = self.cursor_in_focus();
                     if let Some((player, id)) = self.player(clicked) {

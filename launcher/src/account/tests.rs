@@ -872,3 +872,46 @@ fn refresh_renews_whatever_is_left() {
     );
     assert!(needs_sign_in(&store, UUID));
 }
+
+/// Separate processes race on one scratch file, as simultaneous joining players do.
+#[test]
+fn profile_transactions_across_processes() {
+    const CHILD: &str = "HORIZON_TEST_PROFILE_TRANSACTION";
+    if let Some(path) = std::env::var_os(CHILD) {
+        let path = std::path::PathBuf::from(path);
+        let _lock = Accounts::lock_at(&path.with_extension("lock")).unwrap();
+        let mut accounts: Accounts = std::fs::read(&path)
+            .ok()
+            .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+            .unwrap_or_default();
+        // Force overlap if the transaction lock is removed.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        accounts
+            .offline
+            .push(format!("Player{}", std::process::id()));
+        std::fs::write(&path, serde_json::to_vec(&accounts).unwrap()).unwrap();
+        return;
+    }
+    let folder = std::env::temp_dir().join(format!("horizon-profile-lock-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("accounts.json");
+    let mut children: Vec<_> = (0..8)
+        .map(|_| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "account::tests::profile_transactions_across_processes",
+                ])
+                .env(CHILD, &path)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    let accounts: Accounts = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(accounts.offline.len(), 8);
+    std::fs::remove_dir_all(folder).unwrap();
+}
