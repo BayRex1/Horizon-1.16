@@ -25,6 +25,7 @@ Keep this as an isolated branch until the old protocol and gameplay path have te
 - [ ] Implement 1.16.5 handshake/status/login/play packet layouts and state transitions. 1.16.5 predates the modern configuration state and secure-chat protocol, so current state-machine assumptions must be reviewed rather than copied blindly.
 - [x] Add an isolated protocol-754 module with handshake, status request/ping, and username-only Login Start frame encoders plus unit tests. This is groundwork only; these encoders are not yet wired into the live connection.
 - [ ] Add protocol tests using captured/generated fixtures and verify status ping, offline/local login where supported, and disconnect handling.
+- [x] Add isolated protocol-754 Play packet IDs and keep-alive encode/decode helpers with unit tests. This is packet groundwork only; it does not yet implement the Play-state loop.
 
 ### Milestone 3 — playable world
 
