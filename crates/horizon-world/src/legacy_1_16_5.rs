@@ -37,7 +37,6 @@ pub const fn section_min_y(index: usize) -> Option<i32> {
     }
 }
 
-
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct LegacyBlockProperty {
     pub name: String,
@@ -103,9 +102,7 @@ pub fn biome_by_name(name: &str) -> Result<Option<LegacyBiome>, serde_json::Erro
 
 /// Resolve a 1.16.5 block-state registry ID to its block and per-block state
 /// offset. The offset is relative to min_state_id, not a modern Horizon ID.
-pub fn block_by_state_id(
-    state_id: u32,
-) -> Result<Option<(LegacyBlock, u32)>, serde_json::Error> {
+pub fn block_by_state_id(state_id: u32) -> Result<Option<(LegacyBlock, u32)>, serde_json::Error> {
     Ok(blocks()?.into_iter().find_map(|block| {
         if block.min_state_id <= state_id && state_id <= block.max_state_id {
             let offset = state_id - block.min_state_id;
@@ -175,9 +172,11 @@ mod tests {
         assert_eq!(stairs_last.name, "oak_stairs");
         assert_eq!(offset, 79);
 
-        assert!(block_by_state_id(17_112)
-            .expect("embedded block data must parse")
-            .is_none());
+        assert!(
+            block_by_state_id(17_112)
+                .expect("embedded block data must parse")
+                .is_none()
+        );
     }
 
     #[test]
