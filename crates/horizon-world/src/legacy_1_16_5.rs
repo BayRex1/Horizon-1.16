@@ -118,7 +118,6 @@ pub fn biome_by_id(id: u32) -> Result<Option<LegacyBiome>, serde_json::Error> {
     Ok(biomes()?.into_iter().find(|biome| biome.id == id))
 }
 
-
 /// One Java Edition 1.16.5 chunk section (16×16×16 blocks).
 ///
 /// Serialized fields use the legacy Anvil format: Palette entries use Name/Properties,
@@ -132,20 +131,39 @@ pub struct LegacyBlockState {
 
 impl LegacyBlockState {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), properties: std::collections::BTreeMap::new() }
+        Self {
+            name: name.into(),
+            properties: std::collections::BTreeMap::new(),
+        }
     }
 
     fn to_nbt(&self) -> crate::nbt::Tag {
         use crate::nbt::{JavaString, Tag};
         let mut map = crate::nbt::Compound::new();
-        let name = if self.name.contains(':') { self.name.clone() } else { format!("minecraft:{}", self.name) };
-        map.insert(JavaString::from("Name"), Tag::String(JavaString::from(name.as_str())));
+        let name = if self.name.contains(':') {
+            self.name.clone()
+        } else {
+            format!("minecraft:{}", self.name)
+        };
+        map.insert(
+            JavaString::from("Name"),
+            Tag::String(JavaString::from(name.as_str())),
+        );
         if !self.properties.is_empty() {
-            map.insert(JavaString::from("Properties"), Tag::Compound(
-                self.properties.iter().map(|(key, value)| (
-                    JavaString::from(key.as_str()), Tag::String(JavaString::from(value.as_str()))
-                )).collect()
-            ));
+            map.insert(
+                JavaString::from("Properties"),
+                Tag::Compound(
+                    self.properties
+                        .iter()
+                        .map(|(key, value)| {
+                            (
+                                JavaString::from(key.as_str()),
+                                Tag::String(JavaString::from(value.as_str())),
+                            )
+                        })
+                        .collect(),
+                ),
+            );
         }
         Tag::Compound(map)
     }
@@ -196,27 +214,39 @@ impl LegacyBlockSection {
     pub const BLOCK_COUNT: usize = 4096;
 
     pub fn uniform(state: LegacyBlockState) -> Self {
-        Self { palette: vec![state], storage: None }
+        Self {
+            palette: vec![state],
+            storage: None,
+        }
     }
 
     pub fn air() -> Self {
         Self::uniform(LegacyBlockState::new("air"))
     }
 
-    pub fn palette(&self) -> &[LegacyBlockState] { &self.palette }
+    pub fn palette(&self) -> &[LegacyBlockState] {
+        &self.palette
+    }
 
     pub fn get_index(&self, index: usize) -> std::io::Result<&LegacyBlockState> {
         use crate::compression::invalid;
         if index >= Self::BLOCK_COUNT {
             return Err(invalid("legacy section block index out of bounds"));
         }
-        let palette_index = self.storage.as_ref().map_or(0, |storage| storage.read(index) as usize);
-        self.palette.get(palette_index).ok_or_else(|| invalid("legacy palette index outside palette"))
+        let palette_index = self
+            .storage
+            .as_ref()
+            .map_or(0, |storage| storage.read(index) as usize);
+        self.palette
+            .get(palette_index)
+            .ok_or_else(|| invalid("legacy palette index outside palette"))
     }
 
     pub fn get(&self, x: usize, y: usize, z: usize) -> std::io::Result<&LegacyBlockState> {
         if x >= 16 || y >= 16 || z >= 16 {
-            return Err(crate::compression::invalid("legacy section coordinates out of bounds"));
+            return Err(crate::compression::invalid(
+                "legacy section coordinates out of bounds",
+            ));
         }
         self.get_index(x | (z << 4) | (y << 8))
     }
@@ -232,12 +262,17 @@ impl LegacyBlockSection {
             None => {
                 let next_len = self.palette.len() + 1;
                 let next_bits = ((usize::BITS - (next_len - 1).leading_zeros()) as u8).max(4);
-                if self.storage.as_ref().is_none_or(|storage| storage.bits() < next_bits) {
+                if self
+                    .storage
+                    .as_ref()
+                    .is_none_or(|storage| storage.bits() < next_bits)
+                {
                     let mut next = PackedStorage::new(next_bits, Self::BLOCK_COUNT)
                         .map_err(|e| invalid(e.to_string()))?;
                     if let Some(previous) = &self.storage {
                         for i in 0..Self::BLOCK_COUNT {
-                            next.set(i, previous.read(i)).map_err(|e| invalid(e.to_string()))?;
+                            next.set(i, previous.read(i))
+                                .map_err(|e| invalid(e.to_string()))?;
                         }
                     }
                     self.storage = Some(next);
@@ -247,14 +282,24 @@ impl LegacyBlockSection {
             }
         };
         if let Some(storage) = &mut self.storage {
-            storage.set(index, palette_index as u32).map_err(|e| invalid(e.to_string()))?;
+            storage
+                .set(index, palette_index as u32)
+                .map_err(|e| invalid(e.to_string()))?;
         }
         Ok(())
     }
 
-    pub fn set(&mut self, x: usize, y: usize, z: usize, state: LegacyBlockState) -> std::io::Result<()> {
+    pub fn set(
+        &mut self,
+        x: usize,
+        y: usize,
+        z: usize,
+        state: LegacyBlockState,
+    ) -> std::io::Result<()> {
         if x >= 16 || y >= 16 || z >= 16 {
-            return Err(crate::compression::invalid("legacy section coordinates out of bounds"));
+            return Err(crate::compression::invalid(
+                "legacy section coordinates out of bounds",
+            ));
         }
         self.set_index(x | (z << 4) | (y << 8), state)
     }
@@ -269,45 +314,64 @@ impl LegacyBlockSection {
         if entries.is_empty() {
             return Err(invalid("legacy section palette is empty"));
         }
-        let palette = entries.iter().map(LegacyBlockState::from_nbt).collect::<std::io::Result<Vec<_>>>()?;
+        let palette = entries
+            .iter()
+            .map(LegacyBlockState::from_nbt)
+            .collect::<std::io::Result<Vec<_>>>()?;
         if palette.len() > Self::BLOCK_COUNT {
             return Err(invalid("legacy section palette exceeds block count"));
         }
         if palette.len() == 1 {
             if let Some(Tag::LongArray(words)) = tag.get("BlockStates") {
                 if !words.is_empty() {
-                    return Err(invalid("single-entry legacy palette must not contain BlockStates"));
+                    return Err(invalid(
+                        "single-entry legacy palette must not contain BlockStates",
+                    ));
                 }
             }
-            return Ok(Self { palette, storage: None });
+            return Ok(Self {
+                palette,
+                storage: None,
+            });
         }
         let bits = ((usize::BITS - (palette.len() - 1).leading_zeros()) as u8).max(4);
         let Some(Tag::LongArray(words)) = tag.get("BlockStates") else {
             return Err(invalid("nonuniform legacy palette is missing BlockStates"));
         };
         let storage = horizon_core::storage::PackedStorage::from_words(
-            bits, Self::BLOCK_COUNT, words.iter().map(|word| *word as u64).collect()
-        ).map_err(|e| invalid(e.to_string()))?;
+            bits,
+            Self::BLOCK_COUNT,
+            words.iter().map(|word| *word as u64).collect(),
+        )
+        .map_err(|e| invalid(e.to_string()))?;
         for index in 0..Self::BLOCK_COUNT {
             if storage.read(index) as usize >= palette.len() {
                 return Err(invalid("legacy palette index outside palette"));
             }
         }
-        Ok(Self { palette, storage: Some(storage) })
+        Ok(Self {
+            palette,
+            storage: Some(storage),
+        })
     }
 
     /// Encode the section fields to embed into a 1.16.5 section compound.
     pub fn to_nbt(&self) -> crate::nbt::Tag {
         use crate::nbt::{JavaString, Tag};
         let mut map = crate::nbt::Compound::new();
-        map.insert(JavaString::from("Palette"), Tag::List(self.palette.iter().map(LegacyBlockState::to_nbt).collect()));
+        map.insert(
+            JavaString::from("Palette"),
+            Tag::List(self.palette.iter().map(LegacyBlockState::to_nbt).collect()),
+        );
         if let Some(storage) = &self.storage {
-            map.insert(JavaString::from("BlockStates"), Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()));
+            map.insert(
+                JavaString::from("BlockStates"),
+                Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()),
+            );
         }
         Tag::Compound(map)
     }
 }
-
 
 /// Build a deterministic, playable-bootstrap terrain chunk in the Java 1.16.5
 /// Anvil NBT schema. This is intentionally a simple seeded height field, not
@@ -327,7 +391,12 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
     }
 
     fn compound(entries: impl IntoIterator<Item = (String, Tag)>) -> Tag {
-        Tag::Compound(entries.into_iter().map(|(key, value)| (JavaString::from(key.as_str()), value)).collect())
+        Tag::Compound(
+            entries
+                .into_iter()
+                .map(|(key, value)| (JavaString::from(key.as_str()), value))
+                .collect(),
+        )
     }
     let air = LegacyBlockState::new("air");
     let bedrock = LegacyBlockState::new("bedrock");
@@ -370,18 +439,29 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
 
     let mut section_tags = Vec::with_capacity(SECTION_COUNT);
     for (index, section) in sections.iter().enumerate() {
-        let Tag::Compound(mut fields) = section.to_nbt() else { unreachable!() };
+        let Tag::Compound(mut fields) = section.to_nbt() else {
+            unreachable!()
+        };
         fields.insert(JavaString::from("Y"), Tag::Byte(index as i8));
-        fields.insert(JavaString::from("BlockLight"), Tag::ByteArray(vec![0; 2048]));
-        fields.insert(JavaString::from("SkyLight"), Tag::ByteArray(vec![0xff; 2048]));
+        fields.insert(
+            JavaString::from("BlockLight"),
+            Tag::ByteArray(vec![0; 2048]),
+        );
+        fields.insert(
+            JavaString::from("SkyLight"),
+            Tag::ByteArray(vec![0xff; 2048]),
+        );
         section_tags.push(Tag::Compound(fields));
     }
 
     let mut heightmap = PackedStorage::new(9, 256).expect("valid legacy heightmap storage");
     for (index, height) in surface.iter().enumerate() {
-        heightmap.set(index, *height as u32).expect("height fits 9 bits");
+        heightmap
+            .set(index, *height as u32)
+            .expect("height fits 9 bits");
     }
-    let heightmap_data = Tag::LongArray(heightmap.words().iter().map(|word| *word as i64).collect());
+    let heightmap_data =
+        Tag::LongArray(heightmap.words().iter().map(|word| *word as i64).collect());
     let heightmaps = compound([
         ("MOTION_BLOCKING".to_owned(), heightmap_data.clone()),
         ("WORLD_SURFACE".to_owned(), heightmap_data),
@@ -396,7 +476,10 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
         ("zPos".to_owned(), Tag::Int(chunk_z)),
         ("LastUpdate".to_owned(), Tag::Long(0)),
         ("InhabitedTime".to_owned(), Tag::Long(0)),
-        ("Status".to_owned(), Tag::String(JavaString::from("minecraft:full"))),
+        (
+            "Status".to_owned(),
+            Tag::String(JavaString::from("minecraft:full")),
+        ),
         ("Biomes".to_owned(), Tag::IntArray(vec![1; 256])),
         ("Heightmaps".to_owned(), heightmaps),
         ("Sections".to_owned(), Tag::List(section_tags)),
@@ -462,15 +545,24 @@ mod tests {
         let level = first.tag.get("Level").expect("chunk Level");
         assert_eq!(level.get("xPos"), Some(&Tag::Int(0)));
         assert_eq!(level.get("zPos"), Some(&Tag::Int(0)));
-        assert_eq!(level.get("Status"), Some(&Tag::String(crate::nbt::JavaString::from("minecraft:full"))));
-        assert_eq!(level.get("Biomes").and_then(|tag| match tag {
-            Tag::IntArray(values) => Some(values.len()),
-            _ => None,
-        }), Some(256));
-        assert_eq!(level.get("Sections").and_then(|tag| match tag {
-            Tag::List(values) => Some(values.len()),
-            _ => None,
-        }), Some(16));
+        assert_eq!(
+            level.get("Status"),
+            Some(&Tag::String(crate::nbt::JavaString::from("minecraft:full")))
+        );
+        assert_eq!(
+            level.get("Biomes").and_then(|tag| match tag {
+                Tag::IntArray(values) => Some(values.len()),
+                _ => None,
+            }),
+            Some(256)
+        );
+        assert_eq!(
+            level.get("Sections").and_then(|tag| match tag {
+                Tag::List(values) => Some(values.len()),
+                _ => None,
+            }),
+            Some(16)
+        );
 
         let encoded = nbt::write_named(&first, Limits::default()).unwrap();
         let (decoded, used) = nbt::read_named(&encoded, Limits::default()).unwrap();
@@ -491,13 +583,26 @@ mod tests {
         ));
         save_bootstrap_chunk(&directory, 42, -1, 2).unwrap();
         let chunk_pos = ChunkPos::new(-1, 2);
-        let path = directory.join(format!("r.{}.{}.mca", chunk_pos.region().x, chunk_pos.region().z));
+        let path = directory.join(format!(
+            "r.{}.{}.mca",
+            chunk_pos.region().x,
+            chunk_pos.region().z
+        ));
         let mut region = RegionFile::open(path).unwrap();
         let record = region.read(chunk_pos).unwrap().expect("saved chunk record");
         let decoded = record.nbt(Limits::default()).unwrap();
-        assert_eq!(decoded.tag.get("DataVersion"), Some(&crate::nbt::Tag::Int(2730)));
-        assert_eq!(decoded.tag.get("Level").and_then(|level| level.get("xPos")), Some(&crate::nbt::Tag::Int(-1)));
-        assert_eq!(decoded.tag.get("Level").and_then(|level| level.get("zPos")), Some(&crate::nbt::Tag::Int(2)));
+        assert_eq!(
+            decoded.tag.get("DataVersion"),
+            Some(&crate::nbt::Tag::Int(2730))
+        );
+        assert_eq!(
+            decoded.tag.get("Level").and_then(|level| level.get("xPos")),
+            Some(&crate::nbt::Tag::Int(-1))
+        );
+        assert_eq!(
+            decoded.tag.get("Level").and_then(|level| level.get("zPos")),
+            Some(&crate::nbt::Tag::Int(2))
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -508,32 +613,58 @@ mod tests {
         let mut section = LegacyBlockSection::air();
         let mut properties = std::collections::BTreeMap::new();
         properties.insert("axis".to_owned(), "y".to_owned());
-        section.set(15, 15, 15, LegacyBlockState {
-            name: "oak_log".to_owned(),
-            properties,
-        }).unwrap();
-        section.set(0, 1, 0, LegacyBlockState::new("stone")).unwrap();
+        section
+            .set(
+                15,
+                15,
+                15,
+                LegacyBlockState {
+                    name: "oak_log".to_owned(),
+                    properties,
+                },
+            )
+            .unwrap();
+        section
+            .set(0, 1, 0, LegacyBlockState::new("stone"))
+            .unwrap();
 
         let encoded = section.to_nbt();
-        assert_eq!(encoded.get("Palette").and_then(|tag| match tag {
-            Tag::List(entries) => entries.first()?.get("Name").and_then(|name| match name {
-                Tag::String(name) => name.to_string().ok(),
-                _ => None,
-            }),
-            _ => None,
-        }).as_deref(), Some("minecraft:air"));
+        assert_eq!(
+            encoded
+                .get("Palette")
+                .and_then(|tag| match tag {
+                    Tag::List(entries) =>
+                        entries.first()?.get("Name").and_then(|name| match name {
+                            Tag::String(name) => name.to_string().ok(),
+                            _ => None,
+                        }),
+                    _ => None,
+                })
+                .as_deref(),
+            Some("minecraft:air")
+        );
         assert!(encoded.get("palette").is_none());
         assert!(encoded.get("BlockStates").is_some());
 
         let decoded = LegacyBlockSection::from_nbt(&encoded).unwrap();
         assert_eq!(decoded.get(15, 15, 15).unwrap().name, "oak_log");
-        assert_eq!(decoded.get(15, 15, 15).unwrap().properties.get("axis").map(String::as_str), Some("y"));
+        assert_eq!(
+            decoded
+                .get(15, 15, 15)
+                .unwrap()
+                .properties
+                .get("axis")
+                .map(String::as_str),
+            Some("y")
+        );
         assert_eq!(decoded.get(0, 1, 0).unwrap().name, "stone");
         assert_eq!(decoded.get(1, 1, 0).unwrap().name, "air");
 
         // NBT field casing is version-specific; this catches accidental use of
         // the modern lowercase palette/data format.
-        let Tag::Compound(map) = encoded else { panic!("section must be a compound") };
+        let Tag::Compound(map) = encoded else {
+            panic!("section must be a compound")
+        };
         assert!(map.contains_key(&JavaString::from("Palette")));
         assert!(map.contains_key(&JavaString::from("BlockStates")));
     }
@@ -544,14 +675,18 @@ mod tests {
         let section = LegacyBlockSection::uniform(LegacyBlockState::new("stone"));
         let encoded = section.to_nbt();
         assert!(encoded.get("BlockStates").is_none());
-        assert_eq!(LegacyBlockSection::from_nbt(&encoded).unwrap().get(0, 0, 0).unwrap().name, "stone");
+        assert_eq!(
+            LegacyBlockSection::from_nbt(&encoded)
+                .unwrap()
+                .get(0, 0, 0)
+                .unwrap()
+                .name,
+            "stone"
+        );
         assert!(section.get(16, 0, 0).is_err());
         assert!(section.get_index(4096).is_err());
 
-        let malformed = Tag::compound([(
-            JavaString::from("Palette"),
-            Tag::List(Vec::new()),
-        )]);
+        let malformed = Tag::compound([(JavaString::from("Palette"), Tag::List(Vec::new()))]);
         assert!(LegacyBlockSection::from_nbt(&malformed).is_err());
     }
 
