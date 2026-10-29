@@ -699,7 +699,7 @@ pub fn create_bootstrap_world(
     if name.trim().is_empty() {
         return Err(crate::compression::invalid("world name must not be empty"));
     }
-    fs::create_dir(directory)?;
+    fs::create_dir_all(directory)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| crate::compression::invalid(e.to_string()))?
