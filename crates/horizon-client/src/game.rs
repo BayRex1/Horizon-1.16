@@ -13471,6 +13471,13 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::CommandBlock => {
                     self.command_block_key(&event)
                 }
+                // Capture a mod binding before gameplay mappings translate the
+                // physical key to the default key of a different action.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Mod
+                        && event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                        && self.mod_screen_key(key) => {}
                 // Options consumes presses; releases still reach the bound
                 // gameplay mapping below, including sneak/sprint toggles.
                 WindowEvent::KeyboardInput { event, .. }
