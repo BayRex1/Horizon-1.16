@@ -157,6 +157,32 @@ impl ChunkFormat {
 
 type Decoded = (Box<C>, Result<Chunk, String>);
 
+/// Convert one legacy 1.16.5 section's biome slice into the resident
+/// section's quart-cell order. Protocol 754 stores biomes as
+/// `(quart_x * 4 + quart_z) * 64 + quart_y`; resident sections use
+/// `(quart_y << 4) | (quart_z << 2) | quart_x`.
+fn legacy_biome_cells(chunk: &horizon_protocol::legacy_1_16_5::LegacyChunkColumn, legacy_y: usize, biome_map: &[u32]) -> [u32; 64] {
+    let mut cells = [0u32; 64];
+    if !chunk.full_chunk || chunk.biomes.len() != 1024 || legacy_y >= 16 {
+        return cells;
+    }
+    for quart_y in 0..4 {
+        for quart_z in 0..4 {
+            for quart_x in 0..4 {
+                let source_index = (quart_x * 4 + quart_z) * 64 + legacy_y * 4 + quart_y;
+                let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
+                let legacy_biome = chunk.biomes[source_index];
+                cells[target_index] = if legacy_biome >= 0 {
+                    biome_map.get(legacy_biome as usize).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+            }
+        }
+    }
+    cells
+}
+
 /// One thread that decodes chunk packets in the order they arrived; its
 /// results come back in that order, one per `submit`.
 pub(super) struct ChunkDecoder {
@@ -258,27 +284,7 @@ impl Game<'_> {
                     0
                 };
             }
-            // Protocol 754 sends a 4x4x64 biome volume for full chunks.
-            // Its index is (quart_x * 4 + quart_z) * 64 + quart_y; the
-            // resident section uses (quart_y << 4) | (quart_z << 2) | quart_x.
-            let mut biome_cells = [0u32; 64];
-            if chunk.full_chunk && chunk.biomes.len() == 1024 {
-                for quart_y in 0..4 {
-                    for quart_z in 0..4 {
-                        for quart_x in 0..4 {
-                            let source_index =
-                                (quart_x * 4 + quart_z) * 64 + legacy_y * 4 + quart_y;
-                            let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
-                            let legacy_biome = chunk.biomes[source_index];
-                            biome_cells[target_index] = if legacy_biome >= 0 {
-                                biome_map.get(legacy_biome as usize).copied().unwrap_or(0)
-                            } else {
-                                0
-                            };
-                        }
-                    }
-                }
-            }
+            let biome_cells = legacy_biome_cells(&chunk, legacy_y, biome_map);
             let mut section = Section {
                 blocks: PalettedContainer::from_values(block_strategy(), &values),
                 biomes: PalettedContainer::from_values(BIOME_STRATEGY, &biome_cells),
@@ -397,6 +403,43 @@ mod tests {
             },
             light: none,
         }))
+    }
+
+    #[test]
+    fn legacy_biomes_are_transposed_into_resident_quart_order() {
+        use horizon_protocol::legacy_1_16_5::LegacyChunkColumn;
+        let mut column = LegacyChunkColumn {
+            x: 0,
+            z: 0,
+            full_chunk: true,
+            section_mask: 0xffff,
+            heightmaps: horizon_world::nbt::Tag::Compound(Default::default()),
+            biomes: vec![0; 1024],
+            sections: (0..16).map(|_| None).collect(),
+            block_entities: Vec::new(),
+        };
+        // Unique IDs reveal transposition mistakes and the Y-section offset.
+        for quart_x in 0..4 {
+            for quart_z in 0..4 {
+                for quart_y in 0..64 {
+                    let source = (quart_x * 4 + quart_z) * 64 + quart_y;
+                    column.biomes[source] = (quart_y / 4) as i32 + 1;
+                }
+            }
+        }
+        let map: Vec<u32> = (0..17).map(|v| v * 3).collect();
+        let cells = legacy_biome_cells(&column, 5, &map);
+        for quart_y in 0..4 {
+            for quart_z in 0..4 {
+                for quart_x in 0..4 {
+                    let target = (quart_y << 4) | (quart_z << 2) | quart_x;
+                    assert_eq!(cells[target], map[5 * 4 + quart_y + 1]);
+                }
+            }
+        }
+        assert_eq!(legacy_biome_cells(&column, 16, &map), [0; 64]);
+        column.full_chunk = false;
+        assert_eq!(legacy_biome_cells(&column, 5, &map), [0; 64]);
     }
 
     /// Columns come back one per packet, in the order the packets went in,
