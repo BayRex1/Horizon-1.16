@@ -1802,6 +1802,34 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         _ => {}
     }
 }
+/// The `NeutralMob` classes: they stop being angry when the player they are
+/// angry at dies nearby (`forgive_dead_players`).
+pub fn is_neutral(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Bee
+            | Species::Enderman
+            | Species::IronGolem
+            | Species::Panda
+            | Species::PolarBear
+            | Species::Spider
+            | Species::TraderLlama
+            | Species::Wolf
+            | Species::ZombifiedPiglin
+    )
+}
+/// `NeutralMob.stopBeingAngry`: the anger runs out at once and the target is
+/// forgotten. Bees keep their anger in their own state; a target that is not
+/// the player (an iron golem defending its village) is not the anger.
+pub fn stop_being_angry(m: &mut Mob) {
+    if m.species() == Species::Bee {
+        return super::bee::stop_being_angry(m);
+    }
+    m.extra.anger = 0;
+    if m.ai.target == Some(Who::Player) {
+        m.ai.target = None;
+    }
+}
 /// Mob.doHurtTarget: attack damage (+ species extras) to the target.
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     if m.species() == Species::IronGolem {
@@ -2260,5 +2288,72 @@ mod frog_tests {
                 gravity: true,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod forgiveness_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn mob(species: Species) -> Mob {
+        let mut t = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        t.species = species;
+        Mob::new(1, Arc::new(t), Vec3::ZERO, 0.0)
+    }
+
+    /// The dying player's forgiveness covers the `NeutralMob` classes and no
+    /// others: piglins' anger is Brain-based and zombies are always hostile.
+    #[test]
+    fn the_neutral_classes_match_vanilla() {
+        for s in [
+            Species::Bee,
+            Species::Enderman,
+            Species::IronGolem,
+            Species::Panda,
+            Species::PolarBear,
+            Species::Spider,
+            Species::TraderLlama,
+            Species::Wolf,
+            Species::ZombifiedPiglin,
+        ] {
+            assert!(is_neutral(s), "{s:?}");
+        }
+        for s in [Species::Piglin, Species::Zombie, Species::Cow] {
+            assert!(!is_neutral(s), "{s:?}");
+        }
+    }
+
+    /// `NeutralMob.stopBeingAngry`: the anger and a player target go, but a
+    /// village-defence target (an iron golem's zombie) is not the anger.
+    #[test]
+    fn stopping_the_anger_keeps_other_targets() {
+        let mut wolf = mob(Species::Wolf);
+        wolf.extra.anger = 500;
+        wolf.ai.target = Some(Who::Player);
+        stop_being_angry(&mut wolf);
+        assert_eq!(wolf.extra.anger, 0);
+        assert_eq!(wolf.ai.target, None);
+
+        let mut golem = mob(Species::IronGolem);
+        golem.extra.anger = 500;
+        golem.ai.target = Some(Who::Mob(7));
+        stop_being_angry(&mut golem);
+        assert_eq!(golem.extra.anger, 0);
+        assert_eq!(golem.ai.target, Some(Who::Mob(7)));
+    }
+
+    /// A bee keeps its anger in its own state: the same call ends it there.
+    #[test]
+    fn a_bees_anger_ends_with_the_same_call() {
+        let mut bee = mob(Species::Bee);
+        bee.ai.last_hurt_by = Some(Who::Player);
+        bee.ai.target = Some(Who::Player);
+        stop_being_angry(&mut bee);
+        assert_eq!(bee.ai.target, None);
+        assert_eq!(bee.ai.last_hurt_by, None);
+        let b = crate::mobs::bee::get(&bee).unwrap();
+        assert_eq!(b.angry_at, None);
+        assert_eq!(b.anger_end, -1);
     }
 }
