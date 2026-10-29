@@ -371,6 +371,121 @@ impl LegacyBlockSection {
         }
         Tag::Compound(map)
     }
+
+    /// Translate this legacy section to the current runtime palette schema.
+    /// The section is not written back to the legacy save by this conversion.
+    pub fn to_runtime_nbt(&self) -> crate::nbt::Tag {
+        use crate::nbt::{JavaString, Tag};
+        let palette = self
+            .palette
+            .iter()
+            .map(|state| {
+                let name = if state.name.contains(':') {
+                    state.name.clone()
+                } else {
+                    format!("minecraft:{}", state.name)
+                };
+                crate::chunk::BlockState {
+                    name,
+                    properties: state.properties.clone(),
+                }
+                .to_nbt()
+            })
+            .collect();
+        let mut map = crate::nbt::Compound::new();
+        map.insert(JavaString::from("palette"), Tag::List(palette));
+        if let Some(storage) = &self.storage {
+            map.insert(
+                JavaString::from("data"),
+                Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()),
+            );
+        }
+        Tag::Compound(map)
+    }
+}
+
+/// Adapt a 1.16.5 saved chunk for the current Horizon runtime's block access.
+///
+/// This is an in-memory schema bridge only: it does not alter the source NBT or
+/// claim that 1.16.5 chunks can be written back as modern chunks unchanged.
+pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::chunk::ChunkData> {
+    use crate::{
+        compression::invalid,
+        nbt::{Compound, JavaString, NamedTag, Tag},
+    };
+
+    let Some(Tag::Int(version)) = root.tag.get("DataVersion") else {
+        return Err(invalid("legacy chunk is missing DataVersion"));
+    };
+    if *version != 2586 {
+        return Err(invalid(format!("expected legacy DataVersion 2586, got {version}")));
+    }
+    let Some(level) = root.tag.get("Level") else {
+        return Err(invalid("legacy chunk is missing Level compound"));
+    };
+    let Some(Tag::Int(x)) = level.get("xPos") else {
+        return Err(invalid("legacy chunk is missing xPos"));
+    };
+    let Some(Tag::Int(z)) = level.get("zPos") else {
+        return Err(invalid("legacy chunk is missing zPos"));
+    };
+    let Some(Tag::List(legacy_sections)) = level.get("Sections") else {
+        return Err(invalid("legacy chunk is missing Sections list"));
+    };
+
+    let mut sections = Vec::with_capacity(legacy_sections.len());
+    for legacy in legacy_sections {
+        let Some(Tag::Byte(y)) = legacy.get("Y") else {
+            return Err(invalid("legacy section is missing Y"));
+        };
+        let block_section = LegacyBlockSection::from_nbt(legacy)?;
+        let mut fields = Compound::new();
+        fields.insert(JavaString::from("Y"), Tag::Byte(*y));
+        fields.insert(
+            JavaString::from("block_states"),
+            block_section.to_runtime_nbt(),
+        );
+        // Modern runtime section loading still uses these vanilla light arrays.
+        for field in ["BlockLight", "SkyLight"] {
+            if let Some(value) = legacy.get(field) {
+                fields.insert(JavaString::from(field), value.clone());
+            }
+        }
+        fields.insert(
+            JavaString::from("biomes"),
+            Tag::compound([(
+                "palette",
+                Tag::List(vec![Tag::String(JavaString::from("minecraft:plains"))]),
+            )]),
+        );
+        sections.push(Tag::Compound(fields));
+    }
+
+    let mut fields = Compound::new();
+    fields.insert(JavaString::from("DataVersion"), Tag::Int(crate::DATA_VERSION));
+    fields.insert(JavaString::from("xPos"), Tag::Int(*x));
+    fields.insert(JavaString::from("zPos"), Tag::Int(*z));
+    fields.insert(JavaString::from("sections"), Tag::List(sections));
+    for field in ["Heightmaps", "Status", "LastUpdate", "InhabitedTime", "isLightOn"] {
+        if let Some(value) = level.get(field) {
+            fields.insert(JavaString::from(field), value.clone());
+        }
+    }
+    if let Some(Tag::List(entities)) = level.get("TileEntities") {
+        fields.insert(
+            JavaString::from("block_entities"),
+            Tag::List(entities.clone()),
+        );
+    } else {
+        fields.insert(JavaString::from("block_entities"), Tag::List(Vec::new()));
+    }
+    fields.insert(JavaString::from("block_ticks"), Tag::List(Vec::new()));
+    fields.insert(JavaString::from("fluid_ticks"), Tag::List(Vec::new()));
+
+    crate::chunk::ChunkData::new(NamedTag {
+        name: root.name.clone(),
+        tag: Tag::Compound(fields),
+    })
 }
 
 fn terrain_hash(seed: i64, x: i32, z: i32) -> u64 {
