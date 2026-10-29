@@ -70,6 +70,7 @@ pub struct WorldEntry {
     pub folder: String,
     pub name: String,
     pub creative: bool,
+    pub hardcore: bool,
     pub modified: std::time::SystemTime,
     pub commands: bool,
     pub version: String,
@@ -209,10 +210,13 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                 Some(horizon_world::nbt::Tag::Long(millis)) if *millis >= 0 => std::time::UNIX_EPOCH + std::time::Duration::from_millis(*millis as u64),
                 _ => modified,
             };
+            let hardcore = level.hardcore
+                || matches!(data.get("hardcore"), Some(horizon_world::nbt::Tag::Byte(v)) if *v != 0);
             Some(WorldEntry {
                 folder: e.file_name().to_string_lossy().into_owned(),
                 name: level.name,
                 creative: level.creative,
+                hardcore,
                 modified,
                 commands: matches!(data.get("allowCommands"), Some(horizon_world::nbt::Tag::Byte(v)) if *v != 0),
                 version: data.get("Version").and_then(|v| v.get("Name"))
@@ -1127,22 +1131,28 @@ impl Title {
                         rgba(128, 128, 128, 255),
                         true,
                     );
-                    let mode = if world.creative {
-                        lang::get_or("gameMode.creative", "Creative Mode")
+                    let mode_text = if world.hardcore {
+                        Text::colored(
+                            lang::get_or("gameMode.hardcore", "Hardcore Mode"),
+                            crate::text::RED,
+                        )
+                    } else if world.creative {
+                        Text::literal(lang::get_or("gameMode.creative", "Creative Mode"))
                     } else {
-                        lang::get_or("gameMode.survival", "Survival Mode")
+                        Text::literal(lang::get_or("gameMode.survival", "Survival Mode"))
                     };
                     let commands = if world.commands {
                         format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
                     } else {
                         String::new()
                     };
-                    let details = format!(
-                        "{mode}{commands}, {} {}",
+                    let rest = format!(
+                        "{commands}, {} {}",
                         lang::get_or("selectWorld.version", "Version:"),
                         world.version
                     );
-                    batch.text(
+                    let details = mode_text.append(Text::literal(rest));
+                    batch.text_styled(
                         atlas,
                         &details,
                         x + 35.0,
