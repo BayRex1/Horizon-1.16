@@ -196,7 +196,7 @@ pub(super) struct Remote {
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
     /// The local player's profile UUID (always in the level).
-    profile: u128,
+    pub(super) profile: u128,
     /// The local player's profile name: its score holder and team member.
     pub(super) profile_name: String,
     destroying: Option<([i32; 3], u8, f32)>,
@@ -538,6 +538,10 @@ impl Game<'_> {
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+        #[cfg(feature = "mods")]
+        self.mods
+            .mods
+            .set_snapshot(horizon_mods::Snapshot::default());
         if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }
@@ -1765,6 +1769,12 @@ impl Game<'_> {
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
+            C::CustomPayload(p) => {
+                #[cfg(feature = "mods")]
+                self.mods.mods.custom_payload(None, &p.channel, &p.data);
+                #[cfg(not(feature = "mods"))]
+                let _ = p;
+            }
             // ClientCommonPacketListenerImpl.handlePing runs on the game
             // thread, after all preceding packets (especially teleports).
             C::Ping(p) => self.send(S::Pong(p)),

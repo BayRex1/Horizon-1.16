@@ -1032,7 +1032,10 @@ impl Game<'_> {
         if host.hub.guests[gi].dead
             && !matches!(
                 packet,
-                S::ClientCommand(_) | S::ChatCommand(_) | S::ChatCommandSigned(_)
+                S::ClientCommand(_)
+                    | S::ChatCommand(_)
+                    | S::ChatCommandSigned(_)
+                    | S::CustomPayload(_)
             )
         {
             return;
@@ -1422,6 +1425,25 @@ impl Game<'_> {
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
             S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
                 self.guest_quiet_commands(host, conn, &p.data)
+            }
+            S::CustomPayload(p) => {
+                #[cfg(feature = "mods")]
+                {
+                    let uuid = host.hub.guests[gi].uuid;
+                    let uuid = format!(
+                        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                        uuid >> 96,
+                        (uuid >> 80) & 0xffff,
+                        (uuid >> 64) & 0xffff,
+                        (uuid >> 48) & 0xffff,
+                        uuid & 0xffffffffffff
+                    );
+                    self.mods
+                        .mods
+                        .custom_payload(Some(&uuid), &p.channel, &p.data);
+                }
+                #[cfg(not(feature = "mods"))]
+                let _ = p;
             }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {

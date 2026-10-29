@@ -103,9 +103,17 @@ pub enum Capability {
     /// The recipes and items the game knows, for recipe viewers
     /// (interface `recipes`).
     Recipes,
+    /// Capture microphone PCM (separate from audio playback).
+    Microphone,
+    /// Play PCM streams and position their sources.
+    Audio,
+    /// Connect to unicast UDP endpoints.
+    Udp,
+    /// Send and receive registered Minecraft custom payloads.
+    Networking,
 }
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 16] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -118,12 +126,16 @@ impl Capability {
         Capability::Players,
         Capability::World,
         Capability::Recipes,
+        Capability::Microphone,
+        Capability::Audio,
+        Capability::Udp,
+        Capability::Networking,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
         matches!(
             self,
-            Capability::Storage | Capability::Players | Capability::World
+            Capability::Storage | Capability::Players | Capability::World | Capability::Networking
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -141,6 +153,10 @@ impl Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Microphone => "microphone",
+            Capability::Audio => "audio",
+            Capability::Udp => "udp",
+            Capability::Networking => "networking",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -148,7 +164,14 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input | Capability::Recipes
+            Capability::Ui
+                | Capability::Render
+                | Capability::Input
+                | Capability::Recipes
+                | Capability::Microphone
+                | Capability::Audio
+                | Capability::Udp
+                | Capability::Networking
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -164,6 +187,12 @@ impl Capability {
             Capability::Render => "draw on your screen, shake and zoom the camera",
             Capability::Input => {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
+            Capability::Microphone => "access your microphone and record your voice",
+            Capability::Audio => "play audio streams with individual volumes and world positions",
+            Capability::Udp => "exchange binary UDP datagrams with unicast network endpoints",
+            Capability::Networking => {
+                "exchange binary messages with the connected server or its players"
             }
             Capability::Players => "see who is on the server and message them",
             Capability::World => "read and change the world's blocks",
@@ -211,6 +240,10 @@ impl fmt::Display for Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Microphone => "microphone",
+            Capability::Audio => "audio",
+            Capability::Udp => "udp",
+            Capability::Networking => "networking",
         };
         f.write_str(name)
     }
@@ -247,11 +280,9 @@ impl Manifest {
                 "{MANIFEST}: a server mod is side = \"server\" with api = \"{SERVER_API}\", and only it"
             ));
         }
-        if let Some(c) = m
-            .capabilities
-            .iter()
-            .find(|c| c.on_server() != server && **c != Capability::Storage)
-        {
+        if let Some(c) = m.capabilities.iter().find(|c| {
+            c.on_server() != server && !matches!(**c, Capability::Storage | Capability::Networking)
+        }) {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
         }
@@ -557,5 +588,43 @@ capabilities = ["game-read", "hud"]
             "{base}capabilities = [\"hud\"]\nexperimental = [\"hud\"]\n"
         ))
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod realtime_tests {
+    use super::*;
+    #[test]
+    fn realtime_capabilities_are_explicit_experimental_and_side_checked() {
+        let base = "id = 'voice'\nname = 'Voice'\nversion = '1.0'\napi = '0.1'\n";
+        for capability in [
+            Capability::Microphone,
+            Capability::Audio,
+            Capability::Udp,
+            Capability::Networking,
+        ] {
+            let bare = format!("{base}capabilities = ['{capability}']\n");
+            assert!(Manifest::parse(&bare).unwrap_err().contains("experimental"));
+            let manifest =
+                Manifest::parse(&format!("{bare}experimental = ['{capability}']\n")).unwrap();
+            let import = format!("horizon:mods/{}@0.1.0", capability.interface());
+            assert!(manifest.check_imports([import.as_str()]).is_ok());
+        }
+        let server =
+            "id = 'voice'\nname = 'Voice'\nversion = '1.0'\napi = '0.3'\nside = 'server'\n";
+        for capability in ["microphone", "audio", "udp"] {
+            assert!(
+                Manifest::parse(&format!(
+                    "{server}capabilities = ['{capability}']\nexperimental = ['{capability}']"
+                ))
+                .is_err()
+            );
+        }
+        assert!(
+            Manifest::parse(&format!(
+                "{server}capabilities = ['networking']\nexperimental = ['networking']"
+            ))
+            .is_ok()
+        );
     }
 }

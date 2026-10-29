@@ -264,7 +264,11 @@ impl Game<'_> {
         self.list_native_mods();
     }
     pub(super) fn merge_remote_tree(&mut self) {}
-    pub(super) fn sync_mods(&mut self) {}
+    pub(super) fn sync_mods(&mut self) {
+        self.mods
+            .mods
+            .set_microphone_permissions(&self.settings.mods.microphones);
+    }
     pub(super) fn tick_mods(&mut self) {}
     pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
     pub(super) fn mod_command(&mut self, _command: &str) -> bool {
@@ -305,7 +309,10 @@ impl Game<'_> {
             (enabled.contains(id) || dev_ids.iter().any(|d| d == id))
                 && !native.iter().any(|n| n.id == id)
         };
-        let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
+        let mods = Mods::load_for_with_microphones(
+            self.mod_runs(), &paths, on, vanilla_command,
+            |id| self.settings.mods.microphones.contains(id),
+        );
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
@@ -351,6 +358,7 @@ impl Game<'_> {
                         dev: false,
                         has_settings: false,
                         native: None,
+                        requests_microphone: false,
                     };
                 };
                 // What it may do first: the row cuts long descriptions.
@@ -368,6 +376,9 @@ impl Game<'_> {
                     dev: dev.contains(&e.path),
                     has_settings: e.has_ui_settings(),
                     native: None,
+                    requests_microphone: m
+                        .capabilities
+                        .contains(&horizon_mods::Capability::Microphone),
                 }
             })
             .collect();
@@ -400,6 +411,9 @@ impl Game<'_> {
     /// After the options changed: restart the mods if the list of the ones
     /// turned on did.
     pub(super) fn sync_mods(&mut self) {
+        self.mods
+            .mods
+            .set_microphone_permissions(&self.settings.mods.microphones);
         let running: Vec<&str> = self
             .mods
             .mods
@@ -469,6 +483,24 @@ impl Game<'_> {
         }
         let (recipes, known_recipes) = self.mod_recipes();
         Snapshot {
+            connected: self.player.is_some(),
+            server_address: self.remote.as_ref().map(|r| r.session.address.clone()),
+            local_player: self.player.as_ref().map(|_| {
+                self.remote.as_ref().map_or_else(
+                    || self.player_uuid_string(),
+                    |r| {
+                        let h = format!("{:032x}", r.profile);
+                        format!(
+                            "{}-{}-{}-{}-{}",
+                            &h[..8],
+                            &h[8..12],
+                            &h[12..16],
+                            &h[16..20],
+                            &h[20..]
+                        )
+                    },
+                )
+            }),
             player,
             clock,
             gui_size: self.gui_size(),
@@ -688,6 +720,32 @@ impl Game<'_> {
                     } else {
                         self.mods.commands.push(line);
                     }
+                    continue;
+                }
+                Output::Payload {
+                    player: None,
+                    channel,
+                    data,
+                } => {
+                    if self.remote.is_some() {
+                        self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
+                            horizon_protocol::packets::configuration::CustomPayload {
+                                channel,
+                                data,
+                            },
+                        ));
+                    } else if self.player.is_some() {
+                        let player = self.player_uuid_string();
+                        self.mods
+                            .mods
+                            .custom_payload(Some(&player), &channel, &data);
+                    }
+                    continue;
+                }
+                server @ Output::Payload {
+                    player: Some(_), ..
+                } => {
+                    self.route_server_output(host.as_deref_mut(), server);
                     continue;
                 }
                 Output::QuietCommands { mod_id, lines } => {

@@ -1,4 +1,5 @@
 //! Loading and calling mods with wasmtime's component model.
+mod realtime;
 use crate::manifest::{Manifest, Package, Side};
 use server_bindings::{
     HorizonServerMod,
@@ -30,6 +31,7 @@ mod server_bindings {
         with: {
             "horizon:mods/log": super::bindings::horizon::mods::log,
             "horizon:mods/storage": super::bindings::horizon::mods::storage,
+            "horizon:mods/networking": super::realtime::networking,
         },
     });
 }
@@ -136,6 +138,12 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 /// What mods may read of the game, copied once per tick by the game.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// Whether the client has entered Minecraft play state.
+    pub connected: bool,
+    /// Address of the active remote server, for a voice protocol's default host.
+    pub server_address: Option<String>,
+    /// The local authenticated/offline UUID supplied by the connection.
+    pub local_player: Option<String>,
     pub player: Option<Player>,
     pub clock: Option<Clock>,
     /// The screen in GUI pixels (capability `render`'s `gui-size`).
@@ -198,6 +206,12 @@ impl Runs {
 /// What mods asked the game to show since the last [`Mods::drain`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Output {
+    /// A registered play-state custom payload, emitted after the hook.
+    Payload {
+        player: Option<String>,
+        channel: String,
+        data: Vec<u8>,
+    },
     /// `chat.show`: a line after the mod's name.
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
@@ -400,6 +414,9 @@ impl BrowserState {
 }
 
 struct State {
+    server: bool,
+    microphone_allowed: bool,
+    realtime: realtime::Realtime,
     name: String,
     id: String,
     snapshot: Arc<Snapshot>,
@@ -441,6 +458,8 @@ pub struct Mods {
     /// Moves on whenever a mod starts or stops: the game resends the server
     /// mods' commands to players when it changes.
     generation: u64,
+    announced_channels: std::collections::BTreeSet<String>,
+    microphone_permissions: std::collections::BTreeSet<String>,
 }
 
 impl Mods {
@@ -489,6 +508,18 @@ impl Mods {
         enabled: impl Fn(&str) -> bool,
         reserved: impl Fn(&str) -> bool,
     ) -> Mods {
+        Self::load_for_with_microphones(runs, paths, enabled, reserved, |_| false)
+    }
+
+    /// Load with the player's independent microphone grants. Enabling a mod
+    /// alone never grants recording, including after an upgrade adds imports.
+    pub fn load_for_with_microphones(
+        runs: Runs,
+        paths: &[PathBuf],
+        enabled: impl Fn(&str) -> bool,
+        reserved: impl Fn(&str) -> bool,
+        microphone: impl Fn(&str) -> bool,
+    ) -> Mods {
         let mut mods = Mods::default();
         for path in paths {
             let modified = modified(path);
@@ -504,6 +535,10 @@ impl Mods {
                 Err(e) => entry.status = Status::Failed(e),
                 Ok(package) => {
                     let on = enabled(&package.manifest.id);
+                    if microphone(&package.manifest.id) {
+                        mods.microphone_permissions
+                            .insert(package.manifest.id.clone());
+                    }
                     entry.manifest = Some(package.manifest.clone());
                     if on && !runs.starts(package.manifest.side) {
                         entry.status = Status::Elsewhere;
@@ -548,6 +583,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RecipesHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            realtime::RealtimeHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -585,6 +622,7 @@ impl Mods {
             .flat_map(|r| r.hooks.commands())
             .map(str::to_owned)
             .collect();
+        let microphone_allowed = self.microphone_permissions.contains(&m.id);
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
         let (engine, linker) = self.engine()?;
@@ -608,6 +646,9 @@ impl Mods {
             .join(crate::manifest::STORAGE_DIR)
             .join(&m.id);
         let state = State {
+            server,
+            microphone_allowed,
+            realtime: realtime::Realtime::default(),
             name: m.name.clone(),
             id: m.id.clone(),
             snapshot,
@@ -700,8 +741,58 @@ impl Mods {
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
+    /// Apply live microphone grants. Revocation immediately silences capture.
+    pub fn set_microphone_permissions(&mut self, grants: &std::collections::BTreeSet<String>) {
+        self.microphone_permissions = grants.clone();
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let state = run.store.data_mut();
+            state.microphone_allowed = grants.contains(&state.id);
+            if !state.microphone_allowed {
+                state.realtime.pcm.stop();
+            }
+        }
+    }
     /// What mods read until the next snapshot.
     pub fn set_snapshot(&mut self, snapshot: Snapshot) {
+        if self.snapshot.connected
+            && (!snapshot.connected || self.snapshot.local_player != snapshot.local_player)
+        {
+            self.out
+                .retain(|o| !matches!(o, Output::Payload { player: None, .. }));
+            self.announced_channels.clear();
+        }
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let state = run.store.data_mut();
+            let changed = self.snapshot.connected != snapshot.connected
+                || self.snapshot.local_player != snapshot.local_player;
+            if changed && state.realtime.connections.len() >= 2 {
+                state.realtime.connections.clear();
+            }
+            if self.snapshot.connected && changed {
+                state.realtime.reset_connection();
+                state
+                    .realtime
+                    .connections
+                    .push_back(realtime::networking::Event::Disconnected);
+            }
+            if snapshot.connected && changed {
+                state
+                    .realtime
+                    .connections
+                    .push_back(realtime::networking::Event::Connected(
+                        snapshot.local_player.clone(),
+                    ));
+            }
+            if let Some(player) = &snapshot.player {
+                state
+                    .realtime
+                    .pcm
+                    .listener([player.x, player.y, player.z], player.yaw);
+            }
+        }
+        if !snapshot.connected {
+            self.announced_channels.clear();
+        }
         self.snapshot = Arc::new(snapshot);
     }
 
@@ -766,6 +857,9 @@ impl Mods {
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
+        run.store.data_mut().realtime.budget = 64 << 10;
+        run.store.data_mut().realtime.packets = 32;
+        run.store.data_mut().realtime.entropy = 4096;
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
@@ -796,6 +890,16 @@ impl Mods {
                 entry.run = None;
                 self.generation += 1;
                 None
+            }
+        }
+    }
+
+    /// Deliver a play-state custom payload. `player` comes from the server's
+    /// authenticated connection, never from the payload's bytes.
+    pub fn custom_payload(&mut self, player: Option<&str>, channel: &str, data: &[u8]) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            if run.hooks.server().is_some() == player.is_some() {
+                run.store.data_mut().realtime.deliver(player, channel, data);
             }
         }
     }
@@ -1256,6 +1360,46 @@ impl Mods {
     }
     /// What mods asked to show since the last call.
     pub fn drain(&mut self) -> Vec<Output> {
+        if self.snapshot.connected {
+            let channels: std::collections::BTreeSet<String> = self
+                .entries
+                .iter()
+                .filter_map(|e| e.run.as_ref())
+                .filter(|r| r.hooks.client().is_some())
+                .flat_map(|r| r.store.data().realtime.channels.iter().cloned())
+                .collect();
+            for (kind, changed) in [
+                (
+                    "minecraft:register",
+                    channels
+                        .difference(&self.announced_channels)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    "minecraft:unregister",
+                    self.announced_channels
+                        .difference(&channels)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+            ] {
+                // Keep the vanilla serverbound custom-payload length limit.
+                for chunk in changed.chunks(128) {
+                    if !chunk.is_empty() {
+                        self.out.insert(
+                            0,
+                            Output::Payload {
+                                player: None,
+                                channel: kind.into(),
+                                data: chunk.join("\0").into_bytes(),
+                            },
+                        );
+                    }
+                }
+            }
+            self.announced_channels = channels;
+        }
         std::mem::take(&mut self.out)
     }
 

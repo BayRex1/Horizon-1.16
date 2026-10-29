@@ -1,0 +1,8 @@
+id = "voice_lab_server"
+name = "Voice API Lab Server"
+version = "0.1.0"
+api = "0.3"
+side = "server"
+description = "Accepts version 1 of the voice-lab diagnostic protocol; never relays voice."
+capabilities = ["players", "networking"]
+experimental = ["networking"]

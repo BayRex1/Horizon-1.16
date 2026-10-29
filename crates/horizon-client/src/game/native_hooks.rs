@@ -523,6 +523,7 @@ impl Game<'_> {
                 dev: false,
                 has_settings: false,
                 native: Some(page),
+                requests_microphone: false,
             });
         }
     }

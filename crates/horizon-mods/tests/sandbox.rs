@@ -43,6 +43,10 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "coords-hud",
                 "-p",
+                "voice-lab",
+                "-p",
+                "voice-lab-server",
+                "-p",
                 "predator-missile",
                 "-p",
                 "welcome",
@@ -70,6 +74,8 @@ fn mods_dir() -> &'static Path {
         };
         let mods = [
             ("coords_hud", example("coords-hud")),
+            ("voice_lab", example("voice-lab")),
+            ("voice_lab_server", example("voice-lab-server")),
             ("predator_missile", example("predator-missile")),
             ("welcome", example("welcome")),
             ("beacons", example("beacons")),
@@ -241,8 +247,8 @@ id = "too_new"
 name = "Too New"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input", "recipes"]
-experimental = ["ui", "render", "input", "recipes"]
+capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input", "recipes", "microphone", "audio", "udp", "networking"]
+experimental = ["ui", "render", "input", "recipes", "microphone", "audio", "udp", "networking"]
 "#;
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
@@ -256,7 +262,11 @@ experimental = ["ui", "render", "input", "recipes"]
     };
     assert_eq!(level("coords_hud.hmod"), 0);
     // The UI guest draws far terrain (`render.set-far-terrain`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    assert_eq!(
+        level("horizon_mods_test_ui_guest.hmod"),
+        horizon_mods::api_level::level_of("render.set-far-terrain").unwrap()
+    );
+    assert_eq!(level("voice_lab.hmod"), LEVEL);
 }
 
 #[test]
@@ -1301,4 +1311,161 @@ fn browser_lists_items_and_hears_the_player() {
         mods.browser_event(owner, BrowserEvent::Page(1));
     }
     assert_eq!(said(&mut mods, "browser_poll")[0], "256 events");
+}
+
+#[test]
+fn realtime_binary_payloads_permissions_and_disconnect() {
+    let mut mods = load("voice_lab.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let mut snapshot = player();
+    snapshot.connected = true;
+    snapshot.local_player = Some("00000000-0000-0000-0000-000000000001".into());
+    mods.set_snapshot(snapshot);
+    assert!(mods.command("voice_hello binary"));
+    let out = mods.drain();
+    assert!(out.iter().any(|o| matches!(o, Output::Payload { player: None, channel, data } if channel == "minecraft:register" && data == b"voice_lab:hello")));
+    assert!(out.iter().any(|o| matches!(o, Output::Payload { player: None, channel, data } if channel == "voice_lab:hello" && data == b"\x01\x00binary")));
+    mods.custom_payload(None, "voice_lab:hello", &[0, 255, 0]);
+    mods.frame(0.016);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    mods.set_snapshot(Snapshot::default());
+    assert!(mods.command("voice_hello disconnected"));
+    assert!(
+        mods.drain()
+            .iter()
+            .any(|o| matches!(o, Output::Feedback { error: true, .. }))
+    );
+}
+
+#[test]
+fn realtime_udp_roundtrip_is_nonblocking_and_closes_on_disconnect() {
+    use std::{net::UdpSocket, time::Duration};
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut mods = load("voice_lab.hmod");
+    let mut snapshot = player();
+    snapshot.connected = true;
+    mods.set_snapshot(snapshot);
+    mods.command(&format!("voice_udp {}", server.local_addr().unwrap()));
+    mods.drain();
+    mods.command("voice_ping hello");
+    let mut bytes = [0; 32];
+    let (n, peer) = server.recv_from(&mut bytes).unwrap();
+    assert_eq!(&bytes[..n], b"hello");
+    server.send_to(&[0, 255, 42], peer).unwrap();
+    mods.frame(0.016);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    mods.set_snapshot(Snapshot::default());
+    mods.command("voice_ping closed");
+    assert!(
+        mods.drain()
+            .iter()
+            .any(|o| matches!(o, Output::Feedback { error: true, .. }))
+    );
+}
+
+#[test]
+fn server_mod_negotiates_binary_protocol_with_authenticated_sender() {
+    let mut mods = load("voice_lab_server.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let player = ServerPlayer {
+        id: "00000000-0000-0000-0000-000000000001".into(),
+        name: "Alice".into(),
+        x: 0.0,
+        y: 64.0,
+        z: 0.0,
+        dimension: "minecraft:overworld".into(),
+        game_mode: GameMode::Survival,
+        health: 20.0,
+    };
+    mods.set_snapshot(Snapshot {
+        players: vec![player.clone()],
+        ..Snapshot::default()
+    });
+    mods.custom_payload(Some(&player.id), "voice_lab:hello", &[1, 0, 0, 255]);
+    mods.server_tick(1);
+    assert!(mods.drain().iter().any(|o| matches!(o, Output::Payload { player: Some(id), channel, data } if id == &player.id && channel == "voice_lab:hello" && data == &[1, 0])));
+    mods.custom_payload(Some(&player.id), "voice_lab:hello", &[99, 0]);
+    mods.server_tick(2);
+    assert!(
+        mods.drain()
+            .iter()
+            .any(|o| matches!(o, Output::Payload { data, .. } if data == &[1, 1]))
+    );
+    // A UUID that is not in the host's online list cannot receive a reply.
+    mods.custom_payload(Some("spoofed"), "voice_lab:hello", &[1, 0]);
+    mods.server_tick(3);
+    assert!(
+        !mods
+            .drain()
+            .iter()
+            .any(|o| matches!(o, Output::Payload { .. }))
+    );
+}
+
+#[test]
+fn microphone_import_without_capability_is_refused() {
+    let package = Package::read(&mods_dir().join("voice_lab.hmod")).unwrap();
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-mod-sdk/examples/voice-lab/horizon-mod.toml"),
+    )
+    .unwrap()
+    .replacen("capabilities = [\"microphone\", ", "capabilities = [", 1);
+    let file = mods_dir().join("voice_no_microphone.hmod");
+    std::fs::write(
+        &file,
+        Package::write(&manifest, package.wasm.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mods = Mods::load(&[file], |_| true, |_| false);
+    assert!(
+        matches!(&mods.entries()[0].status, Status::Failed(reason) if reason.contains("microphone"))
+    );
+}
+
+#[test]
+fn enabled_mod_still_needs_explicit_microphone_grant() {
+    let mut mods = load("voice_lab.hmod");
+    mods.command("voice_capture start");
+    assert!(mods.drain().iter().any(|o| matches!(o, Output::Feedback { error: true, text } if text.contains("permission denied"))));
+    mods.set_microphone_permissions(&["voice_lab".to_string()].into_iter().collect());
+    // Exercise the allowed path only without a hardware backend: the tests
+    // must never open the developer's real microphone.
+    #[cfg(not(feature = "audio"))]
+    {
+        mods.command("voice_capture start");
+        assert!(!mods.drain().iter().any(
+            |o| matches!(o, Output::Feedback { text, .. } if text.contains("permission denied"))
+        ));
+    }
+    mods.set_microphone_permissions(&Default::default());
+    mods.command("voice_capture start");
+    assert!(mods.drain().iter().any(|o| matches!(o, Output::Feedback { error: true, text } if text.contains("permission denied"))));
+}
+
+#[test]
+fn udp_datagram_and_shared_send_rate_limits() {
+    let server = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let mut mods = load("voice_lab.hmod");
+    let mut snapshot = player();
+    snapshot.connected = true;
+    mods.set_snapshot(snapshot);
+    mods.command(&format!("voice_udp {}", server.local_addr().unwrap()));
+    mods.drain();
+    mods.command(&format!("voice_ping {}", "x".repeat(1201)));
+    assert!(
+        mods.drain()
+            .iter()
+            .any(|o| matches!(o, Output::Feedback { error: true, text } if text.contains("1200")))
+    );
+    for _ in 0..256 {
+        mods.command("voice_ping x");
+    }
+    mods.command("voice_ping over_budget");
+    assert!(mods.drain().iter().any(
+        |o| matches!(o, Output::Feedback { error: true, text } if text.contains("rate exceeded"))
+    ));
 }

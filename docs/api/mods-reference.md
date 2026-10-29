@@ -19,6 +19,17 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
+| `microphone` | [`microphone`](#microphone) | access your microphone and record your voice |
+| `audio` | [`audio`](#audio) | play audio streams with individual volumes and world positions |
+| `udp` | [`udp`](#udp) | exchange binary UDP datagrams with unicast network endpoints |
+| `networking` | [`networking`](#networking) | exchange binary messages with the connected server or its players |
+
+## World `realtime-host`
+
+The host's optional realtime capabilities; old components remain loadable.
+
+- Imports (what the game offers): `microphone`, `audio`, `udp`, `networking`
+- Exports (what the mod provides): none
 
 ## World `horizon-mod`
 
@@ -31,14 +42,14 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `networking`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `microphone`, `audio`, `udp`, `networking`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -53,14 +64,14 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 The game's side of capability `render` (imports only).
 
 - Imports (what the game offers): `render`, `input`
-- Exports (what the mod provides): 
+- Exports (what the mod provides): none
 
 ## World `recipes-host`
 
 The game's side of capability `recipes` (imports only).
 
 - Imports (what the game offers): `recipes`, `browser`
-- Exports (what the mod provides): 
+- Exports (what the mod provides): none
 
 ## `log`
 
@@ -768,3 +779,116 @@ An argument's value, parsed as its kind says.
 | `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |
+
+## `microphone`
+
+Access: capability `microphone`.
+
+Capability `microphone` (experimental): mono PCM capture. The player must also allow recording for this mod in Options > Mods (blocked by default). Device discovery and opening happen on a worker. Poll on frames, not ticks, for voice latency. No audio device is opened until start is called.
+
+### record `device`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `name` | `string` |  |
+
+### record `frame`
+
+| Field | Type | |
+| --- | --- | --- |
+| `sample-rate` | `u32` | Device sample rate; the mod resamples before encoding if needed. |
+| `samples` | `list<f32>` | Mono, normalized to [-1, 1], after input gain. At most 20 ms. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `devices` | `func() -> list<device>` | Initially empty while the worker enumerates devices; "" selects default. |
+| `start` | `func(device: string, gain: f32) -> result<_, string>` | Queues capture startup. Device failures are returned by read. Gain 0..4. |
+| `stop` | `func()` | Stops capture and discards queued PCM. Also automatic on mod unload. |
+| `set-gain` | `func(gain: f32) -> result<_, string>` | Changes input gain, 0..4; zero mutes capture. |
+| `read` | `func() -> result<list<frame>, string>` | Nonblocking; drains at most ten 20 ms frames. Overflow drops oldest PCM. |
+
+## `audio`
+
+Access: capability `audio`.
+
+Capability `audio` (experimental): independent mono PCM sources mixed to stereo, with per-source gain and optional world position. At most 32 sources, 200 ms buffered per source. Underruns produce silence. No file access.
+
+### record `device`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `name` | `string` |  |
+
+### record `position`
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `f64` |  |
+| `y` | `f64` |  |
+| `z` | `f64` |  |
+
+### record `settings`
+
+| Field | Type | |
+| --- | --- | --- |
+| `gain` | `f32` | 0..4, for per-player volume or muting. |
+| `at` | `option<position>` | None plays centered; otherwise world coordinates in the listener's dimension. |
+| `distance` | `f32` | Linear distance attenuation to silence, in blocks; strictly positive. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `devices` | `func() -> list<device>` | Initially empty while the worker enumerates devices. |
+| `select-device` | `func(device: string) -> result<_, string>` | Selects an output device ("" for default), clearing all old sources. Device opening is asynchronous: write reports any worker failure. |
+| `create` | `func(sample-rate: u32) -> result<u32, string>` | Creates a source for mono PCM at 8000..96000 Hz, initially centered. |
+| `write` | `func(source: u32, samples: list<f32>) -> result<_, string>` | Appends normalized finite samples. Refuses a full buffer; never blocks. |
+| `configure` | `func(source: u32, settings: settings) -> result<_, string>` | Changes the source's gain, position and attenuation; rejects invalid values. |
+| `close` | `func(source: u32)` | Releases a source and its queued audio. Automatic on mod unload. |
+
+## `udp`
+
+Access: capability `udp`.
+
+Capability `udp` (experimental): connected, nonblocking UDP sockets owned by this mod. Numeric unicast sockets; optional asynchronous DNS. No listening, multicast, broadcast or unspecified targets. At most four sockets and 1200-byte datagrams, with a shared limit of 256 datagrams/second in each direction. UDP provides no encryption or delivery guarantees; mods implement their voice protocol's authentication, encryption, sequence numbers and keepalive.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `resolve` | `func(host: string) -> result<_, string>` | Starts DNS lookup on a bounded worker, once per mod at a time. Results are validated as unicast before returning; no socket is opened. |
+| `resolved` | `func() -> result<option<list<string>>, string>` | None while lookup is pending or absent; a completed result is consumed. Each numeric IP must be combined with the voice server's port for connect. |
+| `connect` | `func(address: string) -> result<u32, string>` | An IPv4 `address:port` or bracketed IPv6 `[address]:port`. |
+| `send` | `func(socket: u32, data: list<u8>) -> result<_, string>` | Sends one binary datagram (at most 1200 bytes) to this socket's peer. |
+| `receive` | `func(socket: u32) -> result<list<list<u8>>, string>` | Drains up to 32 packets, preserving datagram boundaries. Empty: no data. |
+| `close` | `func(socket: u32)` | Closes this mod's socket; automatic on unload and server disconnect. |
+
+## `networking`
+
+Access: capability `networking`.
+
+Capability `networking` (experimental): binary Minecraft play-state custom payloads, on Java servers and between Horizon client and server mods. Mods choose namespaced channels and negotiate their protocol versions in bytes. The host supplies player UUIDs; mods cannot impersonate another sender.
+
+### record `message`
+
+| Field | Type | |
+| --- | --- | --- |
+| `player` | `option<string>` | Server mods: sender UUID. Client mods: none (the connected server). |
+| `channel` | `string` |  |
+| `data` | `list<u8>` |  |
+
+### variant `event`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `connected` | `option<string>` | Entered play state, with the local UUID on a client. |
+| `disconnected` |  | Connection ended; UDP, capture and playback resources were cleared. |
+| `packet` | `message` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `register` | `func(channel: string) -> result<_, string>` | Registers an exact namespaced channel (max 128 bytes, 32 channels/mod). minecraft:* and horizon:* are reserved. Idempotent. |
+| `unregister` | `func(channel: string)` | Removes this subscription and discards its queued inbound messages. |
+| `send` | `func(player: option<string>, channel: string, data: list<u8>) -> result<_, string>` | Client: player must be none. Server: a UUID from players.online. Queued until the hook returns; at most 32 messages and 64 KiB per hook, at most 32767 bytes per message. Requires registration and a connection. |
+| `poll` | `func() -> list<event>` | Nonblocking; drains up to 64 messages (256 KiB total kept). Oldest drops on overflow. Registration never consumes vanilla's internal channels. |
+| `local-player` | `func() -> option<string>` | The local player's UUID when connected, none on title/dedicated server. |
+| `server-address` | `func() -> option<string>` | The current Minecraft server address, including port when supplied. None in local worlds or when disconnected. Use UDP resolve for hostnames. |
+| `random-bytes` | `func(length: u32) -> result<list<u8>, string>` | OS cryptographic randomness for voice protocol nonces/keys. At most 1024 bytes per call and 4096 per hook; never seed crypto from frame time. |

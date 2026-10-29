@@ -1,0 +1,7 @@
+id = "voice_lab"
+name = "Voice API Lab"
+version = "0.1.0"
+api = "0.1"
+description = "Hold V to hear your microphone locally. /voice_udp connects a diagnostic UDP endpoint. Not a Simple Voice Chat implementation."
+capabilities = ["microphone", "audio", "udp", "networking", "input"]
+experimental = ["microphone", "audio", "udp", "networking", "input"]

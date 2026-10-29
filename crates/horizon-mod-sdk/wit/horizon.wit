@@ -783,6 +783,130 @@ interface server-events {
     block-placed: func(player: player, pos: block-pos, state: string);
 }
 
+/// Capability `microphone` (experimental): mono PCM capture. The player must
+/// also allow recording for this mod in Options > Mods (blocked by default).
+/// Device discovery and opening happen on a worker. Poll on frames, not ticks,
+/// for voice latency. No audio device is opened until start is called.
+interface microphone {
+    record device { id: string, name: string }
+    record frame {
+        /// Device sample rate; the mod resamples before encoding if needed.
+        sample-rate: u32,
+        /// Mono, normalized to [-1, 1], after input gain. At most 20 ms.
+        samples: list<f32>,
+    }
+    /// Initially empty while the worker enumerates devices; "" selects default.
+    devices: func() -> list<device>;
+    /// Queues capture startup. Device failures are returned by read. Gain 0..4.
+    start: func(device: string, gain: f32) -> result<_, string>;
+    /// Stops capture and discards queued PCM. Also automatic on mod unload.
+    stop: func();
+    /// Changes input gain, 0..4; zero mutes capture.
+    set-gain: func(gain: f32) -> result<_, string>;
+    /// Nonblocking; drains at most ten 20 ms frames. Overflow drops oldest PCM.
+    read: func() -> result<list<frame>, string>;
+}
+
+/// Capability `audio` (experimental): independent mono PCM sources mixed to
+/// stereo, with per-source gain and optional world position. At most 32 sources,
+/// 200 ms buffered per source. Underruns produce silence. No file access.
+interface audio {
+    record device { id: string, name: string }
+    record position { x: f64, y: f64, z: f64 }
+    record settings {
+        /// 0..4, for per-player volume or muting.
+        gain: f32,
+        /// None plays centered; otherwise world coordinates in the listener's dimension.
+        at: option<position>,
+        /// Linear distance attenuation to silence, in blocks; strictly positive.
+        distance: f32,
+    }
+    /// Initially empty while the worker enumerates devices.
+    devices: func() -> list<device>;
+    /// Selects an output device ("" for default), clearing all old sources.
+    /// Device opening is asynchronous: write reports any worker failure.
+    select-device: func(device: string) -> result<_, string>;
+    /// Creates a source for mono PCM at 8000..96000 Hz, initially centered.
+    create: func(sample-rate: u32) -> result<u32, string>;
+    /// Appends normalized finite samples. Refuses a full buffer; never blocks.
+    write: func(source: u32, samples: list<f32>) -> result<_, string>;
+    /// Changes the source's gain, position and attenuation; rejects invalid values.
+    configure: func(source: u32, settings: settings) -> result<_, string>;
+    /// Releases a source and its queued audio. Automatic on mod unload.
+    close: func(source: u32);
+}
+
+/// Capability `udp` (experimental): connected, nonblocking UDP sockets owned
+/// by this mod. Numeric unicast sockets; optional asynchronous DNS. No listening, multicast,
+/// broadcast or unspecified targets. At most four sockets and 1200-byte
+/// datagrams, with a shared limit of 256 datagrams/second in each direction.
+/// UDP provides no encryption or delivery guarantees; mods implement their
+/// voice protocol's authentication, encryption, sequence numbers and keepalive.
+interface udp {
+    /// Starts DNS lookup on a bounded worker, once per mod at a time. Results
+    /// are validated as unicast before returning; no socket is opened.
+    resolve: func(host: string) -> result<_, string>;
+    /// None while lookup is pending or absent; a completed result is consumed.
+    /// Each numeric IP must be combined with the voice server's port for connect.
+    resolved: func() -> result<option<list<string>>, string>;
+    /// An IPv4 `address:port` or bracketed IPv6 `[address]:port`.
+    connect: func(address: string) -> result<u32, string>;
+    /// Sends one binary datagram (at most 1200 bytes) to this socket's peer.
+    send: func(socket: u32, data: list<u8>) -> result<_, string>;
+    /// Drains up to 32 packets, preserving datagram boundaries. Empty: no data.
+    receive: func(socket: u32) -> result<list<list<u8>>, string>;
+    /// Closes this mod's socket; automatic on unload and server disconnect.
+    close: func(socket: u32);
+}
+
+/// Capability `networking` (experimental): binary Minecraft play-state custom
+/// payloads, on Java servers and between Horizon client and server mods. Mods
+/// choose namespaced channels and negotiate their protocol versions in bytes.
+/// The host supplies player UUIDs; mods cannot impersonate another sender.
+interface networking {
+    record message {
+        /// Server mods: sender UUID. Client mods: none (the connected server).
+        player: option<string>,
+        channel: string,
+        data: list<u8>,
+    }
+    variant event {
+        /// Entered play state, with the local UUID on a client.
+        connected(option<string>),
+        /// Connection ended; UDP, capture and playback resources were cleared.
+        disconnected,
+        packet(message),
+    }
+    /// Registers an exact namespaced channel (max 128 bytes, 32 channels/mod).
+    /// minecraft:* and horizon:* are reserved. Idempotent.
+    register: func(channel: string) -> result<_, string>;
+    /// Removes this subscription and discards its queued inbound messages.
+    unregister: func(channel: string);
+    /// Client: player must be none. Server: a UUID from players.online.
+    /// Queued until the hook returns; at most 32 messages and 64 KiB per hook,
+    /// at most 32767 bytes per message. Requires registration and a connection.
+    send: func(player: option<string>, channel: string, data: list<u8>) -> result<_, string>;
+    /// Nonblocking; drains up to 64 messages (256 KiB total kept). Oldest drops
+    /// on overflow. Registration never consumes vanilla's internal channels.
+    poll: func() -> list<event>;
+    /// The local player's UUID when connected, none on title/dedicated server.
+    local-player: func() -> option<string>;
+    /// The current Minecraft server address, including port when supplied.
+    /// None in local worlds or when disconnected. Use UDP resolve for hostnames.
+    server-address: func() -> option<string>;
+    /// OS cryptographic randomness for voice protocol nonces/keys. At most
+    /// 1024 bytes per call and 4096 per hook; never seed crypto from frame time.
+    random-bytes: func(length: u32) -> result<list<u8>, string>;
+}
+
+/// The host's optional realtime capabilities; old components remain loadable.
+world realtime-host {
+    import microphone;
+    import audio;
+    import udp;
+    import networking;
+}
+
 /// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
@@ -802,6 +926,7 @@ world horizon-server-mod {
     import storage;
     import players;
     import %world;
+    import networking;
     export server-events;
 }
 
@@ -815,6 +940,10 @@ world horizon-ui-mod {
     import input;
     import recipes;
     import browser;
+    import microphone;
+    import audio;
+    import udp;
+    import networking;
     export ui-events;
 }
 

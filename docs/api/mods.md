@@ -77,6 +77,13 @@ scripting runtime in the game.
   fuel per tick, memory, load time) against Rust, and a language is supported only with a template, an example and a
   test that builds and loads it in CI.
 
+## Realtime APIs (experimental)
+
+API level 8 provides permissioned microphone PCM, streaming and positional audio,
+connected UDP, and binary Minecraft custom payload channels for client and server
+mods. See [the realtime API guide](realtime.md) for limits, permissions, protocol
+negotiation, examples, and what a Simple Voice Chat compatibility mod must supply.
+
 ## Stability
 
 Preview ([stability.md](stability.md)): API 0.1 and content 0.2 are served together; a mod built for 0.1.0 keeps
@@ -97,7 +104,8 @@ What real mods need next, in the order modpacks and servers need it:
 - **Entities**: query and change entities near a position; spawn from a mod's own entity types (data first).
 - **Block entities and menus**: ticking machines with slots and their screens.
 - **Screens and UI**: widgets built from vanilla's, a screen the mod owns, a settings page under Options > Mods.
-- **Networking**: a channel between a mod's two halves, client and server, typed by the mod's own WIT.
+- **Networking**: experimental binary play-state channels are available to client and server mods
+  ([realtime APIs](realtime.md)); a standardized typed negotiation scheme is still future work.
 - **Config**: typed settings the game shows and stores for the mod, on the server too.
 - **Keys and the crosshair target**: keybinds in Controls; what the player is looking at.
 - **Script mods and other languages**: see [Ways in](#ways-in).
