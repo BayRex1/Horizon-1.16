@@ -114,6 +114,77 @@ pub fn encode_play_keep_alive(token: i64) -> crate::Result<Vec<u8>> {
     Ok(packet.data)
 }
 
+/// Absolute/relative position update sent by a protocol-754 server.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerPositionLook {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Bit mask: X=0x01, Y=0x02, Z=0x04, Yaw=0x08, Pitch=0x10.
+    pub flags: u8,
+    pub teleport_id: i32,
+}
+
+/// Decode the protocol-754 Player Position And Look packet payload.
+pub fn decode_player_position_look(payload: &[u8]) -> crate::Result<PlayerPositionLook> {
+    let mut r = crate::buf::Reader::new(payload);
+    let result = PlayerPositionLook {
+        x: r.f64()?,
+        y: r.f64()?,
+        z: r.f64()?,
+        yaw: r.f32()?,
+        pitch: r.f32()?,
+        flags: r.u8()?,
+        teleport_id: r.varint()?,
+    };
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 player-position packet"));
+    }
+    if result.flags & !0x1f != 0 {
+        return Err(crate::Error::new("invalid flags in 1.16.5 player-position packet"));
+    }
+    Ok(result)
+}
+
+/// Encode a serverbound teleport acknowledgement packet body.
+pub fn encode_teleport_confirm(teleport_id: i32) -> crate::Result<Vec<u8>> {
+    if teleport_id < 0 {
+        return Err(crate::Error::new("negative 1.16.5 teleport id"));
+    }
+    let mut packet = crate::buf::Writer::new();
+    packet.varint(play::serverbound::TELEPORT_CONFIRM);
+    packet.varint(teleport_id);
+    Ok(packet.data)
+}
+
+/// Encode serverbound player position and rotation (position is absolute).
+pub fn encode_player_position_rotation(
+    x: f64,
+    y: f64,
+    z: f64,
+    yaw: f32,
+    pitch: f32,
+    on_ground: bool,
+) -> crate::Result<Vec<u8>> {
+    if ![x, y, z].iter().all(|v| v.is_finite())
+        || !yaw.is_finite()
+        || !pitch.is_finite()
+    {
+        return Err(crate::Error::new("non-finite player position or rotation"));
+    }
+    let mut packet = crate::buf::Writer::new();
+    packet.varint(play::serverbound::PLAYER_POSITION_ROTATION);
+    packet.f64(x);
+    packet.f64(y);
+    packet.f64(z);
+    packet.f32(yaw);
+    packet.f32(pitch);
+    packet.bool(on_ground);
+    Ok(packet.data)
+}
+
 /// Decode the JSON string carried by the Play Disconnect packet.
 pub fn decode_play_disconnect(payload: &[u8]) -> crate::Result<String> {
     let mut r = crate::buf::Reader::new(payload);
@@ -399,6 +470,40 @@ mod tests {
         let mut r = Reader::new(&body);
         assert_eq!(r.varint().unwrap(), play::serverbound::KEEP_ALIVE);
         assert_eq!(decode_play_keep_alive(&body[r.position()..]).unwrap(), token);
+    }
+
+    #[test]
+    fn position_look_decodes_and_teleport_is_acknowledged() {
+        use crate::buf::{Reader, Writer};
+        let mut payload = Writer::new();
+        payload.f64(12.5);
+        payload.f64(64.0);
+        payload.f64(-8.25);
+        payload.f32(90.0);
+        payload.f32(-10.0);
+        payload.u8(0x04);
+        payload.varint(37);
+        let pos = decode_player_position_look(&payload.data).unwrap();
+        assert_eq!(pos.x, 12.5);
+        assert_eq!(pos.y, 64.0);
+        assert_eq!(pos.z, -8.25);
+        assert_eq!(pos.flags, 0x04);
+        assert_eq!(pos.teleport_id, 37);
+
+        let ack = encode_teleport_confirm(pos.teleport_id).unwrap();
+        let mut r = Reader::new(&ack);
+        assert_eq!(r.varint().unwrap(), play::serverbound::TELEPORT_CONFIRM);
+        assert_eq!(r.varint().unwrap(), 37);
+        assert!(encode_teleport_confirm(-1).is_err());
+    }
+
+    #[test]
+    fn player_position_rotation_rejects_nan() {
+        assert!(encode_player_position_rotation(
+            f64::NAN, 64.0, 0.0, 0.0, 0.0, true
+        ).is_err());
+        let body = encode_player_position_rotation(1.0, 65.0, 2.0, 45.0, 0.0, true).unwrap();
+        assert_eq!(body[0], play::serverbound::PLAYER_POSITION_ROTATION as u8);
     }
 
     #[test]
