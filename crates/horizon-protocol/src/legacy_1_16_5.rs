@@ -939,6 +939,53 @@ mod tests {
     }
 
     #[test]
+    fn legacy_chunk_section_resolves_single_palette_state() {
+        let section = LegacyChunkSection {
+            non_air_blocks: 4096,
+            bits_per_block: 0,
+            palette: vec![42],
+            data: Vec::new(),
+        };
+        assert_eq!(section.block_state(0), Some(42));
+        assert_eq!(section.block_state(2048), Some(42));
+        assert_eq!(section.block_state(4095), Some(42));
+        assert_eq!(section.block_state(4096), None);
+    }
+
+    #[test]
+    fn legacy_chunk_section_resolves_packed_palette_indices() {
+        // Protocol 754 packs values without crossing 64-bit word boundaries.
+        // Four bits per entry means sixteen block states per long.
+        let section = LegacyChunkSection {
+            non_air_blocks: 4096,
+            bits_per_block: 4,
+            palette: vec![0, 7, 11, 19],
+            data: vec![0x3210, 0xFEDC_BA98_7654_3210u64 as i64],
+        };
+        assert_eq!(section.block_state(0), Some(0));
+        assert_eq!(section.block_state(1), Some(1));
+        assert_eq!(section.block_state(2), Some(2));
+        assert_eq!(section.block_state(3), Some(3));
+        assert_eq!(section.block_state(16), Some(0));
+        assert_eq!(section.block_state(17), Some(1));
+        assert_eq!(section.block_state(18), Some(2));
+        assert_eq!(section.block_state(19), Some(3));
+    }
+
+    #[test]
+    fn legacy_chunk_section_global_palette_uses_state_ids_directly() {
+        let section = LegacyChunkSection {
+            non_air_blocks: 4096,
+            bits_per_block: 9,
+            palette: Vec::new(),
+            data: vec![0x1A5],
+        };
+        assert_eq!(section.block_state(0), Some(0x1A5));
+        assert_eq!(section.block_state(1), Some(0));
+        assert_eq!(section.block_state(4096), None);
+    }
+
+    #[test]
     fn rejects_malformed_legacy_login_success() {
         use crate::buf::Writer;
         let mut payload = Writer::new();
