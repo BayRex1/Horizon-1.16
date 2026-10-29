@@ -318,7 +318,8 @@ pub fn import_legacy_1_16_5(
                     // entire column. Sample its centre in each 4x4 cell and
                     // expand it vertically into Horizon's 3D quart-biome grid.
                     if let Some(Tag::Compound(level)) = root.tag.get("Level")
-                        && let Some(Tag::IntArray(old_biomes)) = level.get(&JavaString::from("Biomes"))
+                        && let Some(Tag::IntArray(old_biomes)) =
+                            level.get(&JavaString::from("Biomes"))
                         && old_biomes.len() == 256
                     {
                         for qz in 0..4 {
