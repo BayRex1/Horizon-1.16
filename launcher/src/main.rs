@@ -312,7 +312,7 @@ impl Launcher {
             }
         })
         .detach();
-        // Counts the time the sidebar's partner banner is on screen, until it may be hidden.
+        // Counts the time a partner banner is on screen, until it may be hidden.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_secs(10))
@@ -322,14 +322,12 @@ impl Launcher {
                 if s.partner_hidden || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
                     return false;
                 }
-                if this.page != Page::Servers {
-                    s.partner_seen_secs += 10;
-                    if s.partner_seen_secs % 60 == 0
-                        || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE
-                    {
-                        s.save();
-                        cx.notify();
-                    }
+                // On screen on every page: the card in the sidebar, the banner on Servers.
+                s.partner_seen_secs += 10;
+                if s.partner_seen_secs % 60 == 0 || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE
+                {
+                    s.save();
+                    cx.notify();
                 }
                 true
             });
@@ -2033,24 +2031,14 @@ impl Launcher {
                 &t,
             ));
             if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
-                let hide = div()
-                    .id("partner-hide")
-                    .absolute()
-                    .top(px(0.))
-                    .right(px(0.))
-                    .cursor_pointer()
-                    .child(
-                        text(theme::MICRO)
-                            .text_color(t.muted)
-                            .hover(move |s| s.text_color(t.ink))
-                            .child(tr("HIDE")),
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                let hide = partner::hide_button("partner-hide", &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
                         this.settings.partner_hidden = true;
                         this.settings.save();
                         cx.notify();
-                    }));
-                side = side.child(keyboard(hide, &t));
+                    },
+                ));
+                side = side.child(hide);
             }
             foot = foot.child(side);
         }
