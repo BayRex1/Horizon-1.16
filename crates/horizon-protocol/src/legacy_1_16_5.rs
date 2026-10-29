@@ -148,7 +148,7 @@ mod tests {
     fn rejects_invalid_legacy_handshakes() {
         assert!(encode_handshake("", 25565, 1).is_err());
         assert!(encode_handshake("localhost", 25565, 3).is_err());
-        assert!(encode_handshake("bad\\0host", 25565, 1).is_err());
+        assert!(encode_handshake("bad\0host", 25565, 1).is_err());
     }
 
     #[test]
