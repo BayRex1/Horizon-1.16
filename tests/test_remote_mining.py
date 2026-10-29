@@ -33,10 +33,16 @@ struct Player { ground: Ground }
 struct Sounds { hit: String, volume: f32, pitch: f32 }
 #[derive(Clone)]
 struct Facts { hardness: f32, name: String, requires_tool: bool, sounds: Sounds }
+impl Facts {
+    fn has_class(&self, _: &str) -> bool { false }
+}
 struct Resources { facts: Facts, speed: f32, tool_allows_creative: bool }
 impl Resources {
     fn can_destroy_block(&self, _: Option<&()>, creative: bool) -> bool {
         !creative || self.tool_allows_creative
+    }
+    fn can_attack_block(&self, held: Option<&()>, creative: bool, is_fire: bool) -> bool {
+        is_fire || self.can_destroy_block(held, creative)
     }
     fn facts(&self) -> &Self { self }
     fn items(&self) -> &Self { self }

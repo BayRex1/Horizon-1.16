@@ -4044,16 +4044,17 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let is_fire = self.res.facts().get(state).has_class("BaseFireBlock");
         if !self
             .res
             .items()
-            .can_destroy_block(self.held(), self.creative)
+            .can_attack_block(self.held(), self.creative, is_fire)
         {
             return Ok(());
         }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
-        let state = self.world.block(pos[0], pos[1], pos[2]);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
@@ -4886,12 +4887,15 @@ impl Game<'_> {
             self.mining = None;
             return Ok(());
         };
+        let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+        let is_fire = self.res.facts().get(state).has_class("BaseFireBlock");
         // GameType.isBlockPlacingRestricted: adventure and spectator.
+        // Item.canAttackBlock: weapons cannot break blocks in creative, except fire.
         if !self.may_build()
             || !self
                 .res
                 .items()
-                .can_destroy_block(self.held(), self.creative)
+                .can_attack_block(self.held(), self.creative, is_fire)
         {
             self.mining = None;
             return Ok(());
