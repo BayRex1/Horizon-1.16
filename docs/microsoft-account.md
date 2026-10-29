@@ -25,7 +25,7 @@ no Microsoft sign-in"); release builds have it.
      at sign-in time; `offline_access` gives the refresh token.
    - Copy the **Application (client) ID** (a GUID).
 2. **Minecraft API access** (Mojang): new Azure apps are refused by
-   `api.minecraftservices.com/authentication/login_with_xbox` (HTTP 403, "Invalid app registration")
+   the Minecraft services' sign-in (`api.minecraftservices.com`, HTTP 403, "Invalid app registration")
    until Mojang approves them. Apply with the form linked from https://aka.ms/mce-reviewappid
    (Minecraft Java "App ID review"), giving the client ID above, the app name, the project URL
    (https://github.com/horizon-rust/horizon) and a short description ("open-source Minecraft Java
@@ -58,8 +58,11 @@ All requests use HTTPS and JSON except the two OAuth calls (form-encoded):
    `SandboxId=RETAIL`, `RelyingParty=rp://api.minecraftservices.com/`. The `XErr` codes become
    messages: 2148916233 no Xbox profile yet, 2148916235 Xbox Live not available in the country,
    2148916236/2148916237 adult verification (South Korea), 2148916238 child account (needs a family).
-5. **Minecraft**: `POST https://api.minecraftservices.com/authentication/login_with_xbox`
-   (`identityToken = "XBL3.0 x=<uhs>;<XSTS token>"`). Result: the Minecraft access token (24 h).
+5. **Minecraft**: `POST https://api.minecraftservices.com/launcher/login`
+   (`xtoken = "XBL3.0 x=<uhs>;<XSTS token>"`, `platform = "PC_LAUNCHER"`), as the official launcher
+   signs in. Result: the Minecraft access token (24 h), naming the account's Java profile, which the
+   session service needs to let it join a server (`authentication/login_with_xbox` gave a new
+   account a token without it: "Profile not found" on joining).
 6. **Entitlements**: `GET https://api.minecraftservices.com/entitlements/mcstore`: the account must
    own `game_minecraft` or `product_minecraft` (Game Pass included), else "This account doesn't own
    Minecraft Java Edition".
@@ -105,19 +108,30 @@ download can be cancelled and goes on where it stopped. CI, agents, harnesses an
 download or keep Mojang's files.
 
 Refresh: the Minecraft token is renewed from the Microsoft refresh token (steps 2-5 with
-`grant_type=refresh_token`) when it has less than an hour left, before every launch; steps 6-7 run
-at every launch (the owner gate). A refused
-refresh token (`invalid_grant`) asks the player to sign in again. Several accounts can be signed in;
-one is selected. "Sign out" deletes the account's secrets from the keychain.
+`grant_type=refresh_token`) the first time each run of the launcher uses the account, and whenever
+it has less than 12 hours left (a fresh one lasts 24), as Prism Launcher and the official launcher
+renew; steps 6-7 run at every launch (the owner gate). A renewal that fails while the token still
+has two hours or more waits for the next launch; closer to its end the game starts offline, saying
+why. A refused refresh token (`invalid_grant`: expired,
+revoked, the password changed) is kept with the account ("sign in again"): the launcher doesn't
+ask Microsoft again, `account list` and the account's row say so (Sign in again), and a new
+sign-in clears it. Several accounts can be signed in; one is selected. "Sign out" deletes the
+account's secrets from the keychain.
 
 ## Token storage
 
 - Secrets (the Microsoft refresh token, the Minecraft access token and its expiry, the last
-  ownership answer) go to the OS
-  keychain, one item per account: Keychain on macOS, Credential Manager on Windows, the Secret
-  Service (GNOME Keyring, KWallet) on Linux. Service name `dev.playhorizon.launcher`, account = the
-  Minecraft UUID. Credential Manager takes at most 2560 bytes per item, which the secrets of a sign-in
-  exceed: on macOS and Windows a longer secret is split over the items `<uuid>`, `<uuid>.1`, `<uuid>.2`...
+  ownership answer, whether it needs signing in again) go to the OS keychain: Keychain on macOS,
+  Credential Manager on Windows, the Secret Service (GNOME Keyring, KWallet) on Linux. Service name
+  `dev.playhorizon.launcher`. Every account's secrets are one item, `vault`
+  (JSON by Minecraft UUID), read once per run: macOS asks before each item a changed launcher reads,
+  so one prompt, not one per account. Each change re-reads it and writes back only itself, under a
+  lock file every launcher process shares (`vault.lock` in the data folder): the window, the
+  command line and the MCP server never undo each other's sign-ins. An item that doesn't read is
+  an error, never written over. Credential Manager takes at most 2560 bytes per item: there the
+  vault is split over `vault`, `vault.1`, `vault.2`... Accounts kept the older way, an item per
+  account (`<uuid>`, `<uuid>.1`...), are copied into the vault as they are read and left where
+  they are, for older launchers; signing out removes both.
 - `accounts.json` in the launcher's data folder keeps only public data: UUID, name, skin URL, which
   account is selected. Never a token.
 - No keychain available (a Linux box without a Secret Service, a locked keychain): sign-in still

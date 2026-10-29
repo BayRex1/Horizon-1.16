@@ -114,6 +114,13 @@ enum AccountCmd {
     Offline { name: Option<String> },
     /// Forget one of your offline names; its skin and cape go with it
     ForgetOffline { name: String },
+    /// Renew an account's sign-in now, whatever is left on its token
+    Refresh {
+        /// Its name or UUID
+        who: String,
+    },
+    /// Keep an offline name without playing as it (a splitscreen player's)
+    AddOffline { name: String },
     /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
     /// PNG, the model. Kept by the launcher and given to the game when that name plays
     Skin {
@@ -1520,6 +1527,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
 
 /// `account …`: names and UUIDs only; tokens are never printed.
 fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
+    let _transaction = Accounts::lock()?;
     let mut accounts = Accounts::load();
     let find = |accounts: &Accounts, who: &str| {
         accounts
@@ -1534,6 +1542,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
                         "name": a.name, "uuid": a.uuid,
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
+                        "sign_in_again": account::needs_sign_in(account::store(), &a.uuid),
                     })).collect::<Vec<_>>(),
                     "offline": accounts.offline.iter().map(|n| serde_json::json!({
                         "name": n,
@@ -1554,7 +1563,12 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     } else {
                         " "
                     };
-                    println!("{mark} {}  {}", a.name, a.uuid);
+                    // Microsoft refused to renew it.
+                    let again = match account::needs_sign_in(account::store(), &a.uuid) {
+                        true => "  (sign in again: horizon-launcher account sign-in)",
+                        false => "",
+                    };
+                    println!("{mark} {}  {}{again}", a.name, a.uuid);
                 }
                 for n in &accounts.offline {
                     let on = accounts.player() == account::Player::Offline(n.clone());
@@ -1586,6 +1600,16 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             if !account::store().persistent() {
                 eprintln!("{}", account::NO_KEYCHAIN);
             }
+        }
+        AccountCmd::Refresh { who } => {
+            let a = find(&accounts, &who)?;
+            account::renew(
+                &account::Endpoints::live(),
+                account::client_id().as_deref(),
+                account::store(),
+                &a.uuid,
+            )?;
+            println!("Renewed {}'s sign-in.", a.name);
         }
         AccountCmd::SignOut { who } => {
             let a = find(&accounts, &who)?;
@@ -1682,6 +1706,11 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             accounts.remove_offline(&name, &horizon_launcher::skins::dir())?;
             accounts.save()?;
             println!("Forgot the offline name {name}.");
+        }
+        AccountCmd::AddOffline { name } => {
+            let kept = accounts.keep_offline(account::store(), &name)?;
+            accounts.save()?;
+            println!("Kept the offline name {kept}.");
         }
     }
     Ok(())

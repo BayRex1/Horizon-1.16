@@ -83,9 +83,10 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
                 ),
             }
         }
-        ("POST", "/mc/authentication/login_with_xbox") => {
+        ("POST", "/mc/launcher/login") => {
             let v: Value = serde_json::from_str(body).unwrap();
-            assert_eq!(v["identityToken"], "XBL3.0 x=uhs-1;xsts-token");
+            assert_eq!(v["xtoken"], "XBL3.0 x=uhs-1;xsts-token");
+            assert_eq!(v["platform"], "PC_LAUNCHER");
             reply(
                 200,
                 json!({"username": "mock", "access_token": "mc-token", "token_type": "Bearer", "expires_in": 86400}),
@@ -173,6 +174,7 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
         xbox_user: format!("{base}/xbl"),
         xsts: format!("{base}/xsts"),
         minecraft: format!("{base}/mc"),
+        renew_each_run: false,
     }
 }
 
@@ -229,7 +231,7 @@ fn the_whole_chain() {
             "/ms/token",
             "/xbl",
             "/xsts",
-            "/mc/authentication/login_with_xbox",
+            "/mc/launcher/login",
             "/mc/entitlements/mcstore",
             "/mc/minecraft/profile"
         ]
@@ -251,9 +253,10 @@ fn secrets(token: &str, owns: bool) -> Secrets {
     Secrets {
         refresh_token: "ms-refresh-1".into(),
         minecraft_token: token.into(),
-        minecraft_expires_at: now() + 7200,
+        minecraft_expires_at: now() + 20 * 3600,
         xuid: None,
         owns,
+        sign_in_again: false,
     }
 }
 
@@ -264,6 +267,7 @@ fn offline() -> Endpoints {
         xbox_user: "http://127.0.0.1:9/xbl".into(),
         xsts: "http://127.0.0.1:9/xsts".into(),
         minecraft: "http://127.0.0.1:9/mc".into(),
+        renew_each_run: false,
     }
 }
 
@@ -279,7 +283,7 @@ fn refresh_only_when_the_token_runs_out() {
         panic!("owns");
     };
     assert_eq!(kept.refresh_token, "ms-refresh-1");
-    // Entitlements and profile only: the token had two hours left.
+    // Entitlements and profile only: the token had 20 hours left.
     assert_eq!(m.lock().unwrap().log.len(), 2);
     let stale = Secrets {
         minecraft_expires_at: now() + 60,
@@ -302,10 +306,43 @@ fn refresh_only_when_the_token_runs_out() {
         minecraft_expires_at: 0,
         ..kept
     };
+    let Check::NoAnswer(e, refused) = check(&ep, Some("test-client"), &notch(), revoked) else {
+        panic!("refused");
+    };
+    // Kept as needing a new sign-in, and not asked again until then.
+    assert_eq!(
+        (e.as_str(), refused.owns, refused.sign_in_again),
+        (SIGN_IN_AGAIN, true, true)
+    );
+    let asked = m.lock().unwrap().log.len();
     assert!(matches!(
-        check(&ep, Some("test-client"), &notch(), revoked),
-        Check::NoAnswer(e, s) if e == SIGN_IN_AGAIN && s.owns
+        check(&ep, Some("test-client"), &notch(), refused),
+        Check::NoAnswer(e, _) if e == SIGN_IN_AGAIN
     ));
+    assert_eq!(m.lock().unwrap().log.len(), asked);
+}
+
+#[test]
+fn renewed_once_each_run_as_prism_does() {
+    let (m, mut ep) = mock(|_| {});
+    ep.renew_each_run = true;
+    // The only test that renews once per run: the run's set is the process's.
+    let account = notch();
+    let fresh = secrets("mc-token", true);
+    let Check::Owns(_, once) = check(&ep, Some("test-client"), &account, fresh) else {
+        panic!("owns");
+    };
+    assert_eq!(
+        once.refresh_token, "ms-refresh-2",
+        "renewed the first time this run"
+    );
+    let before = m.lock().unwrap().log.len();
+    let Check::Owns(_, again) = check(&ep, Some("test-client"), &account, once) else {
+        panic!("owns");
+    };
+    assert_eq!(again.refresh_token, "ms-refresh-2", "not twice in a run");
+    // Entitlements and profile only.
+    assert_eq!(m.lock().unwrap().log.len() - before, 2);
 }
 
 /// An accounts.json with Notch signed in and playing, his secrets in `store`.
@@ -539,6 +576,7 @@ fn accounts_keep_secrets_in_the_store_only() {
         minecraft_expires_at: 1,
         xuid: None,
         owns: true,
+        sign_in_again: false,
     };
     accounts.add(&store, account.clone(), &secrets).unwrap();
     assert_eq!(accounts.selected(), Some(&account));
@@ -575,13 +613,14 @@ fn system_keychain_keeps_long_secrets() {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
-fn long_secrets_split_into_keychain_sized_pieces() {
+fn long_secrets_split_into_credential_manager_sized_pieces() {
     // Mixed 1-, 2- and 4-byte characters, so the cuts land inside some of them.
     let secret = "aé🔑".repeat(300);
     let pieces = split_secret(&secret);
-    assert!(pieces.len() > 1);
+    // Only Credential Manager needs pieces; the keychain takes it whole (one prompt).
+    assert_eq!(pieces.len() > 1, cfg!(windows));
     assert_eq!(pieces.concat(), secret);
-    for piece in &pieces {
+    for piece in pieces.iter().filter(|_| cfg!(windows)) {
         assert!(piece.len() <= PIECE);
         assert!(piece.encode_utf16().count() * 2 <= 2560);
     }
@@ -603,6 +642,7 @@ fn session_files_are_private_and_complete() {
         minecraft_expires_at: 1,
         xuid: Some("25".into()),
         owns: true,
+        sign_in_again: false,
     };
     let path = write_session_file(&dir, &account, &secrets).unwrap();
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -703,4 +743,175 @@ fn offline_names_switch_with_accounts() {
         serde_json::to_string(&old).unwrap(),
         r#"{"accounts":[],"selected":null}"#
     );
+}
+
+/// One keychain shared by several `Vault`s: several launcher processes.
+#[derive(Clone, Default)]
+struct Shared(std::sync::Arc<MemoryStore>);
+impl SecretStore for Shared {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        self.0.get(key)
+    }
+    fn set(&self, key: &str, secret: &str) -> Result<(), String> {
+        self.0.set(key, secret)
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.delete(key)
+    }
+    fn persistent(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_splitscreen_player_keeps_an_offline_name() {
+    let store = MemoryStore::default();
+    store
+        .set("abc", &serde_json::to_string(&secrets("t", true)).unwrap())
+        .unwrap();
+    let mut a = Accounts {
+        accounts: vec![Account {
+            uuid: "abc".into(),
+            name: "Ludo".into(),
+            skin: None,
+            cape: None,
+        }],
+        selected: Some("abc".into()),
+        ..Accounts::default()
+    };
+    // Kept without playing as it: the account still plays.
+    a.keep_offline(&store, "Bea").unwrap();
+    a.keep_offline(&store, "Cal").unwrap();
+    assert_eq!(a.offline, ["Bea", "Cal"]);
+    assert_eq!(a.name_arg(), None);
+    // The game gets every name.
+    let env: std::collections::HashMap<_, _> = a.look_env().into_iter().collect();
+    let profiles: serde_json::Value = serde_json::from_str(&env["HORIZON_PROFILES"]).unwrap();
+    assert_eq!(profiles.as_array().unwrap().len(), 2);
+    // No owner: nothing kept.
+    let mut none = Accounts::default();
+    assert!(none.keep_offline(&MemoryStore::default(), "Dan").is_err());
+}
+
+#[test]
+fn every_account_in_one_keychain_item() {
+    let keychain = Shared::default();
+    let vault = Vault::new(keychain.clone(), None);
+    vault.set("abc", "one").unwrap();
+    vault.set("def", "two").unwrap();
+    assert_eq!(vault.get("abc").unwrap().as_deref(), Some("one"));
+    // One item holds both.
+    let inner: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&keychain.get("vault").unwrap().unwrap()).unwrap();
+    assert_eq!(inner.len(), 2);
+    assert!(keychain.get("abc").unwrap().is_none());
+    // An account kept the older way is copied in as it is read, its item left for older
+    // launchers; signing out removes both.
+    keychain.set("old", "three").unwrap();
+    assert_eq!(vault.get("old").unwrap().as_deref(), Some("three"));
+    assert_eq!(keychain.get("old").unwrap().as_deref(), Some("three"));
+    vault.delete("old").unwrap();
+    assert!(vault.get("old").unwrap().is_none());
+    assert!(keychain.get("old").unwrap().is_none());
+}
+
+#[test]
+fn two_launchers_never_write_over_each_other() {
+    let keychain = Shared::default();
+    let window = Vault::new(keychain.clone(), None);
+    let cli = Vault::new(keychain.clone(), None);
+    window.set("a", "1").unwrap();
+    assert_eq!(window.get("a").unwrap().as_deref(), Some("1"));
+    // The command line signs B in and A out, while the window has A in memory.
+    cli.set("b", "2").unwrap();
+    cli.delete("a").unwrap();
+    // The window renews C: B stays, A stays signed out.
+    window.set("c", "3").unwrap();
+    let kept: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&keychain.get("vault").unwrap().unwrap()).unwrap();
+    assert_eq!(kept.keys().collect::<Vec<_>>(), ["b", "c"]);
+}
+
+#[test]
+fn a_vault_that_doesnt_read_is_never_written_over() {
+    let keychain = Shared::default();
+    keychain.set("vault", "{not json").unwrap();
+    let vault = Vault::new(keychain.clone(), None);
+    assert!(vault.get("a").is_err());
+    assert!(vault.set("a", "1").is_err());
+    assert_eq!(keychain.get("vault").unwrap().as_deref(), Some("{not json"));
+}
+
+#[test]
+fn a_launchers_processes_share_the_lock_file() {
+    let dir = std::env::temp_dir().join(format!("horizon-vault-lock-{}", std::process::id()));
+    let keychain = Shared::default();
+    let vault = Vault::new(keychain.clone(), Some(dir.join("vault.lock")));
+    vault.set("a", "1").unwrap();
+    assert!(dir.join("vault.lock").is_file());
+    assert_eq!(vault.get("a").unwrap().as_deref(), Some("1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn refresh_renews_whatever_is_left() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    signed_in(&store, &secrets("mc-token", true));
+    renew(&ep, Some("test-client"), &store, UUID).unwrap();
+    assert_eq!(kept(&store).refresh_token, "ms-refresh-2");
+    // A refused refresh token: kept as needing a new sign-in.
+    let mut revoked = kept(&store);
+    revoked.refresh_token = "revoked".into();
+    store
+        .set(UUID, &serde_json::to_string(&revoked).unwrap())
+        .unwrap();
+    assert_eq!(
+        renew(&ep, Some("test-client"), &store, UUID),
+        Err(SIGN_IN_AGAIN.to_string())
+    );
+    assert!(needs_sign_in(&store, UUID));
+}
+
+/// Separate processes race on one scratch file, as simultaneous joining players do.
+#[test]
+fn profile_transactions_across_processes() {
+    const CHILD: &str = "HORIZON_TEST_PROFILE_TRANSACTION";
+    if let Some(path) = std::env::var_os(CHILD) {
+        let path = std::path::PathBuf::from(path);
+        let _lock = Accounts::lock_at(&path.with_extension("lock")).unwrap();
+        let mut accounts: Accounts = std::fs::read(&path)
+            .ok()
+            .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+            .unwrap_or_default();
+        // Force overlap if the transaction lock is removed.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        accounts
+            .offline
+            .push(format!("Player{}", std::process::id()));
+        std::fs::write(&path, serde_json::to_vec(&accounts).unwrap()).unwrap();
+        return;
+    }
+    let folder = std::env::temp_dir().join(format!("horizon-profile-lock-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("accounts.json");
+    let mut children: Vec<_> = (0..8)
+        .map(|_| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "account::tests::profile_transactions_across_processes",
+                ])
+                .env(CHILD, &path)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    let accounts: Accounts = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(accounts.offline.len(), 8);
+    std::fs::remove_dir_all(folder).unwrap();
 }

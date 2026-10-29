@@ -855,6 +855,10 @@ pub enum Page {
     Horizon,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
+    /// Splitscreen's windows and who plays where (`split_ui`).
+    SplitSetup,
+    /// Splitscreen: the profile another player joins or switches to (`split_profiles`).
+    SplitProfiles,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -1000,6 +1004,8 @@ pub struct OptionsUi {
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
     pub graphics: crate::graphics_ui::GraphicsUi,
+    pub split_setup: crate::split_ui::SplitUi,
+    pub split_profiles: crate::split_profiles::SplitProfiles,
     /// The AI Agent page's status lines (set by the game while it shows).
     pub agent_status: Vec<String>,
 }
@@ -1031,6 +1037,8 @@ impl Default for OptionsUi {
             in_world: false,
             center_language: false,
             graphics: Default::default(),
+            split_setup: Default::default(),
+            split_profiles: Default::default(),
             agent_status: Vec::new(),
         }
     }
@@ -1088,6 +1096,8 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
             "Optional additions, all off by default: the game stays vanilla until you turn one on."
         }
         Page::Agent => "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
+        Page::SplitSetup => "The windows and monitors, and who plays where.",
+        Page::SplitProfiles => "Who plays: a profile, or a Microsoft account.",
         Page::ShaderPacks => {
             "Shader packs from the shaderpacks folder: Horizon's own and those in the shaders/ format. One runs at a time."
         }
@@ -1159,6 +1169,12 @@ impl OptionsUi {
         if matches!(page, Page::Graphics | Page::GraphicsAdvanced) {
             self.graphics.reset();
         }
+        if page == Page::SplitSetup {
+            self.split_setup.reset();
+        }
+        if page == Page::SplitProfiles {
+            self.split_profiles.reset();
+        }
     }
     /// The graphics screen level of `page`, if it is one.
     fn graphics_level(page: Page) -> Option<crate::graphics_ui::Level> {
@@ -1191,6 +1207,8 @@ impl OptionsUi {
             Page::Credits => "credits_and_attribution.screen.title",
             Page::Horizon => "Horizon Settings",
             Page::Agent => "AI Agent",
+            Page::SplitSetup => "Splitscreen Setup",
+            Page::SplitProfiles => "Who's playing?",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -1344,6 +1362,7 @@ impl OptionsUi {
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
                     ),
+                    Row::Buttons(open("Splitscreen...", Page::SplitSetup), None),
                     // No AI hides the AI Agent page and everything AI.
                     Row::Buttons(
                         self.extra_button(s, crate::extras::Item::DiscordPresence),
@@ -2168,6 +2187,17 @@ impl OptionsUi {
                 .draw(level, s, batch, atlas, cursor, self.in_world);
             return;
         }
+        if self.page() == Page::SplitSetup {
+            self.split_setup.on = s.extras.splitscreen;
+            self.split_setup.size = (batch.width, batch.height);
+            self.split_setup.draw(batch, atlas, cursor, self.in_world);
+            return;
+        }
+        if self.page() == Page::SplitProfiles {
+            self.split_profiles
+                .draw(batch, atlas, cursor, self.in_world, self.pad_style);
+            return;
+        }
         if self.page() == Page::Packs {
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
             let blink = self.pack_focus.elapsed().as_millis() as u64;
@@ -2416,6 +2446,41 @@ impl OptionsUi {
                 return vec![Event::ButtonClick];
             }
             return Vec::new();
+        }
+        if self.page() == Page::SplitSetup {
+            use crate::split_ui::Click;
+            if right {
+                return Vec::new();
+            }
+            self.split_setup.on = s.extras.splitscreen;
+            return match self.split_setup.click((x, y), size, drag) {
+                Click::Nothing => Vec::new(),
+                Click::Pressed => vec![Event::ButtonClick],
+                Click::Switch => {
+                    crate::extras::Item::Splitscreen.cycle(&mut s.extras, false);
+                    vec![Event::ButtonClick, Event::Changed]
+                }
+                Click::Done => {
+                    let mut events = vec![Event::ButtonClick];
+                    events.extend(self.back(s));
+                    events
+                }
+            };
+        }
+        if self.page() == Page::SplitProfiles {
+            use crate::split_profiles::Click;
+            if right || drag {
+                return Vec::new();
+            }
+            return match self.split_profiles.click(atlas, (x, y), size) {
+                Click::Nothing => Vec::new(),
+                Click::Pressed => vec![Event::ButtonClick],
+                Click::Done => {
+                    let mut events = vec![Event::ButtonClick];
+                    events.extend(self.back(s));
+                    events
+                }
+            };
         }
         if let Some(level) = Self::graphics_level(self.page()) {
             use crate::graphics_ui::Action;
@@ -2675,7 +2740,8 @@ impl OptionsUi {
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
         let graphics_slider = self.graphics.release();
-        if slider || graphics_slider {
+        let split_drop = self.split_setup.release();
+        if slider || graphics_slider || split_drop {
             vec![Event::ButtonClick]
         } else {
             Vec::new()
@@ -2778,6 +2844,8 @@ impl OptionsUi {
         if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
+        } else if self.page() == Page::SplitProfiles {
+            self.split_profiles.type_text(text);
         } else if self.settings_search_active() {
             self.settings_search.insert_text(text);
             self.scroll = 0.0;
@@ -2805,6 +2873,9 @@ impl OptionsUi {
                 self.scroll = 0.0;
             }
             return true;
+        }
+        if self.page() == Page::SplitProfiles {
+            return self.split_profiles.shortcut(shortcut, clipboard);
         }
         if self.settings_search_active() {
             if self.settings_search.shortcut(shortcut, clipboard) {
@@ -2893,6 +2964,9 @@ impl OptionsUi {
                     .to_owned()
             };
             return self.bind_key(s, value);
+        }
+        if self.page() == Page::SplitProfiles && self.split_profiles.key(key, text) {
+            return Vec::new();
         }
         if key == K::Escape {
             return self.back(s);
@@ -4236,6 +4310,7 @@ mod tests {
                 Page::Controller,
                 Page::Extras,
                 Page::Mods,
+                Page::SplitSetup,
                 Page::Agent,
             ]
         );
