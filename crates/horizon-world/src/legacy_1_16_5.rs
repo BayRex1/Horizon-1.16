@@ -107,8 +107,12 @@ pub fn block_by_state_id(
     state_id: u32,
 ) -> Result<Option<(LegacyBlock, u32)>, serde_json::Error> {
     Ok(blocks()?.into_iter().find_map(|block| {
-        (block.min_state_id <= state_id && state_id <= block.max_state_id)
-            .then_some((block, state_id - block.min_state_id))
+        if block.min_state_id <= state_id && state_id <= block.max_state_id {
+            let offset = state_id - block.min_state_id;
+            Some((block, offset))
+        } else {
+            None
+        }
     }))
 }
 
