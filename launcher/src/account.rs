@@ -31,8 +31,14 @@ const NO_PROFILE: &str =
 const OTHER_PROFILE: &str =
     "The Microsoft account now has another Minecraft profile. Sign in again.";
 const SIGN_IN_AGAIN: &str = "Your Microsoft sign-in expired. Sign in again.";
-/// The Minecraft token is renewed when it has less than this left.
-const RENEW_BEFORE: u64 = 3600;
+/// The Minecraft token is renewed when it has less than this left (a fresh one lasts 24 h), and
+/// the first time each run of the launcher uses the account (`Endpoints::renew_each_run`), as
+/// Prism Launcher and the official one renew.
+const RENEW_BEFORE: u64 = 12 * 3600;
+
+/// The accounts renewed in this run of the launcher.
+static RENEWED: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
 
 /// The configured Azure app, if any: the run-time variable wins over the build-time one, and an
 /// empty value means none.
@@ -53,6 +59,9 @@ pub struct Endpoints {
     pub xsts: String,
     /// api.minecraftservices.com.
     pub minecraft: String,
+    /// Renew each account once per run of the launcher, beside when its token runs low (tests
+    /// turn it off, to see exactly which requests go).
+    pub renew_each_run: bool,
 }
 
 impl Endpoints {
@@ -68,6 +77,7 @@ impl Endpoints {
             xbox_user: "https://user.auth.xboxlive.com/user/authenticate".into(),
             xsts: "https://xsts.auth.xboxlive.com/xsts/authorize".into(),
             minecraft: "https://api.minecraftservices.com".into(),
+            renew_each_run: true,
         }
     }
 }
@@ -334,14 +344,16 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         return Err("Xbox Live refused the sign-in.".into());
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
+    // The launchers' sign-in (`launcher/login`, as the official launcher and others use): its
+    // token names the account's Java profile, which the session service needs to let it join a
+    // server. `authentication/login_with_xbox` gave a new account a token without it ("Profile
+    // not found").
     let (status, mc) = send(
-        request_to(
-            "POST",
-            &format!("{}/authentication/login_with_xbox", ep.minecraft),
-        ),
-        Some(Body::Json(
-            json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
-        )),
+        request_to("POST", &format!("{}/launcher/login", ep.minecraft)),
+        Some(Body::Json(json!({
+            "xtoken": format!("XBL3.0 x={uhs};{xsts_token}"),
+            "platform": "PC_LAUNCHER",
+        }))),
         "the Minecraft services",
     )?;
     match (status, str_field(&mc, "access_token")) {
@@ -458,6 +470,10 @@ pub struct Secrets {
     /// existed passed the same check at sign-in, which refuses everyone else.
     #[serde(default = "owned_at_sign_in")]
     owns: bool,
+    /// Microsoft refused to renew the sign-in (expired, revoked, the password changed): it needs
+    /// signing in again, and isn't asked again until then. A new sign-in clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    sign_in_again: bool,
 }
 fn owned_at_sign_in() -> bool {
     true
@@ -486,6 +502,7 @@ impl Secrets {
             minecraft_expires_at: mc.expires_at,
             xuid: mc.xuid,
             owns: true,
+            sign_in_again: false,
         }
     }
 }
@@ -501,10 +518,19 @@ enum Check {
 }
 
 /// Asks whether `account` owns the game, with a Minecraft token renewed through the refresh token
-/// first when it has less than an hour left. The secrets come back renewed whatever the answer.
+/// first when due (`RENEW_BEFORE`, once a run). The secrets come back renewed whatever the answer.
 fn check(ep: &Endpoints, client_id: Option<&str>, account: &Account, secrets: Secrets) -> Check {
     let mut secrets = secrets;
-    if secrets.minecraft_expires_at <= now() + RENEW_BEFORE {
+    // Refused before: only a new sign-in mends it.
+    if secrets.sign_in_again {
+        return Check::NoAnswer(SIGN_IN_AGAIN.into(), secrets);
+    }
+    let first_this_run = ep.renew_each_run
+        && !RENEWED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&account.uuid);
+    if first_this_run || secrets.minecraft_expires_at <= now() + RENEW_BEFORE {
         let renewed = client_id
             .ok_or_else(|| NOT_CONFIGURED.to_string())
             .and_then(|id| refresh_ms(ep, id, &secrets.refresh_token))
@@ -514,8 +540,22 @@ fn check(ep: &Endpoints, client_id: Option<&str>, account: &Account, secrets: Se
                 secrets = Secrets {
                     owns: secrets.owns,
                     ..Secrets::new(refresh, mc)
+                };
+                if ep.renew_each_run {
+                    RENEWED
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(account.uuid.clone());
                 }
             }
+            // Microsoft refused the sign-in for good: kept, so the launcher says it plainly.
+            Err(e) if e == SIGN_IN_AGAIN => {
+                secrets.sign_in_again = true;
+                return Check::NoAnswer(e, secrets);
+            }
+            // Still good for hours: renewing can wait (no network, the run's renewal). Closer to
+            // its end, a game would start with a session that dies in it: offline, said why.
+            Err(_) if secrets.minecraft_expires_at > now() + 2 * 3600 => {}
             Err(e) => return Check::NoAnswer(e, secrets),
         }
     }
@@ -626,30 +666,22 @@ impl SecretStore for SystemStore {
 }
 
 /// Keychain on macOS, Credential Manager on Windows (the keyring crate). Credential Manager takes at
-/// most 2560 bytes of UTF-16 per item and a sign-in's secrets are longer, so a secret is kept in
-/// pieces: the first under the account's key, the rest under `key.1`, `key.2`...
+/// most 2560 bytes of UTF-16 per item and a sign-in's secrets are longer, so there a secret is kept
+/// in pieces (`pieced`). The keychain takes it whole: each item read is a prompt when the launcher
+/// changed, so one item.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct SystemStore;
 
-/// Bytes of UTF-8 per keychain item: at most twice as many in UTF-16, well under 2560.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Bytes of UTF-8 per Credential Manager item: at most twice as many in UTF-16, well under 2560.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const PIECE: usize = 1000;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn piece_key(key: &str, n: usize) -> String {
-    if n == 0 {
-        key.to_string()
-    } else {
-        format!("{key}.{n}")
-    }
-}
-
-/// `secret` cut into pieces of at most `PIECE` bytes, on character boundaries.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn split_secret(mut secret: &str) -> Vec<&str> {
+/// `secret` cut into pieces of at most `max` bytes, on character boundaries.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn split_secret(mut secret: &str, max: usize) -> Vec<&str> {
     let mut pieces = Vec::new();
-    while secret.len() > PIECE {
-        let mut cut = PIECE;
+    while secret.len() > max {
+        let mut cut = max;
         while !secret.is_char_boundary(cut) {
             cut -= 1;
         }
@@ -661,69 +693,320 @@ fn split_secret(mut secret: &str) -> Vec<&str> {
     pieces
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn read_item(key: &str) -> Result<Option<String>, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+/// A secret longer than one item, kept so that a write cut off halfway (a crash, power) leaves the
+/// last whole one: the pieces of a new generation are written first (`key@<gen>.0`, `key@<gen>.1`...),
+/// then the head item `key` is switched to them in one write ("\u{1}pieces <gen> <count>"), then the
+/// old generation goes. Older launchers' pieces (`key`, `key.1`, `key.2`...) still read.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod pieced {
+    /// One system item each.
+    pub trait Items {
+        fn read(&self, key: &str) -> Result<Option<String>, String>;
+        fn write(&self, key: &str, value: &str) -> Result<(), String>;
+        /// False when there was none.
+        fn remove(&self, key: &str) -> Result<bool, String>;
+    }
+
+    const HEAD: &str = "\u{1}pieces ";
+
+    /// The generation and piece count a head item names, if it is one.
+    fn head(value: &str) -> Option<(&str, usize)> {
+        let (generation, count) = value.strip_prefix(HEAD)?.split_once(' ')?;
+        Some((generation, count.parse().ok()?))
+    }
+
+    fn piece(key: &str, generation: &str, i: usize) -> String {
+        format!("{key}@{generation}.{i}")
+    }
+
+    pub fn read(items: &dyn Items, key: &str) -> Result<Option<String>, String> {
+        let Some(first) = items.read(key)? else {
+            return Ok(None);
+        };
+        if let Some((generation, count)) = head(&first) {
+            let mut out = String::new();
+            for i in 0..count {
+                let part = items.read(&piece(key, generation, i))?;
+                out.push_str(&part.ok_or("A piece of a keychain item is missing.")?);
+            }
+            return Ok(Some(out));
+        }
+        // An older launcher's pieces.
+        let mut out = first;
+        for n in 1.. {
+            match items.read(&format!("{key}.{n}"))? {
+                Some(part) => out.push_str(&part),
+                None => break,
+            }
+        }
+        Ok(Some(out))
+    }
+
+    pub fn write(items: &dyn Items, key: &str, value: &str, max: usize) -> Result<(), String> {
+        let before = items.read(key)?;
+        let parts = super::split_secret(value, max);
+        if parts.len() == 1 {
+            // One item: written in one go.
+            items.write(key, value)?;
+        } else {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let generation = format!("{:x}{:x}", nanos, std::process::id());
+            for (i, part) in parts.iter().enumerate() {
+                items.write(&piece(key, &generation, i), part)?;
+            }
+            // The switch: until here the head names the last whole value.
+            items.write(key, &format!("{HEAD}{generation} {}", parts.len()))?;
+        }
+        if let Some(before) = before {
+            remove_pieces(items, key, &before);
+        }
+        Ok(())
+    }
+
+    pub fn delete(items: &dyn Items, key: &str) -> Result<(), String> {
+        if let Some(before) = items.read(key)? {
+            remove_pieces(items, key, &before);
+        }
+        items.remove(key)?;
+        Ok(())
+    }
+
+    /// The pieces `before` (a head item's old value) used, gone: best effort, they're unread now.
+    fn remove_pieces(items: &dyn Items, key: &str, before: &str) {
+        match head(before) {
+            Some((generation, count)) => {
+                for i in 0..count {
+                    let _ = items.remove(&piece(key, generation, i));
+                }
+            }
+            None => {
+                for n in 1.. {
+                    if !items.remove(&format!("{key}.{n}")).unwrap_or(false) {
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
+/// The keyring crate's items.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn write_item(key: &str, secret: &str) -> Result<(), String> {
-    keyring::Entry::new(SERVICE, key)
-        .and_then(|e| e.set_password(secret))
-        .map_err(|e| e.to_string())
-}
+struct Keyring;
 
-/// Removes one item; false when there was none.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn remove_item(key: &str) -> Result<bool, String> {
-    match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
-        Ok(()) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(e.to_string()),
+impl pieced::Items for Keyring {
+    fn read(&self, key: &str) -> Result<Option<String>, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn write(&self, key: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(SERVICE, key)
+            .and_then(|e| e.set_password(value))
+            .map_err(|e| e.to_string())
+    }
+    fn remove(&self, key: &str) -> Result<bool, String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SecretStore for SystemStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let Some(mut secret) = read_item(key)? else {
-            return Ok(None);
-        };
-        for n in 1.. {
-            match read_item(&piece_key(key, n))? {
-                Some(piece) => secret.push_str(&piece),
-                None => break,
-            }
-        }
-        Ok(Some(secret))
+        pieced::read(&Keyring, key)
     }
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        let pieces = split_secret(secret);
-        for (n, piece) in pieces.iter().enumerate() {
-            write_item(&piece_key(key, n), piece)?;
-        }
-        // Pieces left over from a longer secret would be read back as part of this one.
-        for n in pieces.len().. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        // Only Credential Manager needs pieces.
+        let max = if cfg!(windows) { PIECE } else { usize::MAX };
+        pieced::write(&Keyring, key, secret, max)
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        for n in 0.. {
-            if !remove_item(&piece_key(key, n))? {
-                break;
-            }
-        }
-        Ok(())
+        pieced::delete(&Keyring, key)
     }
     fn persistent(&self) -> bool {
         true
+    }
+}
+
+/// Every account's secrets in one keychain item (`VAULT`, JSON by key): one prompt where the
+/// system asks before each item a changed launcher reads (macOS), not one per account and piece.
+///
+/// Reads come from memory, read again only when another launcher process changed the vault since
+/// (`vault.stamp` beside the lock file says so); a failed or refused read is remembered until then,
+/// so it isn't asked again. Each change (and each copy of an older item into the vault) re-reads
+/// the item, applies only itself and writes it back, under this process's lock and a lock file
+/// every launcher process shares (`lock`): the window, the command line and the MCP server never
+/// write over or undo each other's sign-ins and sign-outs. An item that doesn't read as the vault
+/// is an error, never written over. Secrets kept the older way, an item per account, are copied
+/// in as they are read and left where they are, for older launchers; signing out removes both.
+pub struct Vault<S: SecretStore> {
+    inner: S,
+    lock: Option<PathBuf>,
+    state: Mutex<VaultState>,
+}
+
+#[derive(Default)]
+struct VaultState {
+    /// The vault as last read or written; an error if it couldn't be read.
+    read: Option<Result<std::collections::BTreeMap<String, String>, String>>,
+    /// The stamp the vault had then (`stamp`).
+    stamp: Option<String>,
+    /// Keys looked for the older way since then (found or not): looked for once.
+    legacy_checked: std::collections::BTreeSet<String>,
+}
+
+const VAULT: &str = "vault";
+
+impl<S: SecretStore> Vault<S> {
+    /// `lock`: the file every launcher process locks around the vault (none in tests).
+    pub fn new(inner: S, lock: Option<PathBuf>) -> Self {
+        Self {
+            inner,
+            lock,
+            state: Mutex::new(VaultState::default()),
+        }
+    }
+
+    /// The vault as the keychain has it now: an error if it doesn't read as one.
+    fn read_now(&self) -> Result<std::collections::BTreeMap<String, String>, String> {
+        match self.inner.get(VAULT)? {
+            None => Ok(Default::default()),
+            Some(text) => serde_json::from_str(&text).map_err(|e| {
+                format!("The keychain's Horizon item doesn't read ({e}): left as it is.")
+            }),
+        }
+    }
+
+    /// The other launcher processes kept out while held.
+    fn lock_file(&self) -> Option<std::fs::File> {
+        let path = self.lock.as_ref()?;
+        let _ = std::fs::create_dir_all(path.parent()?);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .ok()?;
+        file.lock().ok()?;
+        Some(file)
+    }
+
+    /// Where every change leaves a new mark, for the other processes to see their copy is old.
+    fn stamp_path(&self) -> Option<PathBuf> {
+        Some(self.lock.as_ref()?.with_extension("stamp"))
+    }
+
+    fn stamp(&self) -> Option<String> {
+        std::fs::read_to_string(self.stamp_path()?).ok()
+    }
+
+    /// The vault in memory, read again if another process changed it since.
+    fn current<'a>(&self, state: &'a mut VaultState) -> &'a mut VaultState {
+        let stamp = self.stamp();
+        if state.read.is_none() || state.stamp != stamp {
+            let _held = self.lock_file();
+            state.read = Some(self.read_now());
+            state.stamp = stamp;
+            state.legacy_checked.clear();
+        }
+        state
+    }
+
+    /// `f` on the vault as the keychain has it now (and the store itself, for the older items),
+    /// written back if it says so: one change, nothing else's undone, no other process between.
+    fn change<T>(
+        &self,
+        f: impl FnOnce(&mut std::collections::BTreeMap<String, String>, &S) -> Result<(T, bool), String>,
+    ) -> Result<T, String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = self.lock_file();
+        let mut vault = self.read_now()?;
+        let (out, write) = f(&mut vault, &self.inner)?;
+        if write {
+            self.inner.set(
+                VAULT,
+                &serde_json::to_string(&vault).map_err(|e| e.to_string())?,
+            )?;
+            // The other processes' copies are old now.
+            if let Some(path) = self.stamp_path() {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos());
+                let mark = format!("{nanos:x}-{}", std::process::id());
+                if std::fs::write(&path, &mark).is_ok() {
+                    state.stamp = Some(mark);
+                }
+            }
+        }
+        state.read = Some(Ok(vault));
+        Ok(out)
+    }
+}
+
+impl<S: SecretStore> SecretStore for Vault<S> {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        {
+            let mut guard = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self.current(&mut guard);
+            let vault = state
+                .read
+                .as_ref()
+                .expect("read above")
+                .as_ref()
+                .map_err(Clone::clone)?;
+            if let Some(secret) = vault.get(key) {
+                return Ok(Some(secret.clone()));
+            }
+            // Not in the vault: kept the older way? Looked for once.
+            if !state.legacy_checked.insert(key.to_owned()) {
+                return Ok(None);
+            }
+        }
+        // Copied in under the lock, so a sign-out elsewhere can't be undone by this copy: the
+        // older item is read in there, and left for older launchers.
+        self.change(|v, inner| match v.get(key) {
+            Some(secret) => Ok((Some(secret.clone()), false)),
+            None => match inner.get(key)? {
+                Some(old) => {
+                    v.insert(key.to_owned(), old.clone());
+                    Ok((Some(old), true))
+                }
+                None => Ok((None, false)),
+            },
+        })
+    }
+    fn set(&self, key: &str, secret: &str) -> Result<(), String> {
+        self.change(|v, _| {
+            v.insert(key.to_owned(), secret.to_owned());
+            Ok(((), true))
+        })
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        // Out of the vault and, still under the lock, the older launchers' item too: nothing can
+        // copy it back in between.
+        self.change(|v, inner| {
+            v.remove(key);
+            inner.delete(key)?;
+            Ok(((), true))
+        })
+    }
+    fn persistent(&self) -> bool {
+        self.inner.persistent()
     }
 }
 
@@ -746,7 +1029,8 @@ pub fn store() -> &'static dyn SecretStore {
             ))]
             if std::env::var_os("HORIZON_NO_KEYCHAIN").is_none() && SystemStore.get("probe").is_ok()
             {
-                return Box::new(SystemStore);
+                let lock = crate::backend::data_dir().join("vault.lock");
+                return Box::new(Vault::new(SystemStore, Some(lock)));
             }
             Box::<MemoryStore>::default()
         })
@@ -786,6 +1070,55 @@ pub enum Player {
 
 const OFFLINE_NEEDS_OWNER: &str =
     "Offline names need a Microsoft account that owns Minecraft: Java Edition in the launcher.";
+
+/// Renews an account's sign-in now, whatever is left on its token (Prism Launcher's Refresh): a
+/// new Microsoft and Minecraft token, kept. A refused refresh token marks it "sign in again".
+pub fn renew(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    uuid: &str,
+) -> Result<(), String> {
+    let mut secrets = secrets_in(store, uuid).ok_or("That account isn't signed in.")?;
+    let renewed = client_id
+        .ok_or_else(|| NOT_CONFIGURED.to_string())
+        .and_then(|id| refresh_ms(ep, id, &secrets.refresh_token))
+        .and_then(|ms| Ok((minecraft_login(ep, &ms.access)?, ms.refresh)));
+    let result = match renewed {
+        Ok((mc, refresh)) => {
+            secrets = Secrets {
+                owns: secrets.owns,
+                ..Secrets::new(refresh, mc)
+            };
+            Ok(())
+        }
+        Err(e) if e == SIGN_IN_AGAIN => {
+            secrets.sign_in_again = true;
+            Err(e)
+        }
+        Err(e) => return Err(e),
+    };
+    store.set(
+        uuid,
+        &serde_json::to_string(&secrets).map_err(|e| e.to_string())?,
+    )?;
+    result
+}
+
+/// The accounts of `accounts` Microsoft refused to renew, by UUID: they need signing in again.
+pub fn sign_in_again(store: &dyn SecretStore, accounts: &Accounts) -> Vec<String> {
+    accounts
+        .accounts
+        .iter()
+        .filter(|a| needs_sign_in(store, &a.uuid))
+        .map(|a| a.uuid.clone())
+        .collect()
+}
+
+/// Whether Microsoft refused to renew this account's sign-in: it needs signing in again.
+pub fn needs_sign_in(store: &dyn SecretStore, uuid: &str) -> bool {
+    secrets_in(store, uuid).is_some_and(|s| s.sign_in_again)
+}
 
 /// The secrets an account keeps in `store`, if it still has them there.
 fn secrets_in(store: &dyn SecretStore, uuid: &str) -> Option<Secrets> {
