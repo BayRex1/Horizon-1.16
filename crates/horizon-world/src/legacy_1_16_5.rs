@@ -313,6 +313,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_section_palette_round_trips_1165_nbt_schema() {
+        use crate::nbt::{JavaString, Tag};
+
+        let mut section = LegacyBlockSection::air();
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("axis".to_owned(), "y".to_owned());
+        section.set(15, 15, 15, LegacyBlockState {
+            name: "oak_log".to_owned(),
+            properties,
+        }).unwrap();
+        section.set(0, 1, 0, LegacyBlockState::new("stone")).unwrap();
+
+        let encoded = section.to_nbt();
+        assert_eq!(encoded.get("Palette").and_then(|tag| match tag {
+            Tag::List(entries) => entries.first()?.get("Name").and_then(|name| match name {
+                Tag::String(name) => name.to_string().ok(),
+                _ => None,
+            }),
+            _ => None,
+        }).as_deref(), Some("minecraft:air"));
+        assert!(encoded.get("palette").is_none());
+        assert!(encoded.get("BlockStates").is_some());
+
+        let decoded = LegacyBlockSection::from_nbt(&encoded).unwrap();
+        assert_eq!(decoded.get(15, 15, 15).unwrap().name, "oak_log");
+        assert_eq!(decoded.get(15, 15, 15).unwrap().properties.get("axis").map(String::as_str), Some("y"));
+        assert_eq!(decoded.get(0, 1, 0).unwrap().name, "stone");
+        assert_eq!(decoded.get(1, 1, 0).unwrap().name, "air");
+
+        // NBT field casing is version-specific; this catches accidental use of
+        // the modern lowercase palette/data format.
+        let Tag::Compound(map) = encoded else { panic!("section must be a compound") };
+        assert!(map.contains_key(&JavaString::from("Palette")));
+        assert!(map.contains_key(&JavaString::from("BlockStates")));
+    }
+
+    #[test]
+    fn legacy_uniform_section_omits_block_states_and_checks_bounds() {
+        use crate::nbt::{JavaString, Tag};
+        let section = LegacyBlockSection::uniform(LegacyBlockState::new("stone"));
+        let encoded = section.to_nbt();
+        assert!(encoded.get("BlockStates").is_none());
+        assert_eq!(LegacyBlockSection::from_nbt(&encoded).unwrap().get(0, 0, 0).unwrap().name, "stone");
+        assert!(section.get(16, 0, 0).is_err());
+        assert!(section.get_index(4096).is_err());
+
+        let malformed = Tag::compound([(
+            JavaString::from("Palette"),
+            Tag::List(Vec::new()),
+        )]);
+        assert!(LegacyBlockSection::from_nbt(&malformed).is_err());
+    }
+
+    #[test]
     fn legacy_block_registry_is_complete_and_ordered() {
         let blocks = blocks().expect("embedded 1.16.x block data must parse");
         assert_eq!(blocks.len(), 763);
