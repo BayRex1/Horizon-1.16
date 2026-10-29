@@ -432,6 +432,7 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
     let mut sections: Vec<LegacyBlockSection> = (0..SECTION_COUNT)
         .map(|_| LegacyBlockSection::uniform(air.clone()))
         .collect();
+    let mut terrain_heights = vec![0i32; 256];
     let mut surface = vec![0i32; 256];
 
     for z in 0..16 {
@@ -439,7 +440,9 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
             let world_x = chunk_x.wrapping_mul(16).wrapping_add(x as i32);
             let world_z = chunk_z.wrapping_mul(16).wrapping_add(z as i32);
             let height = terrain_height(seed, world_x, world_z);
-            surface[x | (z << 4)] = height + 1;
+            let column = x | (z << 4);
+            terrain_heights[column] = height;
+            surface[column] = height.max(SEA_LEVEL) + 1;
             for y in 0..=height {
                 let state = if y == 0 {
                     &bedrock
@@ -477,7 +480,7 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
             let world_y = index as i32 * SECTION_HEIGHT + local_y as i32;
             for z in 0..16usize {
                 for x in 0..16usize {
-                    let column_height = surface[x | (z << 4)] - 1;
+                    let column_height = terrain_heights[x | (z << 4)];
                     let light = if world_y <= column_height {
                         0
                     } else if world_y <= SEA_LEVEL {
@@ -638,7 +641,7 @@ pub fn create_bootstrap_world(
         ("Enabled", Tag::List(vec![string("vanilla")])),
         ("Disabled", Tag::List(Vec::new())),
     ]);
-    let spawn_y = terrain_height(seed, 8, 8) + 1;
+    let spawn_y = terrain_height(seed, 8, 8).max(SEA_LEVEL) + 1;
     let data = compound(vec![
         ("DataVersion", Tag::Int(2586)),
         ("LevelName", string(name)),
