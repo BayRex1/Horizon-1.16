@@ -282,11 +282,10 @@ pub fn import_legacy_1_16_5(
 
     // Resolve the old numeric biome registry once, rather than reparsing the
     // version-pinned JSON for every chunk.
-    let legacy_biome_names: HashMap<u32, String> =
-        horizon_world::legacy_1_16_5::biomes()?
-            .into_iter()
-            .map(|biome| (biome.id, biome.name))
-            .collect();
+    let legacy_biome_names: HashMap<u32, String> = horizon_world::legacy_1_16_5::biomes()?
+        .into_iter()
+        .map(|biome| (biome.id, biome.name))
+        .collect();
 
     let mut chunks = Vec::new();
     for path in region_paths {
@@ -337,13 +336,18 @@ pub fn import_legacy_1_16_5(
                                     "modified_gravelly_mountains" => "modified_gravelly_hills",
                                     "giant_tree_taiga" => "old_growth_pine_taiga",
                                     "giant_spruce_taiga" => "old_growth_spruce_taiga",
-                                    "tall_birch_forest" | "tall_birch_hills" => "old_growth_birch_forest",
-                                    "shattered_savanna" | "shattered_savanna_plateau" => "windswept_savanna",
+                                    "tall_birch_forest" | "tall_birch_hills" => {
+                                        "old_growth_birch_forest"
+                                    }
+                                    "shattered_savanna" | "shattered_savanna_plateau" => {
+                                        "windswept_savanna"
+                                    }
                                     "snowy_tundra" => "snowy_plains",
                                     "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
                                     "stone_shore" => "stony_shore",
                                     "snowy_mountains" => "snowy_slopes",
-                                    "wooded_badlands_plateau" | "modified_wooded_badlands_plateau" => "wooded_badlands",
+                                    "wooded_badlands_plateau"
+                                    | "modified_wooded_badlands_plateau" => "wooded_badlands",
                                     "modified_badlands_plateau" => "badlands",
                                     other => other,
                                 };
