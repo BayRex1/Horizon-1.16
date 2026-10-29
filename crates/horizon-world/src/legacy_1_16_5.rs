@@ -752,6 +752,54 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_world_writes_level_dat_and_spawn_region() {
+        use crate::{
+            compression::Compression,
+            nbt::{self, Limits, Tag},
+            region::RegionFile,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "horizon-legacy-world-folder-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let world = base.join("Test World");
+        create_bootstrap_world(&world, "Test World", 987654321).unwrap();
+
+        let level_bytes = std::fs::read(world.join("level.dat")).unwrap();
+        let uncompressed = Compression::Gzip.decode(&level_bytes, Limits::default().max_bytes).unwrap();
+        let (level_dat, used) = nbt::read_named(&uncompressed, Limits::default()).unwrap();
+        assert_eq!(used, uncompressed.len());
+        assert_eq!(level_dat.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+        let data = level_dat.tag.get("Data").expect("level.dat Data");
+        assert_eq!(data.get("LevelName"), Some(&Tag::String(crate::nbt::JavaString::from("Test World"))));
+        assert_eq!(data.get("RandomSeed"), Some(&Tag::Long(987654321)));
+        assert!(data.get("WorldGenSettings").and_then(|tag| tag.get("dimensions")).is_some());
+        assert_eq!(data.get("SpawnX"), Some(&Tag::Int(8)));
+        assert_eq!(data.get("SpawnZ"), Some(&Tag::Int(8)));
+        assert_eq!(std::fs::metadata(world.join("session.lock")).unwrap().len(), 8);
+
+        let region_dir = world.join("region");
+        let mut count = 0;
+        for rz in -1..=0 {
+            for rx in -1..=0 {
+                let path = region_dir.join(format!("r.{rx}.{rz}.mca"));
+                let mut region = RegionFile::open(path).unwrap();
+                count += region.chunks().count();
+            }
+        }
+        assert_eq!(count, 25);
+        let mut spawn_region = RegionFile::open(region_dir.join("r.0.0.mca")).unwrap();
+        let spawn_chunk = spawn_region.read(horizon_core::position::ChunkPos::new(0, 0)).unwrap().unwrap();
+        let chunk_nbt = spawn_chunk.nbt(Limits::default()).unwrap();
+        assert_eq!(chunk_nbt.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn saved_bootstrap_chunk_can_be_reopened_from_anvil_region() {
         use crate::{nbt::Limits, region::RegionFile};
         use horizon_core::position::ChunkPos;
