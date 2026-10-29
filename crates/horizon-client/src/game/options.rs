@@ -272,8 +272,8 @@ impl Game<'_> {
             r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
             r.set_hdr(
                 s.horizon.hdr,
-                s.horizon.hdr_paper_white as f32,
-                s.horizon.hdr_peak as f32,
+                s.horizon.paper_white_nits() as f32,
+                s.horizon.peak_nits() as f32,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
         }
