@@ -534,6 +534,33 @@ pub fn to_client_runtime_chunk(
     })
 }
 
+
+/// Load a saved 1.16.5 chunk from the world's root `region/` directory and
+/// adapt its section coordinates for the current client's vertical layout.
+/// This only decodes data; it does not yet insert the chunk into the live
+/// streaming renderer or change the on-disk legacy chunk.
+pub fn load_client_runtime_chunk(
+    world_directory: impl AsRef<std::path::Path>,
+    chunk_x: i32,
+    chunk_z: i32,
+) -> std::io::Result<crate::nbt::NamedTag> {
+    use crate::{compression::invalid, nbt::Limits, region::RegionFile};
+    use horizon_core::position::ChunkPos;
+
+    let chunk_pos = ChunkPos::new(chunk_x, chunk_z);
+    let region_pos = chunk_pos.region();
+    let path = world_directory
+        .as_ref()
+        .join("region")
+        .join(format!("r.{}.{}.mca", region_pos.x, region_pos.z));
+    let mut region = RegionFile::open(path)?;
+    let record = region
+        .read(chunk_pos)?
+        .ok_or_else(|| invalid("legacy chunk is not present in world region"))?;
+    let root = record.nbt(Limits::default())?;
+    to_client_runtime_chunk(&root)
+}
+
 fn terrain_hash(seed: i64, x: i32, z: i32) -> u64 {
     let mut value = (seed as u64)
         ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -995,6 +1022,49 @@ mod tests {
         let (decoded, used) = nbt::read_named(&encoded, Limits::default()).unwrap();
         assert_eq!(used, encoded.len());
         assert_eq!(decoded, first);
+    }
+
+    #[test]
+    fn client_chunk_loader_reads_legacy_region_without_rewriting_it() {
+        use crate::nbt::{Limits, Tag};
+        use crate::region::RegionFile;
+        use horizon_core::position::ChunkPos;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "horizon-legacy-client-load-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        save_bootstrap_chunk(&directory.join("region"), 321, 0, 0).unwrap();
+
+        let loaded = load_client_runtime_chunk(&directory, 0, 0)
+            .expect("client loader should decode the saved legacy chunk");
+        let Tag::List(sections) = loaded.tag.get("sections").expect("sections") else {
+            panic!("client sections should be a list");
+        };
+        assert_eq!(sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(4)));
+        assert_eq!(sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(19)));
+
+        let mut region = RegionFile::open(directory.join("region/r.0.0.mca")).unwrap();
+        let record = region.read(ChunkPos::new(0, 0)).unwrap().expect("source chunk remains");
+        let original = record.nbt(Limits::default()).unwrap();
+        assert_eq!(
+            original.tag.get("DataVersion"),
+            Some(&Tag::Int(2586)),
+            "the on-disk chunk must remain in legacy format"
+        );
+        assert_eq!(
+            original.tag.get("Level").and_then(|level| level.get("Sections"))
+                .and_then(|sections| match sections {
+                    Tag::List(values) => values.first()?.get("Y"),
+                    _ => None,
+                }),
+            Some(&Tag::Byte(0))
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
