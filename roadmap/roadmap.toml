@@ -859,8 +859,7 @@ title = "Proximity voice chat as a native mod"
 status = "later"
 area = "mods"
 plain = """Hear nearby players talk, as with the voice chat mods of other Minecraft versions, as a Horizon mod."""
-dev = """Needs server mods, mod networking and an audio interface in the mod API before anything can be built \
-(docs/api/mods.md)."""
+dev = """Experimental API level 8 provides microphone PCM, streaming positional playback, connected UDP and play-state custom payloads, including client-server mod messages (docs/api/realtime.md). Remaining: an interoperable voice mod implementing codec, authentication, encryption and protocol negotiation, plus cross-platform audio hardware verification."""
 links = ["docs/api/mods.md"]
 
 [[item]]

@@ -758,7 +758,9 @@ Hear nearby players talk, as with the voice chat mods of other Minecraft version
 
 <details><summary>Technical</summary>
 
-Needs server mods, mod networking and an audio interface in the mod API before anything can be built ([docs/api/mods.md](docs/api/mods.md)).
+Experimental API level 8 provides microphone PCM, streaming positional playback, connected UDP and play-state custom payloads, including client-server mod messages (docs/api/realtime.md). Remaining: an interoperable voice mod implementing codec, authentication, encryption and protocol negotiation, plus cross-platform audio hardware verification.
+
+More: [docs/api/mods.md](docs/api/mods.md)
 
 </details>
 

@@ -1,6 +1,6 @@
-//! Horizon's mods (`docs/mods.md`): WebAssembly components written against
+//! Horizon mods: native services (`docs/native-voice.md`) and WebAssembly components written against
 //! `crates/horizon-mod-sdk/wit/horizon.wit`, each in its own sandbox with
-//! no file, network or clock access, a memory cap and a time budget per
+//! no ambient file, network or clock access, a memory cap and a time budget per
 //! call. A mod that traps or overruns is turned off; the game goes on.
 //!
 //! Nothing here runs unless a mod is installed and turned on: an empty
@@ -13,10 +13,12 @@ pub mod content;
 pub mod index;
 pub mod manifest;
 pub mod modpack;
+pub mod native;
 #[cfg(feature = "runtime")]
 mod runtime;
 #[cfg(feature = "runtime")]
 pub mod testing;
+mod transport;
 
 pub use content::Content;
 pub use manifest::{Capability, Manifest, Package, Side, find};

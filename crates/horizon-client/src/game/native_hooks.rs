@@ -35,7 +35,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 3;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -269,6 +269,10 @@ impl Game<'_> {
     /// and on servers), and the server's own (`native_window` is false
     /// there: the single player server thread, a dedicated server).
     pub(super) fn native_tick(&mut self) {}
+    /// Declare native audio/network service users, including their reviewed bundle identity. API 3.
+    pub(super) fn native_voice_mods(&mut self, mods: &mut Vec<horizon_mods::native::Declaration>) {
+        let _ = mods;
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -324,6 +328,17 @@ impl Game<'_> {
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
+    /// Per-mod bounded audio, UDP, DNS and custom payload helpers. No WASM required. API 3.
+    pub(super) fn native_voice(
+        &mut self,
+        mod_id: &str,
+    ) -> Result<&mut horizon_mods::native::Voice, String> {
+        self.mods.native_voice.voice(mod_id)
+    }
+    /// Online player UUIDs/names and tracked positions for positional voice. API 3.
+    pub(super) fn native_voice_players(&self) -> Vec<horizon_mods::native::Player> {
+        self.native_voice_player_snapshot()
+    }
     /// Whether the player left mod `mod_id` on in Options > Mods. A mod
     /// turned off does nothing (check this first in each hook) until the
     /// launcher's next build leaves it out.
@@ -500,6 +515,7 @@ impl Game<'_> {
 impl Game<'_> {
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {
+        self.refresh_native_voice();
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
         // A WebAssembly mod of the same id doesn't run (`start_mods`): the
@@ -511,18 +527,22 @@ impl Game<'_> {
         for m in mods {
             let mut buttons = Vec::new();
             self.native_settings(&m.id, &mut buttons);
+            buttons.extend(self.mods.native_voice.permission_buttons(&m.id));
             let page = NativePage {
                 keys: m.keys,
                 buttons,
             };
             self.settings.mods.installed.push(Installed {
-                id: m.id,
+                id: m.id.clone(),
                 title: m.title,
-                description: m.description,
+                description: m.description
+                    + " "
+                    + &self.mods.native_voice.permission_description(&m.id),
                 problem: None,
                 dev: false,
                 has_settings: false,
                 native: Some(page),
+                requests_microphone: false,
             });
         }
     }
@@ -532,9 +552,18 @@ impl Game<'_> {
         let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
             return;
         };
-        self.native_settings_click(&id, button);
         let mut buttons = Vec::new();
         self.native_settings(&id, &mut buttons);
+        if button >= buttons.len() {
+            self.mods
+                .native_voice
+                .permission_click(&id, button - buttons.len());
+        } else {
+            self.native_settings_click(&id, button);
+        }
+        buttons.clear();
+        self.native_settings(&id, &mut buttons);
+        buttons.extend(self.mods.native_voice.permission_buttons(&id));
         let row = self.settings.mods.installed.get_mut(i);
         if let Some(page) = row.and_then(|m| m.native.as_mut()) {
             page.buttons = buttons;

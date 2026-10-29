@@ -20,6 +20,8 @@ pub struct ModList {
     /// Ids of the native mods the player turned off: they rest
     /// (`native_on`) until the launcher's next build leaves them out.
     pub disabled: BTreeSet<String>,
+    /// Explicit recording grants, independent of enabling a mod.
+    pub microphones: BTreeSet<String>,
     /// The keys the player chose for mods' keys, mod id → key name → key
     /// (`key.<id>.<name>:key.keyboard.x` lines).
     pub keys: BTreeMap<String, BTreeMap<String, String>>,
@@ -41,6 +43,8 @@ pub struct Installed {
     /// The running mod set a page of widgets (capability `ui`): its row
     /// gains a Settings button.
     pub has_settings: bool,
+    /// A sandboxed mod declares microphone access; capture still needs a grant.
+    pub requests_microphone: bool,
     /// A native mod (`game/native_hooks.rs`): built into the game, on until
     /// the player turns it off, and its settings page.
     pub native: Option<NativePage>,
@@ -83,7 +87,15 @@ impl ModList {
                 entry.insert(name.to_owned(), v.trim().to_owned());
             }
         }
+        let microphones = text
+            .lines()
+            .filter_map(|l| l.split_once(':'))
+            .filter(|(_, v)| v.trim() == "true")
+            .filter_map(|(k, _)| k.trim().strip_prefix("microphone."))
+            .map(str::to_owned)
+            .collect();
         Self {
+            microphones,
             enabled,
             disabled,
             keys,
@@ -97,7 +109,11 @@ impl ModList {
             keys.iter()
                 .map(move |(name, key)| format!("key.{id}.{name}:{key}\n"))
         });
-        on.chain(off).chain(keys).collect()
+        let microphones = self
+            .microphones
+            .iter()
+            .map(|id| format!("microphone.{id}:true\n"));
+        on.chain(off).chain(keys).chain(microphones).collect()
     }
     /// Mod `id`'s chosen keys, for `Mods::set_bindings`.
     pub fn keys_of(&self, id: &str) -> Vec<(&str, &str)> {
@@ -110,6 +126,7 @@ impl ModList {
         if self.enabled.is_empty()
             && self.disabled.is_empty()
             && self.keys.is_empty()
+            && self.microphones.is_empty()
             && !path.exists()
         {
             return;
@@ -180,6 +197,7 @@ mod tests {
             dev,
             has_settings: false,
             native: None,
+            requests_microphone: false,
         };
         let mut list = ModList {
             installed: vec![installed("a", false), installed("b", true)],
@@ -205,5 +223,28 @@ mod tests {
         list.toggle(2);
         assert!(list.is_on(2));
         assert_eq!(list.serialize(), "mod.c:true\n");
+    }
+}
+
+#[cfg(test)]
+mod microphone_tests {
+    use super::*;
+    #[test]
+    fn recording_requires_an_independent_persisted_grant() {
+        let old = ModList::parse("mod.voice:true\n");
+        assert!(old.microphones.is_empty());
+        let granted = ModList::parse("mod.voice:true\nmicrophone.voice:true\n");
+        assert!(granted.microphones.contains("voice"));
+        assert_eq!(ModList::parse(&granted.serialize()), granted);
+    }
+
+    #[test]
+    fn microphone_grants_preserve_native_disabled_state() {
+        let text = "mod.native_voice:false\nmod.voice:true\nmicrophone.voice:true\nkey.native_voice.ptt:key.keyboard.v\n";
+        let list = ModList::parse(text);
+        assert!(list.disabled.contains("native_voice"));
+        assert!(list.microphones.contains("voice"));
+        assert!(!list.microphones.contains("native_voice"));
+        assert_eq!(ModList::parse(&list.serialize()), list);
     }
 }

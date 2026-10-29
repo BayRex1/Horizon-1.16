@@ -526,6 +526,38 @@ mod run {
                 line
             };
             match output {
+                Output::Payload {
+                    player: Some(player),
+                    channel,
+                    data,
+                } => {
+                    if self.options.execution_role.is_client()
+                        && self.remote.is_none()
+                        && self.player.is_some()
+                        && self.player_uuid_string() == player
+                    {
+                        self.mods.native_voice.deliver(None, &channel, &data);
+                        self.mods.mods.custom_payload(None, &channel, &data);
+                    } else if let Some(host) = host.as_deref_mut().or(self.lan.as_mut())
+                        && let Some(conn) = host
+                            .hub
+                            .guests
+                            .iter()
+                            .find(|g| g.placed && uuid_string(g.uuid) == player)
+                            .map(|g| g.conn)
+                    {
+                        host.hub.send_to(
+                            conn,
+                            &C::CustomPayload(
+                                horizon_protocol::packets::configuration::CustomPayload {
+                                    channel,
+                                    data,
+                                },
+                            ),
+                        );
+                    }
+                }
+
                 Output::Tell { name, player, text } => {
                     self.tell_server_player(host, &player, named(&name, text));
                 }

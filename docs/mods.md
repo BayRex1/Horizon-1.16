@@ -26,7 +26,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 ## Design goals
 
 1. **Safe to install.** A mod is untrusted code. It runs in a WebAssembly
-   sandbox with no file, network, process or clock access, a memory cap and a
+   sandbox with no ambient file, network, process or clock access, a memory cap and a
    time budget per call. It can only do what its capabilities grant, and the
    player sees those before turning it on.
 2. **One file for every platform.** The same `.hmod` runs on Windows, macOS
@@ -61,7 +61,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
   `horizon:mods/horizon-mod` world. The WIT file is the whole API: host
   functions the mod imports (`log`, `game`, `chat`, `hud`) and the `events`
   interface it exports. No WASI: the component cannot even name a file or a
-  socket.
+  socket. Experimental [realtime APIs](api/realtime.md) provide permissioned PCM,
+  connected UDP and registered Minecraft custom payload channels through host calls.
 - **Capabilities are imports.** Every imported interface except `log` is a
   capability. The manifest declares them; the game reads the component's
   actual imports and refuses a mod whose code imports one its manifest does not
@@ -689,3 +690,12 @@ Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
 API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
 textures), then server hooks (0.3) and block entities, menus, capabilities and
 `net` (0.4), in the order the ATM10 inventory needs them.
+
+## Realtime audio and mod networking (experimental)
+
+API level 8 exposes microphone PCM, streaming/positional playback, connected UDP
+and binary Minecraft custom payloads to client mods, plus player-addressed
+custom payloads for server mods. Each needs an explicit capability and experimental
+opt-in. See [the realtime API guide](api/realtime.md) and the `voice-lab` SDK example.
+These APIs provide the building blocks for a Simple Voice Chat compatibility mod;
+the client does not implement that voice protocol itself.

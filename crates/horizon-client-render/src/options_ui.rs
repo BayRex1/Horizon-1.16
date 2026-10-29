@@ -871,6 +871,7 @@ enum Act {
     ResetPadKey(&'static str),
     ResetPadKeys,
     ToggleMod(usize),
+    ToggleMicrophone(usize),
     /// Pick `s.shader_packs[i]`, or turn it off when it is the pick.
     PickShaderPack(usize),
     OpenShaderPackFolder,
@@ -1548,7 +1549,7 @@ impl OptionsUi {
                     .installed
                     .iter()
                     .enumerate()
-                    .map(|(i, installed)| {
+                    .flat_map(|(i, installed)| {
                         let mut label = Text::literal(format!("{}: ", installed.title))
                             .append(on_off(s.mods.is_on(i)));
                         if installed.problem.is_some() {
@@ -1559,7 +1560,7 @@ impl OptionsUi {
                         let dead = installed.dev || installed.id.is_empty();
                         // A running mod with a settings page (capability
                         // `ui`) gets its own button beside the toggle.
-                        if installed.has_settings || installed.native.is_some() {
+                        let main = if installed.has_settings || installed.native.is_some() {
                             let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
                             let settings = button(
                                 0.0,
@@ -1575,7 +1576,25 @@ impl OptionsUi {
                         } else {
                             let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
                             Row::Buttons(if dead { inactive(widget) } else { widget }, None)
+                        };
+                        let mut rows = vec![main];
+                        if installed.requests_microphone {
+                            let allowed = s.mods.microphones.contains(&installed.id);
+                            rows.push(Row::Buttons(
+                                button(
+                                    0.0,
+                                    0.0,
+                                    310.0,
+                                    Text::literal(format!(
+                                        "Microphone: {}",
+                                        if allowed { "Allowed" } else { "Blocked" }
+                                    )),
+                                    Act::ToggleMicrophone(i),
+                                ),
+                                None,
+                            ));
                         }
+                        rows
                     })
                     .collect()
             }
@@ -2211,6 +2230,19 @@ impl OptionsUi {
                 {
                     tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
                 }
+                if let WKind::Button {
+                    act: Act::NativeButton(i, b),
+                    ..
+                } = &wd.kind
+                    && let Some(m) = s.mods.installed.get(*i)
+                    && let Some(label) = m.native.as_ref().and_then(|p| p.buttons.get(*b))
+                {
+                    tooltip = Some(
+                        atlas
+                            .font
+                            .split(&Text::literal(format!("{label}\n{}", m.description)), 170.0),
+                    );
+                }
                 let key = match &wd.kind {
                     WKind::Button {
                         act: Act::Cycle(opt),
@@ -2607,6 +2639,14 @@ impl OptionsUi {
                         Act::ToggleMod(i) => {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
+                        }
+                        Act::ToggleMicrophone(i) => {
+                            if let Some(installed) = s.mods.installed.get(i) {
+                                if !s.mods.microphones.remove(&installed.id) {
+                                    s.mods.microphones.insert(installed.id.clone());
+                                }
+                                events.push(Event::Changed);
+                            }
                         }
                         Act::ModSettings(i) => {
                             events.push(Event::ButtonClick);
@@ -3172,6 +3212,7 @@ mod tests {
                 id: id.into(),
                 title: id.into(),
                 description: "May show HUD panels.".into(),
+                requests_microphone: false,
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
                 has_settings: false,
@@ -3225,6 +3266,32 @@ mod tests {
             false,
             false,
         );
+        assert!(!s.mods.is_on(0));
+        s.mods.installed[0].requests_microphone = true;
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let mic = widgets
+            .iter()
+            .find(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ToggleMicrophone(0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        ui.click(
+            &mut s,
+            &atlas,
+            mic.x + 1.0,
+            mic.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert!(s.mods.microphones.contains("normal"));
         assert!(!s.mods.is_on(0));
         assert!(!ui.back(&mut s).contains(&Event::Close));
         assert_eq!(ui.page(), Page::Main);

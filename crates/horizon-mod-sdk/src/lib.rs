@@ -40,7 +40,8 @@ wit_bindgen::generate!({
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
 pub use horizon::mods::{
-    browser, chat, command, game, hud, input, log, recipes, render, storage, ui,
+    audio, browser, chat, command, game, hud, input, log, microphone, networking, recipes, render,
+    storage, udp, ui,
 };
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
@@ -198,6 +199,7 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
+    pub use horizon::mods::networking;
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange};
 
@@ -445,3 +447,7 @@ macro_rules! export_server_mod {
         };
     };
 }
+
+/// Native hook API services, without a WebAssembly runtime (feature `native`).
+#[cfg(all(feature = "native", not(target_family = "wasm")))]
+pub use horizon_mods::native;
