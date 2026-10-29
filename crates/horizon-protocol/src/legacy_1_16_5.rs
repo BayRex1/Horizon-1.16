@@ -331,9 +331,7 @@ pub fn decode_chunk_data(payload: &[u8]) -> crate::Result<LegacyChunkColumn> {
         .map(|_| r.nbt())
         .collect::<crate::Result<Vec<_>>>()?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new(
-            "trailing bytes in 1.16.5 chunk packet",
-        ));
+        return Err(crate::Error::new("trailing bytes in 1.16.5 chunk packet"));
     }
     Ok(LegacyChunkColumn {
         x,
