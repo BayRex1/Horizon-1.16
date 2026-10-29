@@ -81,9 +81,11 @@ pub mod login {
 pub mod play {
     pub mod clientbound {
         /// Disconnect while in the world.
-        pub const DISCONNECT: i32 = 0x1A;
+        pub const DISCONNECT: i32 = 0x19;
         /// Keep-alive request carrying a signed 64-bit token.
-        pub const KEEP_ALIVE: i32 = 0x20;
+        pub const KEEP_ALIVE: i32 = 0x21;
+        /// Chunk column data (light data follows in the same packet on 1.16.5).
+        pub const CHUNK_DATA: i32 = 0x20;
         /// Server correction of player position and rotation.
         pub const PLAYER_POSITION_LOOK: i32 = 0x34;
     }
@@ -201,7 +203,7 @@ impl LegacyChunkSection {
     pub fn read(r: &mut crate::buf::Reader) -> crate::Result<Self> {
         let non_air_blocks = r.u16()?;
         let wire_bits = r.u8()?;
-        if wire_bits > 8 && wire_bits < 9 {
+        if wire_bits > 16 {
             return Err(crate::Error::new("invalid 1.16.5 block palette bit width"));
         }
         let (bits_per_block, palette) = if wire_bits == 0 {
@@ -309,6 +311,7 @@ pub struct PlayerState {
 pub enum PlayEvent {
     PositionUpdated(PlayerState),
     Disconnected(String),
+    ChunkReceived { x: i32, z: i32, sections: usize },
     Ignored,
 }
 
@@ -330,6 +333,11 @@ pub fn handle_play_packet(
         }
         play::clientbound::DISCONNECT => {
             Ok(PlayEvent::Disconnected(decode_play_disconnect(payload)?))
+        }
+        play::clientbound::CHUNK_DATA => {
+            let chunk = decode_chunk_data(payload)?;
+            let count = chunk.sections.iter().filter(|s| s.is_some()).count();
+            Ok(PlayEvent::ChunkReceived { x: chunk.x, z: chunk.z, sections: count })
         }
         play::clientbound::PLAYER_POSITION_LOOK => {
             let update = decode_player_position_look(payload)?;
@@ -362,7 +370,7 @@ pub fn run_play_loop(login: OfflineLogin) -> crate::Result<(String, PlayerState)
         let (packet_id, payload) = connection.recv()?;
         match handle_play_packet(&mut connection, packet_id, &payload, &mut state)? {
             PlayEvent::Disconnected(reason) => return Ok((reason, state)),
-            PlayEvent::PositionUpdated(_) | PlayEvent::Ignored => {}
+            PlayEvent::PositionUpdated(_) | PlayEvent::ChunkReceived { .. } | PlayEvent::Ignored => {}
         }
     }
 }
@@ -710,8 +718,9 @@ mod tests {
 
     #[test]
     fn play_packet_ids_match_protocol_754_layout() {
-        assert_eq!(play::clientbound::DISCONNECT, 0x1A);
-        assert_eq!(play::clientbound::KEEP_ALIVE, 0x20);
+        assert_eq!(play::clientbound::DISCONNECT, 0x19);
+        assert_eq!(play::clientbound::KEEP_ALIVE, 0x21);
+        assert_eq!(play::clientbound::CHUNK_DATA, 0x20);
         assert_eq!(play::clientbound::PLAYER_POSITION_LOOK, 0x34);
         assert_eq!(play::serverbound::TELEPORT_CONFIRM, 0x00);
         assert_eq!(play::serverbound::KEEP_ALIVE, 0x10);
