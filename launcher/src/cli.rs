@@ -679,7 +679,7 @@ enum Cmd {
     /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
     /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
-    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// system|en|fr|ru|de|zh (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
     Settings {
@@ -898,7 +898,7 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
                 "system" | "default" => None,
                 code => Some(
                     Language::parse(code)
-                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
+                        .ok_or_else(|| format!("{value}: say system, en, fr, ru, de or zh"))?,
                 ),
             }
         }
@@ -2876,6 +2876,22 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn settings_accepts_german_and_chinese() {
+        use crate::i18n::Language;
+        let mut settings = backend::Settings::default();
+        for (code, language) in [("de", Language::German), ("zh", Language::Chinese)] {
+            set_setting(&mut settings, "language", code).unwrap();
+            assert_eq!(settings.language, Some(language));
+        }
+        assert_eq!(
+            set_setting(&mut settings, "language", "xx").unwrap_err(),
+            "xx: say system, en, fr, ru, de or zh"
+        );
+        set_setting(&mut settings, "language", "system").unwrap();
+        assert_eq!(settings.language, None);
+    }
 
     #[test]
     fn play_takes_extra_arguments_that_start_with_hyphens() {
