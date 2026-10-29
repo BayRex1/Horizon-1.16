@@ -75,9 +75,94 @@ pub mod login {
     }
 }
 
+
+/// Encode the legacy handshake packet and its outer frame.
+///
+/// `next_state` is 1 for status or 2 for login. This function does not
+/// open a socket or change the active Horizon connection implementation.
+pub fn encode_handshake(host: &str, port: u16, next_state: i32) -> crate::Result<Vec<u8>> {
+    use crate::buf::Writer;
+
+    if host.is_empty() || host.len() > 255 || host.contains('\0') {
+        return Err(crate::Error::new("invalid 1.16.5 server host"));
+    }
+    if next_state != 1 && next_state != 2 {
+        return Err(crate::Error::new("handshake next_state must be 1 (status) or 2 (login)"));
+    }
+
+    let mut packet = Writer::new();
+    packet.varint(handshake::INTENTION);
+    packet.varint(PROTOCOL_VERSION);
+    packet.string(host);
+    packet.u16(port);
+    packet.varint(next_state);
+    crate::frame::encode(&packet.data, None)
+}
+
+/// Encode the server-list status request packet with its outer frame.
+pub fn encode_status_request() -> crate::Result<Vec<u8>> {
+    crate::frame::encode(&[status::serverbound::REQUEST as u8], None)
+}
+
+/// Encode a status ping packet with its outer frame.
+pub fn encode_status_ping(payload: i64) -> crate::Result<Vec<u8>> {
+    use crate::buf::Writer;
+    let mut packet = Writer::new();
+    packet.varint(status::serverbound::PING);
+    packet.i64(payload);
+    crate::frame::encode(&packet.data, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encodes_legacy_handshake_for_status_and_login() {
+        use crate::buf::Reader;
+        let frame = encode_handshake("localhost", 25565, 1).unwrap();
+        let mut framed = frame.as_slice();
+        let mut len = 0usize;
+        let mut shift = 0;
+        loop {
+            let b = framed[0];
+            framed = &framed[1..];
+            len |= usize::from(b & 0x7f) << shift;
+            if b & 0x80 == 0 { break; }
+            shift += 7;
+        }
+        assert_eq!(framed.len(), len);
+        let mut packet = Reader::new(framed);
+        assert_eq!(packet.varint().unwrap(), handshake::INTENTION);
+        assert_eq!(packet.varint().unwrap(), 754);
+        assert_eq!(packet.string(255).unwrap(), "localhost");
+        assert_eq!(packet.u16().unwrap(), 25565);
+        assert_eq!(packet.varint().unwrap(), 1);
+        assert_eq!(packet.remaining(), 0);
+
+        let login = encode_handshake("127.0.0.1", 25565, 2).unwrap();
+        assert!(!login.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_legacy_handshakes() {
+        assert!(encode_handshake("", 25565, 1).is_err());
+        assert!(encode_handshake("localhost", 25565, 3).is_err());
+        assert!(encode_handshake("bad\\0host", 25565, 1).is_err());
+    }
+
+    #[test]
+    fn encodes_status_packets() {
+        use crate::buf::Reader;
+        assert_eq!(encode_status_request().unwrap(), vec![1, 0]);
+        let ping = encode_status_ping(0x0102030405060708).unwrap();
+        let mut framed = ping.as_slice();
+        assert_eq!(framed[0], 9);
+        framed = &framed[1..];
+        let mut packet = Reader::new(framed);
+        assert_eq!(packet.varint().unwrap(), 1);
+        assert_eq!(packet.i64().unwrap(), 0x0102030405060708);
+    }
 
     #[test]
     fn targets_java_1_16_5() {
