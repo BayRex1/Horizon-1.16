@@ -29,7 +29,8 @@ Implementation order:
 
 ## Milestone 2 — 1.16.5 local world bootstrap
 
-- [ ] Read the target version metadata and registry information from the user's legally obtained 1.16.5 installation. This requires a separate pinned 1.16.5 preparation path; do not simply change `DATA_VERSION` or relabel the 26.3 bundle.
+- [x] Add `tools/prepare_1_16_5.py`: it pins official 1.16.5 manifest/client/server SHA-1 values, validates the player's local files, and stages client `assets/minecraft` plus server `data/minecraft` inputs. It never downloads or commits the game jars/assets.
+- [ ] Turn the staged inputs into a complete Horizon bundle. The staging tool intentionally does not emit `horizon-resources.json` because the version-specific registry/state exporter and worldgen adapters are not implemented yet.
 - [ ] Build a version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags. Keep the existing 26.3 resource format working until the 1.16.5 bundle is parsed and validated end-to-end.
 - [ ] Make the Create World flow construct a world with 1.16.5 defaults: overworld dimension height, seed, game mode, difficulty, structures and bonus-chest options.
 - [ ] Ensure the first local chunks are generated in-process; no TCP connection or remote chunk packet is involved.
@@ -65,3 +66,19 @@ Protocol-754 groundwork already exists in `crates/horizon-protocol/src/legacy_1_
 ## Acceptance criteria
 
 **Singleplayer milestone:** launch the client, create a world with a fixed seed without network access, see locally generated terrain, spawn safely, move and interact with blocks, save, exit, and reopen the same world without a crash. A successful Rust compilation alone is not sufficient.
+
+
+## Version-specific preparation — first implementation
+
+The 1.16.5 input stager is separate from the existing 26.3 preparer, so the current version's research lock and generated constants stay untouched. It checks the official manifest and jar SHA-1 values before extracting anything, rejects unsafe archive paths, and writes a report that explicitly marks the output as staged inputs rather than a playable bundle.
+
+Example (Linux; use paths for your own launcher install):
+
+```sh
+python3 tools/prepare_1_16_5.py \
+  --minecraft-dir ~/.minecraft \
+  --server-jar ~/Downloads/minecraft_server.1.16.5.jar \
+  --out .local/horizon-client/1.16.5-inputs
+```
+
+The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. The remaining critical work is a 1.16.5 Java-side exporter compatible with that release's obfuscated classes, followed by Rust adapters for its block-state IDs, biome registry, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
