@@ -373,22 +373,47 @@ impl LegacyBlockSection {
     }
 }
 
+fn terrain_hash(seed: i64, x: i32, z: i32) -> u64 {
+    let mut value = (seed as u64)
+        ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (z as i64 as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn lattice_noise(seed: i64, x: i32, z: i32) -> f64 {
+    (terrain_hash(seed, x, z) as f64 / u64::MAX as f64) * 2.0 - 1.0
+}
+
+fn smooth_noise(seed: i64, x: i32, z: i32, scale: i32) -> f64 {
+    let gx = x.div_euclid(scale);
+    let gz = z.div_euclid(scale);
+    let tx = x.rem_euclid(scale) as f64 / scale as f64;
+    let tz = z.rem_euclid(scale) as f64 / scale as f64;
+    let sx = tx * tx * (3.0 - 2.0 * tx);
+    let sz = tz * tz * (3.0 - 2.0 * tz);
+    let a = lattice_noise(seed, gx, gz);
+    let b = lattice_noise(seed, gx + 1, gz);
+    let c = lattice_noise(seed, gx, gz + 1);
+    let d = lattice_noise(seed, gx + 1, gz + 1);
+    let north = a + (b - a) * sx;
+    let south = c + (d - c) * sx;
+    north + (south - north) * sz
+}
+
+fn terrain_height(seed: i64, x: i32, z: i32) -> i32 {
+    (64.0 + smooth_noise(seed, x, z, 48) * 6.0 + smooth_noise(seed ^ 0x5deece66d, x, z, 16) * 2.0)
+        .round()
+        .clamp(55.0, 73.0) as i32
+}
+
 /// Build a deterministic, playable-bootstrap terrain chunk in the Java 1.16.5
 /// Anvil NBT schema. This is intentionally a simple seeded height field, not
 /// claimed to match vanilla's multi-noise terrain generator bit-for-bit.
 pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate::nbt::NamedTag {
     use crate::nbt::{JavaString, NamedTag, Tag};
     use horizon_core::storage::PackedStorage;
-
-    fn terrain_height(seed: i64, x: i32, z: i32) -> i32 {
-        let mut value = (seed as u64)
-            ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-            ^ (z as i64 as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^= value >> 31;
-        61 + (value % 13) as i32
-    }
 
     fn compound(entries: impl IntoIterator<Item = (String, Tag)>) -> Tag {
         Tag::Compound(
@@ -500,6 +525,162 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
             ("Level".to_owned(), level),
         ]),
     }
+}
+
+/// Create a self-contained Java 1.16.5 bootstrap world folder.
+///
+/// This is a deliberately small bootstrap generator, not vanilla's exact
+/// multi-noise terrain algorithm. It writes level.dat, session.lock, and a
+/// 5×5 spawn area of legacy-format chunks so the world has room around spawn.
+pub fn create_bootstrap_world(
+    directory: impl AsRef<std::path::Path>,
+    name: &str,
+    seed: i64,
+) -> std::io::Result<()> {
+    use crate::{
+        compression::Compression,
+        nbt::{self, JavaString, Limits, NamedTag, Tag},
+    };
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    let directory = directory.as_ref();
+    if name.trim().is_empty() {
+        return Err(crate::compression::invalid("world name must not be empty"));
+    }
+    fs::create_dir(directory)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| crate::compression::invalid(e.to_string()))?
+        .as_millis()
+        .min(i64::MAX as u128) as i64;
+
+    let string = |value: &str| Tag::String(JavaString::from(value));
+    let compound = |entries: Vec<(&str, Tag)>| Tag::compound(entries);
+    let dimension = |dimension_type: &str, settings: &str, biome: &str| {
+        compound(vec![
+            ("type", string(dimension_type)),
+            ("generator", compound(vec![
+                ("type", string("minecraft:noise")),
+                ("seed", Tag::Long(seed)),
+                ("settings", string(settings)),
+                ("biome_source", compound(vec![
+                    ("type", string("minecraft:fixed")),
+                    ("biome", string(biome)),
+                ])),
+            ])),
+        ])
+    };
+    let dimensions = compound(vec![
+        ("minecraft:overworld", compound(vec![
+            ("type", string("minecraft:overworld")),
+            ("generator", compound(vec![
+                ("type", string("minecraft:noise")),
+                ("seed", Tag::Long(seed)),
+                ("settings", string("minecraft:overworld")),
+                ("biome_source", compound(vec![
+                    ("type", string("minecraft:vanilla_layered")),
+                    ("seed", Tag::Long(seed)),
+                    ("large_biomes", Tag::Byte(0)),
+                ])),
+            ])),
+        ])),
+        ("minecraft:the_nether", dimension(
+            "minecraft:the_nether", "minecraft:nether", "minecraft:nether_wastes"
+        )),
+        ("minecraft:the_end", dimension(
+            "minecraft:the_end", "minecraft:end", "minecraft:the_end"
+        )),
+    ]);
+    let game_rules = compound(vec![
+        ("doDaylightCycle", string("true")),
+        ("doWeatherCycle", string("true")),
+        ("doMobSpawning", string("true")),
+        ("mobGriefing", string("true")),
+        ("keepInventory", string("false")),
+        ("doFireTick", string("true")),
+        ("randomTickSpeed", string("3")),
+        ("spawnRadius", string("10")),
+        ("reducedDebugInfo", string("false")),
+        ("naturalRegeneration", string("true")),
+        ("doImmediateRespawn", string("false")),
+        ("announceAdvancements", string("true")),
+    ]);
+    let world_gen = compound(vec![
+        ("seed", Tag::Long(seed)),
+        ("generate_features", Tag::Byte(1)),
+        ("bonus_chest", Tag::Byte(0)),
+        ("dimensions", dimensions),
+    ]);
+    let data_packs = compound(vec![
+        ("Enabled", Tag::List(vec![string("vanilla")])),
+        ("Disabled", Tag::List(Vec::new())),
+    ]);
+    let spawn_y = terrain_height(seed, 8, 8) + 1;
+    let data = compound(vec![
+        ("DataVersion", Tag::Int(2730)),
+        ("LevelName", string(name)),
+        ("version", Tag::Int(19133)),
+        ("Version", compound(vec![
+            ("Id", Tag::Int(2730)),
+            ("Name", string("1.16.5")),
+            ("Snapshot", Tag::Byte(0)),
+        ])),
+        ("GameType", Tag::Int(0)),
+        ("MapFeatures", Tag::Byte(1)),
+        ("hardcore", Tag::Byte(0)),
+        ("allowCommands", Tag::Byte(0)),
+        ("Difficulty", Tag::Byte(2)),
+        ("DifficultyLocked", Tag::Byte(0)),
+        ("initialized", Tag::Byte(1)),
+        ("SpawnX", Tag::Int(8)),
+        ("SpawnY", Tag::Int(spawn_y)),
+        ("SpawnZ", Tag::Int(8)),
+        ("Time", Tag::Long(0)),
+        ("DayTime", Tag::Long(0)),
+        ("LastPlayed", Tag::Long(now)),
+        ("SizeOnDisk", Tag::Long(0)),
+        ("RandomSeed", Tag::Long(seed)),
+        ("raining", Tag::Byte(0)),
+        ("rainTime", Tag::Int(0)),
+        ("thundering", Tag::Byte(0)),
+        ("thunderTime", Tag::Int(0)),
+        ("clearWeatherTime", Tag::Int(0)),
+        ("GameRules", game_rules),
+        ("WorldGenSettings", world_gen),
+        ("DataPacks", data_packs),
+        ("WanderingTraderSpawnDelay", Tag::Int(0)),
+        ("WanderingTraderSpawnChance", Tag::Int(25)),
+    ]);
+    let root = NamedTag {
+        name: JavaString::default(),
+        tag: compound(vec![
+            ("DataVersion", Tag::Int(2730)),
+            ("Data", data),
+        ]),
+    };
+    let encoded = Compression::Gzip.encode(
+        &nbt::write_named(&root, Limits::default()).map_err(|e| crate::compression::invalid(e.to_string()))?
+    )?;
+    let mut level = OpenOptions::new().write(true).create_new(true).open(directory.join("level.dat"))?;
+    level.write_all(&encoded)?;
+    level.sync_all()?;
+
+    let mut lock = OpenOptions::new().write(true).create_new(true).open(directory.join("session.lock"))?;
+    lock.write_all(&now.to_be_bytes())?;
+    lock.sync_all()?;
+
+    let region_directory = directory.join("region");
+    fs::create_dir(&region_directory)?;
+    for chunk_z in -2..=2 {
+        for chunk_x in -2..=2 {
+            save_bootstrap_chunk(&region_directory, seed, chunk_x, chunk_z)?;
+        }
+    }
+    Ok(())
 }
 
 /// Persist one generated chunk to its Anvil region file using the 1.16.5
