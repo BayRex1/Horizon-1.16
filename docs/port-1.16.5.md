@@ -23,6 +23,7 @@ Keep this as an isolated branch until the old protocol and gameplay path have te
 - [ ] Extend the version import/generation tools to accept an older target version rather than assuming a forward-only upgrade.
 - [ ] Generate version facts and packet IDs from the 1.16.5 protocol data.
 - [ ] Implement 1.16.5 handshake/status/login/play packet layouts and state transitions. 1.16.5 predates the modern configuration state and secure-chat protocol, so current state-machine assumptions must be reviewed rather than copied blindly.
+- [x] Add an isolated protocol-754 module with handshake, status request/ping, and username-only Login Start frame encoders plus unit tests. This is groundwork only; these encoders are not yet wired into the live connection.
 - [ ] Add protocol tests using captured/generated fixtures and verify status ping, offline/local login where supported, and disconnect handling.
 
 ### Milestone 3 — playable world
