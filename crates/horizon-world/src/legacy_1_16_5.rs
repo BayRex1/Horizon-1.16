@@ -1055,7 +1055,7 @@ mod tests {
         for rz in -1..=0 {
             for rx in -1..=0 {
                 let path = region_dir.join(format!("r.{rx}.{rz}.mca"));
-                let mut region = RegionFile::open(path).unwrap();
+                let region = RegionFile::open(path).unwrap();
                 count += region.chunks().count();
             }
         }
