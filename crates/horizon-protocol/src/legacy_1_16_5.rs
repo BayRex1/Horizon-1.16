@@ -187,6 +187,112 @@ pub fn encode_player_position_rotation(
     Ok(packet.data)
 }
 
+/// One decoded 1.16.5 chunk section. Block-state values are registry IDs
+/// from the 1.16.5 global block-state palette when palette is empty.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyChunkSection {
+    pub non_air_blocks: u16,
+    pub bits_per_block: u8,
+    pub palette: Vec<i32>,
+    pub data: Vec<i64>,
+}
+impl LegacyChunkSection {
+    /// Decode a protocol-754 section's block-state paletted container.
+    pub fn read(r: &mut crate::buf::Reader) -> crate::Result<Self> {
+        let non_air_blocks = r.u16()?;
+        let wire_bits = r.u8()?;
+        if wire_bits > 8 && wire_bits < 9 {
+            return Err(crate::Error::new("invalid 1.16.5 block palette bit width"));
+        }
+        let (bits_per_block, palette) = if wire_bits == 0 {
+            (0, vec![r.varint()?])
+        } else if wire_bits <= 4 {
+            let n = r.count(1usize << 4)?;
+            (4, (0..n).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?)
+        } else if wire_bits <= 8 {
+            let n = r.count(1usize << wire_bits)?;
+            (wire_bits, (0..n).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?)
+        } else {
+            (wire_bits, Vec::new())
+        };
+        let expected = if bits_per_block == 0 { 0 } else { 4096usize.div_ceil(64 / bits_per_block as usize) };
+        let count = r.count(4096)?;
+        if count != expected {
+            return Err(crate::Error::new(format!("invalid 1.16.5 block storage length: expected {expected}, got {count}")));
+        }
+        let data = r.fixed_longs(count)?;
+        Ok(Self { non_air_blocks, bits_per_block, palette, data })
+    }
+
+    /// Resolve a block-state registry ID for the local section index (0..4095).
+    pub fn block_state(&self, index: usize) -> Option<i32> {
+        if index >= 4096 { return None; }
+        if self.bits_per_block == 0 { return self.palette.first().copied(); }
+        let bits = self.bits_per_block as usize;
+        let per_long = 64 / bits;
+        let word = *self.data.get(index / per_long)? as u64;
+        let palette_index = ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
+        if self.palette.is_empty() { Some(palette_index as i32) } else { self.palette.get(palette_index).copied() }
+    }
+}
+
+/// A partial 1.16.5 chunk column. Heightmaps and block-entity NBT are preserved
+/// as tags; lighting data arrives in separate packets and is not included here.
+#[derive(Clone, Debug)]
+pub struct LegacyChunkColumn {
+    pub x: i32,
+    pub z: i32,
+    pub full_chunk: bool,
+    pub section_mask: u16,
+    pub heightmaps: horizon_world::nbt::Tag,
+    pub biomes: Vec<i32>,
+    pub sections: Vec<Option<LegacyChunkSection>>,
+    pub block_entities: Vec<horizon_world::nbt::Tag>,
+}
+
+/// Decode Clientbound Level Chunk With Light's legacy chunk-data portion
+/// (the 1.16.5 ClientboundLevelChunkPacketData layout).
+pub fn decode_chunk_data(payload: &[u8]) -> crate::Result<LegacyChunkColumn> {
+    let mut r = crate::buf::Reader::new(payload);
+    let x = r.i32()?;
+    let z = r.i32()?;
+    let full_chunk = r.bool()?;
+    let mask = r.varint()?;
+    if !(0..=0xffff).contains(&mask) {
+        return Err(crate::Error::new("invalid 1.16.5 chunk section mask"));
+    }
+    let section_mask = mask as u16;
+    let heightmaps = r.nbt()?;
+    let biomes = if full_chunk {
+        let count = r.count(1024)?;
+        if count != 1024 {
+            return Err(crate::Error::new("1.16.5 full chunk must contain 1024 biome IDs"));
+        }
+        (0..count).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    let section_bytes = r.count(2 * 1024 * 1024)?;
+    let mut section_reader = crate::buf::Reader::new(r.bytes(section_bytes)?);
+    let mut sections = Vec::with_capacity(16);
+    for section_y in 0..16 {
+        if section_mask & (1 << section_y) != 0 {
+            sections.push(Some(LegacyChunkSection::read(&mut section_reader)?));
+        } else {
+            sections.push(None);
+        }
+    }
+    if section_reader.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 chunk section data"));
+    }
+    let entity_count = r.count(4096)?;
+    let block_entities = (0..entity_count).map(|_| r.nbt()).collect::<crate::Result<Vec<_>>>()?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 chunk packet"));
+    }
+    Ok(LegacyChunkColumn { x, z, full_chunk, section_mask, heightmaps, biomes, sections, block_entities })
+}
+
 /// Minimal player state maintained while processing protocol-754 Play packets.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlayerState {
