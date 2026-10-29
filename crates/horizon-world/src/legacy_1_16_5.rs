@@ -418,7 +418,9 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
         return Err(invalid("legacy chunk is missing DataVersion"));
     };
     if *version != 2586 {
-        return Err(invalid(format!("expected legacy DataVersion 2586, got {version}")));
+        return Err(invalid(format!(
+            "expected legacy DataVersion 2586, got {version}"
+        )));
     }
     let Some(level) = root.tag.get("Level") else {
         return Err(invalid("legacy chunk is missing Level compound"));
@@ -462,11 +464,20 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
     }
 
     let mut fields = Compound::new();
-    fields.insert(JavaString::from("DataVersion"), Tag::Int(crate::DATA_VERSION));
+    fields.insert(
+        JavaString::from("DataVersion"),
+        Tag::Int(crate::DATA_VERSION),
+    );
     fields.insert(JavaString::from("xPos"), Tag::Int(*x));
     fields.insert(JavaString::from("zPos"), Tag::Int(*z));
     fields.insert(JavaString::from("sections"), Tag::List(sections));
-    for field in ["Heightmaps", "Status", "LastUpdate", "InhabitedTime", "isLightOn"] {
+    for field in [
+        "Heightmaps",
+        "Status",
+        "LastUpdate",
+        "InhabitedTime",
+        "isLightOn",
+    ] {
         if let Some(value) = level.get(field) {
             fields.insert(JavaString::from(field), value.clone());
         }
@@ -881,11 +892,7 @@ pub fn load_runtime_chunk(
     chunk_x: i32,
     chunk_z: i32,
 ) -> std::io::Result<crate::chunk::ChunkData> {
-    use crate::{
-        compression::invalid,
-        nbt::Limits,
-        region::RegionFile,
-    };
+    use crate::{compression::invalid, nbt::Limits, region::RegionFile};
     use horizon_core::position::ChunkPos;
 
     let chunk_pos = ChunkPos::new(chunk_x, chunk_z);
@@ -969,7 +976,11 @@ mod tests {
         );
         let height = terrain_height(1234, 8, 8);
         assert_eq!(
-            runtime.block(BlockPos::new(8, height, 8)).unwrap().unwrap().name,
+            runtime
+                .block(BlockPos::new(8, height, 8))
+                .unwrap()
+                .unwrap()
+                .name,
             "minecraft:grass_block"
         );
         let above = if height < SEA_LEVEL {
@@ -978,7 +989,11 @@ mod tests {
             "minecraft:air"
         };
         assert_eq!(
-            runtime.block(BlockPos::new(8, height + 1, 8)).unwrap().unwrap().name,
+            runtime
+                .block(BlockPos::new(8, height + 1, 8))
+                .unwrap()
+                .unwrap()
+                .name,
             above
         );
 
