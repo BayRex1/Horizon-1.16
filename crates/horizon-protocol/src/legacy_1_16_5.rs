@@ -134,6 +134,84 @@ pub fn encode_status_ping(payload: i64) -> crate::Result<Vec<u8>> {
 }
 
 
+
+/// Result of the legacy offline-mode login handshake. The returned connection
+/// is already in Play state at the protocol level; world/play packet handling
+/// is still the caller's responsibility.
+pub struct OfflineLogin {
+    pub uuid: String,
+    pub username: String,
+    pub connection: crate::connection::Connection,
+}
+
+/// Connect and perform the actual 1.16.5 handshake/login exchange against an
+/// offline-mode server. Online-mode encryption is intentionally rejected
+/// rather than silently pretending to authenticate.
+pub fn connect_offline(
+    host: &str,
+    port: u16,
+    username: &str,
+    timeout: std::time::Duration,
+) -> crate::Result<OfflineLogin> {
+    use crate::buf::{Reader, Writer};
+    use crate::connection::Connection;
+
+    // Validate inputs and produce the exact legacy wire packets.
+    let handshake_frame = encode_handshake(host, port, 2)?;
+    let login_frame = encode_login_start(username)?;
+    let mut connection = Connection::connect_server(host, port, timeout)?;
+    connection.reader.set_read_timeout(Some(timeout))?;
+
+    // Connection::send takes packet bodies and owns framing/compression.
+    let mut framed = handshake_frame;
+    let handshake_body = crate::frame::split(&mut framed)?
+        .ok_or_else(|| crate::Error::new("could not frame legacy handshake"))?;
+    connection.send(&handshake_body)?;
+    let mut framed = login_frame;
+    let login_body = crate::frame::split(&mut framed)?
+        .ok_or_else(|| crate::Error::new("could not frame legacy login start"))?;
+    connection.send(&login_body)?;
+
+    loop {
+        let (packet_id, payload) = connection.recv()?;
+        match packet_id {
+            login::clientbound::DISCONNECT => {
+                let reason = decode_login_disconnect(&payload)?;
+                return Err(crate::Error::new(format!("server rejected login: {reason}")));
+            }
+            login::clientbound::ENCRYPTION_REQUEST => {
+                return Err(crate::Error::new(
+                    "server requires online-mode authentication; this legacy connector currently supports offline-mode servers only",
+                ));
+            }
+            login::clientbound::SET_COMPRESSION => {
+                let threshold = decode_set_compression(&payload)?;
+                connection.set_compression(threshold);
+            }
+            login::clientbound::SUCCESS => {
+                let (uuid, username) = decode_login_success(&payload)?;
+                return Ok(OfflineLogin { uuid, username, connection });
+            }
+            login::clientbound::PLUGIN_REQUEST => {
+                // Unknown login plugin channels are answered with "not understood".
+                let mut request = Reader::new(&payload);
+                let message_id = request.varint()?;
+                let _channel = request.string(32767)?;
+                let mut response = Writer::new();
+                response.varint(login::serverbound::PLUGIN_RESPONSE);
+                response.varint(message_id);
+                response.bool(false);
+                connection.send(&response.data)?;
+            }
+            other => {
+                return Err(crate::Error::new(format!(
+                    "unexpected 1.16.5 login packet id {other}"
+                )));
+            }
+        }
+    }
+}
+
 /// Decode the 1.16.5 Set Compression packet payload (threshold as VarInt).
 pub fn decode_set_compression(payload: &[u8]) -> crate::Result<i32> {
     let mut r = crate::buf::Reader::new(payload);
