@@ -4042,6 +4042,7 @@ impl Game<'_> {
                 held.damage += loss;
                 if held.damage >= max {
                     self.inventory[self.selected] = None;
+                    self.held_item_broke(&stack.item);
                 }
             }
         }
@@ -10023,16 +10024,22 @@ impl Game<'_> {
             if stack.damage >= max {
                 let broken = stack.item.clone();
                 *cell = None;
-                self.stats.add("broken", &broken, 1);
-                if let Some(eye) = self.eye_position() {
-                    self.audio.play(
-                        "minecraft:entity.item.break",
-                        Some(eye),
-                        0.8,
-                        0.8 + self.world.random.next_float() * 0.4,
-                    );
-                }
+                self.held_item_broke(&broken);
             }
+        }
+    }
+    /// `ServerPlayer.onEquippedItemBroken` for the held `item` once it broke:
+    /// the broken statistic, and the break sound (`LivingEntity.breakItem`,
+    /// which entity event 47 plays on the player's client).
+    fn held_item_broke(&mut self, item: &str) {
+        self.stats.add("broken", item, 1);
+        if let Some(eye) = self.eye_position() {
+            self.audio.play(
+                "minecraft:entity.item.break",
+                Some(eye),
+                0.8,
+                0.8 + self.world.random.next_float() * 0.4,
+            );
         }
     }
     /// `ItemStack.hurtWithoutBreaking`: Unbreaking applies, but the stack stops at
