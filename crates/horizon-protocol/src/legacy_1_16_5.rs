@@ -205,28 +205,51 @@ impl LegacyChunkSection {
     /// Decode a protocol-754 section's block-state paletted container.
     pub fn read(r: &mut crate::buf::Reader) -> crate::Result<Self> {
         let non_air_blocks = r.u16()?;
+        if non_air_blocks > 4096 {
+            return Err(crate::Error::new(
+                "invalid 1.16.5 section non-air block count",
+            ));
+        }
         let wire_bits = r.u8()?;
-        if wire_bits > 16 {
+        if wire_bits > 16 || (1..=3).contains(&wire_bits) {
             return Err(crate::Error::new("invalid 1.16.5 block palette bit width"));
         }
         let (bits_per_block, palette) = if wire_bits == 0 {
-            (0, vec![r.varint()?])
+            let state = r.varint()?;
+            if state < 0 {
+                return Err(crate::Error::new(
+                    "negative block-state ID in 1.16.5 single-value palette",
+                ));
+            }
+            (0, vec![state])
         } else if wire_bits <= 4 {
             let n = r.count(1usize << 4)?;
-            (
-                4,
-                (0..n)
-                    .map(|_| r.varint())
-                    .collect::<crate::Result<Vec<_>>>()?,
-            )
+            if n == 0 {
+                return Err(crate::Error::new("empty 1.16.5 local block palette"));
+            }
+            let palette = (0..n)
+                .map(|_| r.varint())
+                .collect::<crate::Result<Vec<_>>>()?;
+            if palette.iter().any(|state| *state < 0) {
+                return Err(crate::Error::new(
+                    "negative block-state ID in 1.16.5 local palette",
+                ));
+            }
+            (4, palette)
         } else if wire_bits <= 8 {
             let n = r.count(1usize << wire_bits)?;
-            (
-                wire_bits,
-                (0..n)
-                    .map(|_| r.varint())
-                    .collect::<crate::Result<Vec<_>>>()?,
-            )
+            if n == 0 {
+                return Err(crate::Error::new("empty 1.16.5 local block palette"));
+            }
+            let palette = (0..n)
+                .map(|_| r.varint())
+                .collect::<crate::Result<Vec<_>>>()?;
+            if palette.iter().any(|state| *state < 0) {
+                return Err(crate::Error::new(
+                    "negative block-state ID in 1.16.5 local palette",
+                ));
+            }
+            (wire_bits, palette)
         } else {
             (wire_bits, Vec::new())
         };
@@ -242,6 +265,21 @@ impl LegacyChunkSection {
             )));
         }
         let data = r.fixed_longs(count)?;
+        if !palette.is_empty() && bits_per_block != 0 {
+            let bits = bits_per_block as usize;
+            let per_long = 64 / bits;
+            let mask = (1u64 << bits) - 1;
+            for index in 0..4096 {
+                let word = data[index / per_long] as u64;
+                let palette_index =
+                    ((word >> ((index % per_long) * bits)) & mask) as usize;
+                if palette_index >= palette.len() {
+                    return Err(crate::Error::new(
+                        "1.16.5 block palette index is outside the local palette",
+                    ));
+                }
+            }
+        }
         Ok(Self {
             non_air_blocks,
             bits_per_block,
@@ -936,6 +974,42 @@ mod tests {
         );
         assert_eq!(decode_set_compression(&[0x80, 0x01]).unwrap(), 128);
         assert!(decode_set_compression(&[1, 0]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_legacy_chunk_section_headers() {
+        use crate::buf::{Reader, Writer};
+
+        let mut invalid_width = Writer::new();
+        invalid_width.u16(0);
+        invalid_width.u8(2);
+        assert!(LegacyChunkSection::read(&mut Reader::new(&invalid_width.data)).is_err());
+
+        let mut empty_palette = Writer::new();
+        empty_palette.u16(0);
+        empty_palette.u8(4);
+        empty_palette.varint(0);
+        assert!(LegacyChunkSection::read(&mut Reader::new(&empty_palette.data)).is_err());
+
+        let mut invalid_non_air_count = Writer::new();
+        invalid_non_air_count.u16(4097);
+        assert!(LegacyChunkSection::read(&mut Reader::new(&invalid_non_air_count.data)).is_err());
+    }
+
+    #[test]
+    fn rejects_legacy_chunk_palette_indices_outside_palette() {
+        use crate::buf::{Reader, Writer};
+
+        let mut payload = Writer::new();
+        payload.u16(0);
+        payload.u8(4);
+        payload.varint(1);
+        payload.varint(0);
+        payload.varint(256);
+        for index in 0..256 {
+            payload.i64(if index == 0 { 1 } else { 0 });
+        }
+        assert!(LegacyChunkSection::read(&mut Reader::new(&payload.data)).is_err());
     }
 
     #[test]
