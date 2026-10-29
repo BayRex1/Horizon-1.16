@@ -237,6 +237,78 @@ pub fn migrate_legacy(world: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Import Java 1.16.5 root-level region files into Horizon's current
+/// overworld save layout. The source files are read-only and remain untouched.
+/// Existing destination region files always win; this never overwrites them.
+pub fn import_legacy_1_16_5(
+    world_root: &Path,
+    save: &SaveDir,
+    assets: &crate::assets::Assets,
+    biomes: &Biomes,
+) -> Result<usize> {
+    let source_regions = world_root.join("region");
+    if !source_regions.is_dir() || save.root.join("region").exists() {
+        return Ok(0);
+    }
+
+    let mut region_paths = fs::read_dir(&source_regions)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "mca")
+                && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.starts_with("r.") && n.ends_with(".mca")
+                })
+        })
+        .collect::<Vec<_>>();
+    region_paths.sort();
+
+    let mut chunks = Vec::new();
+    for path in region_paths {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(coords) = name.strip_prefix("r.").and_then(|n| n.strip_suffix(".mca")) else {
+            continue;
+        };
+        let Some((rx, rz)) = coords.split_once('.') else {
+            continue;
+        };
+        let (Ok(rx), Ok(rz)) = (rx.parse::<i32>(), rz.parse::<i32>()) else {
+            continue;
+        };
+        let mut region = RegionFile::open(&path)?;
+        for dz in 0..32 {
+            for dx in 0..32 {
+                let pos = ChunkPos::new(rx * 32 + dx, rz * 32 + dz);
+                let Some(record) = region.read(pos)? else {
+                    continue;
+                };
+                let root = record.nbt(Limits::default())?;
+                if !matches!(root.tag.get("DataVersion"), Some(Tag::Int(2586))) {
+                    continue;
+                }
+                let adapted = horizon_world::legacy_1_16_5::to_client_runtime_chunk(&root)?;
+                if let Some(chunk) = decode_with(&adapted, assets.registry, biomes, None) {
+                    chunks.push(Arc::new(chunk));
+                }
+            }
+        }
+    }
+
+    if chunks.is_empty() {
+        return Ok(0);
+    }
+    save.tables.get_or_init(|| Arc::new(SaveTables::new(assets)));
+    save.save(&chunks, assets.registry, biomes)?;
+    log::info!(
+        "Horizon: imported {} Java 1.16.5 chunks from {}",
+        chunks.len(),
+        source_regions.display()
+    );
+    Ok(chunks.len())
+}
+
 /// Registry lookups shared by chunk encoding and decoding.
 pub struct SaveTables {
     /// Block registry IDs (`BlockId`, scheduled tick types) in registry order.
