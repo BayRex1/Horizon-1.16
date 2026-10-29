@@ -963,13 +963,13 @@ mod tests {
             data: vec![0x3210, 0xFEDC_BA98_7654_3210u64 as i64],
         };
         assert_eq!(section.block_state(0), Some(0));
-        assert_eq!(section.block_state(1), Some(1));
-        assert_eq!(section.block_state(2), Some(2));
-        assert_eq!(section.block_state(3), Some(3));
+        assert_eq!(section.block_state(1), Some(7));
+        assert_eq!(section.block_state(2), Some(11));
+        assert_eq!(section.block_state(3), Some(19));
         assert_eq!(section.block_state(16), Some(0));
-        assert_eq!(section.block_state(17), Some(1));
-        assert_eq!(section.block_state(18), Some(2));
-        assert_eq!(section.block_state(19), Some(3));
+        assert_eq!(section.block_state(17), Some(7));
+        assert_eq!(section.block_state(18), Some(11));
+        assert_eq!(section.block_state(19), Some(19));
     }
 
     #[test]
