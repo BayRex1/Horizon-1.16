@@ -340,6 +340,8 @@ impl Game<'_> {
             self.apply_mod_block_writes();
             result = if paused {
                 self.tick_lan(true);
+                #[cfg(feature = "physics-unleashed")]
+                self.publish_physics();
                 Ok(())
             } else if k == 0 {
                 self.tick()

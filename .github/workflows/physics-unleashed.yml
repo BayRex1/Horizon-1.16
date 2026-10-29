@@ -10,8 +10,11 @@ on:
       - 'crates/horizon-client/**'
       - 'crates/horizon-core/**'
       - 'crates/horizon-world/**'
+      - 'crates/horizon-protocol/**'
       - '.github/workflows/physics-unleashed.yml'
       - 'docs/physics-unleashed.md'
+      - 'docs/physics-visual.md'
+      - 'tools/physics_visual_smoke.py'
   pull_request:
     paths:
       - 'Cargo.toml'
@@ -20,8 +23,11 @@ on:
       - 'crates/horizon-client/**'
       - 'crates/horizon-core/**'
       - 'crates/horizon-world/**'
+      - 'crates/horizon-protocol/**'
       - '.github/workflows/physics-unleashed.yml'
       - 'docs/physics-unleashed.md'
+      - 'docs/physics-visual.md'
+      - 'tools/physics_visual_smoke.py'
 permissions:
   contents: read
 concurrency:
@@ -29,14 +35,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Rust toolchain
@@ -52,34 +58,38 @@ jobs:
         run: |
           cargo +stable clippy --locked -p physics-core --all-targets -- -D warnings
           cargo +stable test --locked -p physics-core
+          cargo +stable clippy --locked -p horizon-protocol --lib -- -D warnings
+          cargo +stable test --locked -p horizon-protocol --lib
       - name: Horizon integration and feature-disabled compilation
         run: |
           cargo +stable check --locked -p horizon-client --no-default-features --lib --bins
-          cargo +stable clippy --locked -p horizon-client --no-default-features --features physics-unleashed --lib --bins --test physics_dimension -- -D warnings
-          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension
+          cargo +stable clippy --locked -p horizon-client --no-default-features --features physics-unleashed --lib --bins --test physics_dimension --test physics_visual -- -D warnings
+          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension --test physics_visual
+          python3 -m py_compile tools/physics_visual_smoke.py
       - name: Build CPU-testable artifacts
         run: |
-          cargo +stable build --locked -p horizon-client --no-default-features --features physics-unleashed --bin horizon-client
+          cargo +stable build --locked -p horizon-client --no-default-features --features physics-unleashed --bins
           cargo +stable run --locked -p physics-core --example falling_cube > falling-cube.csv
           mkdir -p physics-artifacts
-          cp target/debug/horizon-client target/debug/examples/falling_cube falling-cube.csv physics-artifacts/
-          cp docs/physics-unleashed.md physics-artifacts/README.md
-          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension --no-run --message-format=json > physics-test-build.json
+          cp target/debug/horizon-client target/debug/horizon-ctl target/debug/examples/falling_cube falling-cube.csv physics-artifacts/
+          cp docs/physics-visual.md physics-artifacts/README.md
+          cargo +stable test --locked -p horizon-client --no-default-features --features physics-unleashed --test physics_dimension --test physics_visual --no-run --message-format=json > physics-test-build.json
           python3 - <<'PY'
           import json, shutil
           from pathlib import Path
-          executables = {row['executable'] for line in Path('physics-test-build.json').read_text().splitlines()
+          executables = {row['target']['name']: row['executable'] for line in Path('physics-test-build.json').read_text().splitlines()
                          if (row := json.loads(line)).get('reason') == 'compiler-artifact'
-                         and row['target']['name'] == 'physics_dimension' and row.get('executable')}
-          assert len(executables) == 1, executables
-          shutil.copy2(executables.pop(), 'physics-artifacts/physics_dimension')
+                         and row['target']['name'] in ('physics_dimension', 'physics_visual') and row.get('executable')}
+          assert len(executables) == 2, executables
+          for name, executable in executables.items():
+              shutil.copy2(executable, 'physics-artifacts/' + name)
           PY
           git rev-parse HEAD > physics-artifacts/COMMIT
           cd physics-artifacts
-          sha256sum horizon-client falling_cube physics_dimension falling-cube.csv README.md COMMIT > SHA256SUMS
+          sha256sum horizon-client horizon-ctl falling_cube physics_dimension physics_visual falling-cube.csv README.md COMMIT > SHA256SUMS
           tar -czf ../physics-unleashed-linux.tar.gz .
       - name: Upload verified Linux development binaries (no Minecraft assets)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: physics-unleashed-linux-${{ github.sha }}
           path: physics-unleashed-linux.tar.gz

@@ -8217,6 +8217,11 @@ impl Game<'_> {
             }
         }
         // Falling blocks use their baked model, including non-cubic shapes.
+        #[cfg(feature = "physics-unleashed")]
+        {
+            self.mark_entity(out.len(), "minecraft:falling_block");
+            self.physics_geometry(camera, &mut out);
+        }
         self.mark_entity(out.len(), "minecraft:falling_block");
         for f in &self.falling {
             let Some((_, tint)) = self.block_face_sprite(f.state) else {

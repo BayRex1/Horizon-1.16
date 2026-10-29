@@ -1716,6 +1716,21 @@ impl Game<'_> {
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
+            #[cfg(feature = "physics-unleashed")]
+            C::CustomPayload(p) if p.channel == horizon_protocol::physics::CHANNEL => {
+                match horizon_protocol::physics::Snapshot::decode(&p.data) {
+                    Ok(snapshot) => {
+                        if let Err(error) =
+                            self.world
+                                .physics_view
+                                .receive(snapshot, self.dim.id(), Instant::now())
+                        {
+                            log::warn!("Rejected physics snapshot: {error}");
+                        }
+                    }
+                    Err(error) => log::warn!("Rejected physics payload: {error}"),
+                }
+            }
             // ClientCommonPacketListenerImpl.handlePing runs on the game
             // thread, after all preceding packets (especially teleports).
             C::Ping(p) => self.send(S::Pong(p)),

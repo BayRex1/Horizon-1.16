@@ -4,6 +4,7 @@ Headless, opt-in rigid-body simulation in Horizon's root Rust workspace. The
 `horizon-client/physics-unleashed` feature connects it to resident dimensions;
 vanilla player/mob movement is unchanged. See the
 [stage 2 integration guide](../../docs/physics-unleashed.md) for commands and limits.
+The [stage 3 guide](../../docs/physics-visual.md) describes the renderer and network snapshots.
 No Minecraft files, Java, GPU, renderer or background service are needed here.
 
 ## Run
@@ -76,11 +77,12 @@ removal and invalid inputs. These are simulation checks, not a rendered game dem
    or treat an unavailable shape/chunk as a solid cube or as air.
 3. The stage 2 adapter builds fixed colliders for loaded terrain near active
    bodies and updates them on edits/unload without consuming the network block
-   log. Existing blocks are preserved. Publishing `BodyState` snapshots and
-   interpolating transforms for rendering remain future work.
+   log. Existing blocks are preserved. Stage 3 publishes stable-ID snapshots and
+   interpolates transforms in the existing block renderer.
 
 The core supplies the CPU foundation and shape adapter. Live terrain sync lives
-in `horizon-client::physics`; player/body interaction, rendering, save/load, network replication, fracture,
+in `horizon-client::physics`; rendering/snapshots are in `physics_view` and the game
+adapter. Player/body interaction, save/load, fracture,
 joints, Physics Gun or force anomalies. Game/LAN/parity validation still needs
 the user's own prepared Minecraft 26.3 resources. Before enabling gameplay,
 test server-thread, dedicated and in-frame paths and keep vanilla movement

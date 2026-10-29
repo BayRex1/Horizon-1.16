@@ -1020,7 +1020,24 @@ impl Game<'_> {
             return Err(format!("busy with {}; wait for it or send stop", task.name).into());
         }
         match name {
-            "state" => ok(self.state_value()),
+            "state" => {
+                #[allow(unused_mut)]
+                let mut value = self.state_value();
+                #[cfg(feature = "physics-unleashed")]
+                {
+                    let bodies: Vec<_> = self
+                        .world
+                        .physics_view
+                        .sample(std::time::Instant::now())
+                        .into_iter()
+                        .map(
+                            |b| json!({"id": b.id, "position": b.position, "rotation": b.rotation}),
+                        )
+                        .collect();
+                    value["physics"] = json!({"bodies": bodies, "vertices": self.world.physics_view.rendered_vertices});
+                }
+                ok(value)
+            }
             "looking-at" | "target" => {
                 self.need_world()?;
                 ok(self.looking_at())

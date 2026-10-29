@@ -52,6 +52,8 @@ pub struct World {
     /// Owned by this dimension, including while parked on the server thread.
     #[cfg(feature = "physics-unleashed")]
     pub physics: Option<crate::physics::PhysicsDimension>,
+    #[cfg(feature = "physics-unleashed")]
+    pub physics_view: crate::physics_view::PhysicsView,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
@@ -172,6 +174,8 @@ impl World {
         Self {
             #[cfg(feature = "physics-unleashed")]
             physics: Some(Default::default()),
+            #[cfg(feature = "physics-unleashed")]
+            physics_view: Default::default(),
             chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,

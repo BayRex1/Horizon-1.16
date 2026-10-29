@@ -1,6 +1,7 @@
 //! Authoritative, opt-in physics owned by one resident World/dimension.
 //! Terrain is a bounded working set near bodies, selected by Horizon itself.
 use horizon_core::position::ChunkPos;
+use horizon_protocol::physics::{CubeState, Snapshot};
 use horizon_world::{
     block_collision_scan::{BlockCollisionScan, BlockCollisionWorld},
     collision_context::CollisionContext,
@@ -9,7 +10,17 @@ use physics_core::{
     Aabb, BlockCollider, BlockPos, BodyHandle, BodyKind, BodyState, FIXED_DT, MAX_SUBSTEPS,
     Material, PhysicsWorld, Vec3,
 };
-use std::{collections::BTreeMap, io, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+fn next_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 const MAX_BODIES: usize = 16;
 const SCAN_BUDGET: usize = 32_768;
@@ -31,6 +42,11 @@ pub struct PhysicsDimension {
     bodies: Vec<BodyHandle>,
     terrain: BTreeMap<Position, Terrain>,
     remainder: u128,
+    ids: HashMap<BodyHandle, u64>,
+    epoch: u64,
+    sequence: u64,
+    step: u64,
+    published: Vec<u64>,
 }
 impl Default for PhysicsDimension {
     fn default() -> Self {
@@ -39,10 +55,49 @@ impl Default for PhysicsDimension {
             bodies: Vec::new(),
             terrain: BTreeMap::new(),
             remainder: 0,
+            ids: HashMap::new(),
+            epoch: next_id(),
+            sequence: 0,
+            step: 0,
+            published: Vec::new(),
         }
     }
 }
 impl PhysicsDimension {
+    /// Stable network identities never expose/reuse Rapier arena slots.
+    pub fn snapshot(&mut self, dimension: &str) -> io::Result<Snapshot> {
+        self.sequence += 1;
+        let bodies = self
+            .bodies
+            .iter()
+            .map(|&body| {
+                let state = self.state(body)?;
+                Ok(CubeState {
+                    id: self.ids[&body],
+                    position: state.position.components(),
+                    rotation: state.rotation,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let ids: Vec<_> = bodies.iter().map(|b| b.id).collect();
+        let removed = self
+            .published
+            .iter()
+            .filter(|id| !ids.contains(id))
+            .copied()
+            .collect();
+        let snapshot = Snapshot {
+            dimension: dimension.into(),
+            epoch: self.epoch,
+            sequence: self.sequence,
+            step: self.step,
+            bodies,
+            removed,
+        };
+        snapshot.validate().map_err(io::Error::other)?;
+        self.published = ids;
+        Ok(snapshot)
+    }
     pub fn bodies(&self) -> &[BodyHandle] {
         &self.bodies
     }
@@ -75,6 +130,7 @@ impl PhysicsDimension {
                 .map_err(io::Error::other)?;
         }
         self.remainder = 0;
+        self.ids.clear();
         Ok(())
     }
 
@@ -113,8 +169,10 @@ impl PhysicsDimension {
             )
             .map_err(io::Error::other)?;
         self.bodies.push(body);
+        self.ids.insert(body, next_id());
         if let Err(error) = self.synchronize(world) {
             self.bodies.pop();
+            self.ids.remove(&body);
             self.engine.remove(body).map_err(io::Error::other)?;
             return Err(error);
         }
@@ -139,6 +197,7 @@ impl PhysicsDimension {
                 self.synchronize(world)?;
             }
             self.engine.step();
+            self.step += 1;
         }
         // A body that crossed the world's vertical limit is removed immediately.
         self.synchronize(world)?;
@@ -193,6 +252,7 @@ impl PhysicsDimension {
             }
         }
         for body in removed {
+            self.ids.remove(&body);
             self.engine.remove(body).map_err(io::Error::other)?;
             self.bodies.retain(|b| *b != body);
         }

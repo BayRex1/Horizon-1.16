@@ -1,8 +1,13 @@
 # PHYSICS UNLEASHED: resident-world integration (stage 2)
 
+The current build also includes [stage 3 rendering and snapshots](physics-visual.md).
+This document describes the resident-world adapter introduced in stage 2;
+use the stage 3 guide for the current visible-cube workflow and validation limits.
+
 This is an experimental, CPU-side integration. It creates real Rapier bodies in
 the authoritative Horizon world and collides them with the world's selected
-block shapes. It does **not** draw bodies, send them to clients or save them.
+block shapes. Rendering and network snapshots are layered on it in stage 3;
+disk persistence remains unimplemented.
 Vanilla player/mob movement and block contents are unchanged.
 
 ## Enable and inspect
