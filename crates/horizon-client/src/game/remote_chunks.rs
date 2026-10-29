@@ -165,10 +165,10 @@ fn legacy_biome_cells(
     chunk: &horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
     legacy_y: usize,
     biome_map: &[u32],
-) -> [u32; 64] {
+) -> std::result::Result<[u32; 64], String> {
     let mut cells = [0u32; 64];
     if !chunk.full_chunk || chunk.biomes.len() != 1024 || legacy_y >= 16 {
-        return cells;
+        return Ok(cells);
     }
     for quart_y in 0..4 {
         for quart_z in 0..4 {
@@ -177,9 +177,11 @@ fn legacy_biome_cells(
                 let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
                 let legacy_biome = chunk.biomes[source_index];
                 cells[target_index] = if legacy_biome >= 0 {
-                    biome_map.get(legacy_biome as usize).copied().unwrap_or(0)
+                    *biome_map.get(legacy_biome as usize).ok_or_else(|| {
+                        format!("missing protocol-754 biome mapping for ID {legacy_biome}")
+                    })?
                 } else {
-                    0
+                    return Err(format!("invalid protocol-754 biome ID {legacy_biome}"));
                 };
             }
         }
@@ -284,6 +286,29 @@ impl Game<'_> {
             return Ok(());
         }
 
+        // Fail closed instead of silently turning unknown legacy blocks into
+        // air. A partial ID map would otherwise create a plausible but corrupt
+        // looking world and hide registry incompatibilities.
+        for source in chunk.sections.iter().flatten() {
+            for index in 0..4096 {
+                let legacy_id = source.block_state(index).unwrap_or(0);
+                if legacy_id < 0 || block_state_map.get(legacy_id as usize).is_none() {
+                    return Err(format!(
+                        "missing protocol-754 block-state mapping for ID {legacy_id}"
+                    ));
+                }
+            }
+        }
+        if chunk.full_chunk && chunk.biomes.len() == 1024 {
+            for &legacy_biome in &chunk.biomes {
+                if legacy_biome < 0 || biome_map.get(legacy_biome as usize).is_none() {
+                    return Err(format!(
+                        "missing protocol-754 biome mapping for ID {legacy_biome}"
+                    ));
+                }
+            }
+        }
+
         let mut column = Chunk::empty(chunk.x, chunk.z);
         // Java 1.16.5 has sections Y=0..255. Horizon's resident columns span
         // -64..319, so legacy section 0 is stored at resident section index 4.
@@ -297,16 +322,9 @@ impl Game<'_> {
             let mut values = [0u32; 4096];
             for (index, value) in values.iter_mut().enumerate() {
                 let legacy_id = source.block_state(index).unwrap_or(0);
-                *value = if legacy_id >= 0 {
-                    block_state_map
-                        .get(legacy_id as usize)
-                        .copied()
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
+                *value = block_state_map[legacy_id as usize];
             }
-            let biome_cells = legacy_biome_cells(&chunk, legacy_y, biome_map);
+            let biome_cells = legacy_biome_cells(&chunk, legacy_y, biome_map)?;
             let mut section = Section {
                 blocks: PalettedContainer::from_values(block_strategy(), &values),
                 biomes: PalettedContainer::from_values(BIOME_STRATEGY, &biome_cells),
@@ -450,7 +468,7 @@ mod tests {
             }
         }
         let map: Vec<u32> = (0..32).map(|v| v * 3).collect();
-        let cells = legacy_biome_cells(&column, 5, &map);
+        let cells = legacy_biome_cells(&column, 5, &map).unwrap();
         for quart_y in 0..4 {
             for quart_z in 0..4 {
                 for quart_x in 0..4 {
@@ -459,9 +477,9 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legacy_biome_cells(&column, 16, &map), [0; 64]);
+        assert_eq!(legacy_biome_cells(&column, 16, &map).unwrap(), [0; 64]);
         column.full_chunk = false;
-        assert_eq!(legacy_biome_cells(&column, 5, &map), [0; 64]);
+        assert_eq!(legacy_biome_cells(&column, 5, &map).unwrap(), [0; 64]);
     }
 
     /// Columns come back one per packet, in the order the packets went in,
