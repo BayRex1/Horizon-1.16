@@ -216,6 +216,57 @@ pub(super) enum Next {
 }
 
 impl Game<'_> {
+    /// Install a decoded protocol-754 chunk into resident world storage.
+    ///
+    /// This is the renderer bridge for the legacy decoder. The 1.16.5 block
+    /// state IDs are version-specific, so callers must only enable this path
+    /// after the 1.16.5 registry has been mapped to the client's render IDs.
+    /// Until that registry mapping exists, accepting arbitrary legacy IDs
+    /// would render unrelated modern blocks.
+    pub(super) fn remote_legacy_chunk(
+        &mut self,
+        chunk: horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
+        block_state_map: &[u32],
+    ) -> Result<(), String> {
+        if !self.remote_chunk_in_range(chunk.x, chunk.z) {
+            return Ok(());
+        }
+
+        let mut column = Chunk::empty(chunk.x, chunk.z);
+        // Java 1.16.5 has sections Y=0..255. Horizon's resident columns span
+        // -64..319, so legacy section 0 is stored at resident section index 4.
+        const LEGACY_SECTION_OFFSET: usize = ((0 - MIN_Y) / 16) as usize;
+        for (legacy_y, source) in chunk.sections.iter().enumerate() {
+            let Some(source) = source else { continue };
+            let target_y = LEGACY_SECTION_OFFSET + legacy_y;
+            if target_y >= column.sections.len() {
+                continue;
+            }
+            let mut values = [0u32; 4096];
+            for (index, value) in values.iter_mut().enumerate() {
+                let legacy_id = source.block_state(index).unwrap_or(0);
+                *value = if legacy_id >= 0 {
+                    block_state_map.get(legacy_id as usize).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+            }
+            let mut section = Section {
+                blocks: PalettedContainer::from_values(block_strategy(), &values),
+                biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
+                light: Light::Uniform(0xF0),
+            };
+            section.compact();
+            column.sections[target_y] = Arc::new(section);
+        }
+
+        self.streaming.insert_remote(&mut self.world, column);
+        self.world
+            .block_entities
+            .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (chunk.x, chunk.z));
+        Ok(())
+    }
+
     /// `handleLevelChunkWithLight`: the column replaces any loaded one, and
     /// its block entities load their update tags. `decoded` is the column the
     /// decoder made with `format`; another format since means decode again.
