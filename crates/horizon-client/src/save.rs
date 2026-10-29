@@ -180,6 +180,22 @@ impl SessionLock {
         Ok(Self(file))
     }
 }
+/// Recognize an untouched Java 1.16.5 world before the modern layout migration
+/// moves its root-level region files out of the importer's source directory.
+pub fn is_legacy_1_16_5_world(world: &Path) -> bool {
+    if !world.join("region").is_dir() {
+        return false;
+    }
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    matches!(
+        root.get("Data")
+            .and_then(|data| number(data.get("DataVersion"))),
+        Some(2586)
+    )
+}
+
 /// Bring a world last saved by an older game version to the current format, as
 /// 26.3 does when it opens one: the file fixes and level.dat first
 /// (`FileFixerUpper`), then the DataFixers upgrades of every chunk, entity chunk,
