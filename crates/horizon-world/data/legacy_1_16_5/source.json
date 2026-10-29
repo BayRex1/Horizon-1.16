@@ -1,0 +1,13 @@
+{
+  "source": "PrismarineJS/minecraft-data",
+  "sourceVersion": "1.16.2",
+  "targetVersion": "1.16.5",
+  "targetProtocol": 754,
+  "targetDataVersion": 2586,
+  "note": "Block registry and biome IDs are carried forward from 1.16.2 as reference data for 1.16.5. Verify version parity before treating as exact gameplay/worldgen data.",
+  "files": {
+    "blocks.json": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16.2/blocks.json",
+    "biomes.json": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16.2/biomes.json",
+    "version.json": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16.5/version.json"
+  }
+}
