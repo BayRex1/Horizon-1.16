@@ -1545,6 +1545,7 @@ dependencies = [
 name = "horizon-mod-sdk"
 version = "0.1.0"
 dependencies = [
+ "horizon-mods",
  "wit-bindgen 0.60.0",
 ]
 

@@ -28,6 +28,7 @@ struct Core {
     next: u32,
     listener: [f64; 3],
     yaw: f32,
+    master: f32,
 }
 impl Default for Core {
     fn default() -> Self {
@@ -44,6 +45,7 @@ impl Default for Core {
             next: 0,
             listener: [0.0; 3],
             yaw: 0.0,
+            master: 1.0,
         }
     }
 }
@@ -89,6 +91,16 @@ impl Pcm {
         {
             Err("this Horizon was built without audio".into())
         }
+    }
+    pub fn is_capturing(&self) -> bool {
+        self.core.lock().unwrap().capturing
+    }
+    pub fn master_gain(&mut self, gain: f32) {
+        self.core.lock().unwrap().master = if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
     }
     pub fn input_devices(&mut self) -> Vec<microphone::Device> {
         let _ = self.ensure_worker();
@@ -334,7 +346,7 @@ fn mix(c: &mut Core, rate: u32, channels: usize, out: &mut [f32]) {
         }
     }
     for sample in out {
-        *sample = sample.clamp(-1.0, 1.0);
+        *sample = (*sample * c.master).clamp(-1.0, 1.0);
     }
 }
 
@@ -375,6 +387,9 @@ fn device_worker(core: Arc<Mutex<Core>>, rx: std::sync::mpsc::Receiver<Command>)
     let mut output = None;
 
     while let Ok(command) = rx.recv() {
+        if !core.lock().unwrap().capturing {
+            input = None;
+        }
         match command {
             Command::Start(id, generation) => {
                 {
@@ -638,6 +653,10 @@ mod tests {
         mix(&mut c, 16000, 2, &mut out);
         assert!(out.iter().all(|&s| s == 0.5));
         assert!(c.sources[&1].samples.is_empty());
+        c.sources.get_mut(&1).unwrap().samples = VecDeque::from(vec![1.0; 8]);
+        c.master = 0.25;
+        mix(&mut c, 16000, 2, &mut out);
+        assert!(out.iter().all(|&s| s == 0.125));
         mix(&mut c, 16000, 2, &mut out);
         assert!(out.iter().all(|&s| s == 0.0));
         let settings = audio::Settings {

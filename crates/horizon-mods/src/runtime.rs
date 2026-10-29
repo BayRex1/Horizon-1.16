@@ -1362,6 +1362,15 @@ impl Mods {
             });
         }
     }
+    /// Active client-side channel subscriptions, for the game's combined native/WASM announcement.
+    pub fn registered_channels(&self) -> std::collections::BTreeSet<String> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .filter(|r| r.hooks.client().is_some())
+            .flat_map(|r| r.store.data().realtime.channels.iter().cloned())
+            .collect()
+    }
     /// What mods asked to show since the last call.
     pub fn drain(&mut self) -> Vec<Output> {
         if self.snapshot.connected {

@@ -11,3 +11,10 @@ wit-bindgen = { version = "0.60.0", default-features = false, features = ["macro
 
 [lints]
 workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+horizon-mods = { path = "../horizon-mods", default-features = false, optional = true }
+
+[features]
+# Typed native services; mixin helpers can use the game's horizon_mods dependency directly.
+native = ["dep:horizon-mods"]

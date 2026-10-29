@@ -447,3 +447,7 @@ macro_rules! export_server_mod {
         };
     };
 }
+
+/// Native hook API services, without a WebAssembly runtime (feature `native`).
+#[cfg(all(feature = "native", not(target_family = "wasm")))]
+pub use horizon_mods::native;
