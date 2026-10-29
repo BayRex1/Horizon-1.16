@@ -1036,7 +1036,7 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        save_bootstrap_chunk(&directory.join("region"), 321, 0, 0).unwrap();
+        save_bootstrap_chunk(directory.join("region"), 321, 0, 0).unwrap();
 
         let loaded = load_client_runtime_chunk(&directory, 0, 0)
             .expect("client loader should decode the saved legacy chunk");
