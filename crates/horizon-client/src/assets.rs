@@ -105,8 +105,15 @@ impl Assets {
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
             root.join("horizon-resources.json"),
         )?))?;
-        if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
-            return Err(invalid("resources do not match Horizon's pinned data version").into());
+        let resource_data_version = manifest["data_version"].as_i64();
+        if resource_data_version != Some(i64::from(DATA_VERSION)) {
+            let found = resource_data_version
+                .map(|version| version.to_string())
+                .unwrap_or_else(|| "missing or invalid".to_owned());
+            return Err(invalid(&format!(
+                "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). Prepare resources from the matching Minecraft version; a 26.3 bundle cannot be used for 1.16.5.",
+                horizon_core::version::VERSION_ID
+            )).into());
         }
         let (registry, flags) =
             BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
