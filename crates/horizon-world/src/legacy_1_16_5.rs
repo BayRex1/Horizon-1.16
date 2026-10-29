@@ -118,6 +118,196 @@ pub fn biome_by_id(id: u32) -> Result<Option<LegacyBiome>, serde_json::Error> {
     Ok(biomes()?.into_iter().find(|biome| biome.id == id))
 }
 
+
+/// One Java Edition 1.16.5 chunk section (16×16×16 blocks).
+///
+/// Serialized fields use the legacy Anvil format: Palette entries use Name/Properties,
+/// and BlockStates stores padded 64-bit words. This does not use the modern
+/// chunk::PalettedContainer, whose NBT schema and minimum widths differ.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LegacyBlockState {
+    pub name: String,
+    pub properties: std::collections::BTreeMap<String, String>,
+}
+
+impl LegacyBlockState {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), properties: std::collections::BTreeMap::new() }
+    }
+
+    fn to_nbt(&self) -> crate::nbt::Tag {
+        use crate::nbt::{JavaString, Tag};
+        let mut map = crate::nbt::Compound::new();
+        let name = if self.name.contains(':') { self.name.clone() } else { format!("minecraft:{}", self.name) };
+        map.insert(JavaString::from("Name"), Tag::String(JavaString::from(name.as_str())));
+        if !self.properties.is_empty() {
+            map.insert(JavaString::from("Properties"), Tag::Compound(
+                self.properties.iter().map(|(key, value)| (
+                    JavaString::from(key.as_str()), Tag::String(JavaString::from(value.as_str()))
+                )).collect()
+            ));
+        }
+        Tag::Compound(map)
+    }
+
+    fn from_nbt(tag: &crate::nbt::Tag) -> std::io::Result<Self> {
+        use crate::compression::invalid;
+        use crate::nbt::Tag;
+        let Some(Tag::String(name)) = tag.get("Name") else {
+            return Err(invalid("legacy block palette entry is missing Name"));
+        };
+        let mut name = name.to_string().map_err(|e| invalid(e.to_string()))?;
+        if let Some(stripped) = name.strip_prefix("minecraft:") {
+            name = stripped.to_owned();
+        }
+        if name.is_empty() || name.contains(':') {
+            return Err(invalid("invalid legacy block name"));
+        }
+        let mut properties = std::collections::BTreeMap::new();
+        if let Some(value) = tag.get("Properties") {
+            let Tag::Compound(entries) = value else {
+                return Err(invalid("legacy block Properties is not a compound"));
+            };
+            for (key, value) in entries {
+                let Tag::String(value) = value else {
+                    return Err(invalid("legacy block property is not a string"));
+                };
+                properties.insert(
+                    key.to_string().map_err(|e| invalid(e.to_string()))?,
+                    value.to_string().map_err(|e| invalid(e.to_string()))?,
+                );
+            }
+        }
+        Ok(Self { name, properties })
+    }
+}
+
+/// Legacy 1.16.5 palette-backed block storage for a single section.
+///
+/// Index order follows vanilla: x | (z << 4) | (y << 8). Values never cross
+/// a long boundary, matching Java 1.16.5 SimpleBitStorage.
+#[derive(Clone, Debug)]
+pub struct LegacyBlockSection {
+    palette: Vec<LegacyBlockState>,
+    storage: Option<horizon_core::storage::PackedStorage>,
+}
+
+impl LegacyBlockSection {
+    pub const BLOCK_COUNT: usize = 4096;
+
+    pub fn uniform(state: LegacyBlockState) -> Self {
+        Self { palette: vec![state], storage: None }
+    }
+
+    pub fn air() -> Self {
+        Self::uniform(LegacyBlockState::new("air"))
+    }
+
+    pub fn palette(&self) -> &[LegacyBlockState] { &self.palette }
+
+    pub fn get_index(&self, index: usize) -> std::io::Result<&LegacyBlockState> {
+        use crate::compression::invalid;
+        if index >= Self::BLOCK_COUNT {
+            return Err(invalid("legacy section block index out of bounds"));
+        }
+        let palette_index = self.storage.as_ref().map_or(0, |storage| storage.read(index) as usize);
+        self.palette.get(palette_index).ok_or_else(|| invalid("legacy palette index outside palette"))
+    }
+
+    pub fn get(&self, x: usize, y: usize, z: usize) -> std::io::Result<&LegacyBlockState> {
+        if x >= 16 || y >= 16 || z >= 16 {
+            return Err(crate::compression::invalid("legacy section coordinates out of bounds"));
+        }
+        self.get_index(x | (z << 4) | (y << 8))
+    }
+
+    pub fn set_index(&mut self, index: usize, state: LegacyBlockState) -> std::io::Result<()> {
+        use crate::compression::invalid;
+        use horizon_core::storage::PackedStorage;
+        if index >= Self::BLOCK_COUNT {
+            return Err(invalid("legacy section block index out of bounds"));
+        }
+        let palette_index = match self.palette.iter().position(|entry| entry == &state) {
+            Some(index) => index,
+            None => {
+                let next_len = self.palette.len() + 1;
+                let next_bits = ((usize::BITS - (next_len - 1).leading_zeros()) as u8).max(4);
+                if self.storage.as_ref().is_none_or(|storage| storage.bits() < next_bits) {
+                    let mut next = PackedStorage::new(next_bits, Self::BLOCK_COUNT)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    if let Some(previous) = &self.storage {
+                        for i in 0..Self::BLOCK_COUNT {
+                            next.set(i, previous.read(i)).map_err(|e| invalid(e.to_string()))?;
+                        }
+                    }
+                    self.storage = Some(next);
+                }
+                self.palette.push(state);
+                self.palette.len() - 1
+            }
+        };
+        if let Some(storage) = &mut self.storage {
+            storage.set(index, palette_index as u32).map_err(|e| invalid(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub fn set(&mut self, x: usize, y: usize, z: usize, state: LegacyBlockState) -> std::io::Result<()> {
+        if x >= 16 || y >= 16 || z >= 16 {
+            return Err(crate::compression::invalid("legacy section coordinates out of bounds"));
+        }
+        self.set_index(x | (z << 4) | (y << 8), state)
+    }
+
+    /// Decode the legacy section's Palette and optional BlockStates fields.
+    pub fn from_nbt(tag: &crate::nbt::Tag) -> std::io::Result<Self> {
+        use crate::compression::invalid;
+        use crate::nbt::Tag;
+        let Some(Tag::List(entries)) = tag.get("Palette") else {
+            return Err(invalid("legacy section is missing Palette list"));
+        };
+        if entries.is_empty() {
+            return Err(invalid("legacy section palette is empty"));
+        }
+        let palette = entries.iter().map(LegacyBlockState::from_nbt).collect::<std::io::Result<Vec<_>>>()?;
+        if palette.len() > Self::BLOCK_COUNT {
+            return Err(invalid("legacy section palette exceeds block count"));
+        }
+        if palette.len() == 1 {
+            if let Some(Tag::LongArray(words)) = tag.get("BlockStates") {
+                if !words.is_empty() {
+                    return Err(invalid("single-entry legacy palette must not contain BlockStates"));
+                }
+            }
+            return Ok(Self { palette, storage: None });
+        }
+        let bits = ((usize::BITS - (palette.len() - 1).leading_zeros()) as u8).max(4);
+        let Some(Tag::LongArray(words)) = tag.get("BlockStates") else {
+            return Err(invalid("nonuniform legacy palette is missing BlockStates"));
+        };
+        let storage = horizon_core::storage::PackedStorage::from_words(
+            bits, Self::BLOCK_COUNT, words.iter().map(|word| *word as u64).collect()
+        ).map_err(|e| invalid(e.to_string()))?;
+        for index in 0..Self::BLOCK_COUNT {
+            if storage.read(index) as usize >= palette.len() {
+                return Err(invalid("legacy palette index outside palette"));
+            }
+        }
+        Ok(Self { palette, storage: Some(storage) })
+    }
+
+    /// Encode the section fields to embed into a 1.16.5 section compound.
+    pub fn to_nbt(&self) -> crate::nbt::Tag {
+        use crate::nbt::{JavaString, Tag};
+        let mut map = crate::nbt::Compound::new();
+        map.insert(JavaString::from("Palette"), Tag::List(self.palette.iter().map(LegacyBlockState::to_nbt).collect()));
+        if let Some(storage) = &self.storage {
+            map.insert(JavaString::from("BlockStates"), Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()));
+        }
+        Tag::Compound(map)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
