@@ -278,6 +278,38 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 }
 
 impl Game<'_> {
+    pub(super) fn native_remote_voice_ids(&self) -> Vec<String> {
+        self.remote.as_ref().map_or_else(Vec::new, |r| {
+            r.tab_players
+                .keys()
+                .map(|id| super::native_voice::uuid(*id))
+                .collect()
+        })
+    }
+    pub(super) fn native_remote_voice_players(&self) -> Vec<horizon_mods::native::Player> {
+        let Some(remote) = &self.remote else {
+            return Vec::new();
+        };
+        remote
+            .tab_players
+            .iter()
+            .map(|(id, info)| {
+                let position = remote
+                    .level_players
+                    .iter()
+                    .find(|(_, uuid)| *uuid == id)
+                    .and_then(|(entity, _)| self.mobs.iter().find(|m| m.id == *entity as u32))
+                    .map(|m| [m.position.x, m.position.y, m.position.z]);
+                horizon_mods::native::Player {
+                    id: super::native_voice::uuid(*id),
+                    name: info.name.clone(),
+                    position,
+                    dimension: position.map(|_| self.dim.id().to_owned()),
+                }
+            })
+            .collect()
+    }
+
     /// A `Holder<SoundEvent>` off the wire: an inline event's location, or
     /// the name of a registered one.
     pub(super) fn remote_sound_name(
@@ -1770,6 +1802,7 @@ impl Game<'_> {
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
             C::CustomPayload(p) => {
+                self.mods.native_voice.deliver(None, &p.channel, &p.data);
                 #[cfg(feature = "mods")]
                 self.mods.mods.custom_payload(None, &p.channel, &p.data);
                 #[cfg(not(feature = "mods"))]
@@ -3636,8 +3669,10 @@ impl Game<'_> {
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.tick_remote_level()?;
         // Client mods tick on any server, single player's own included.
+        self.sync_native_voice();
         self.tick_mods();
         self.native_tick();
+        self.flush_native_voice();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {

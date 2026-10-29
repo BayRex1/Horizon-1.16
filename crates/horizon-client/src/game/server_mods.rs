@@ -536,6 +536,7 @@ mod run {
                         && self.player.is_some()
                         && self.player_uuid_string() == player
                     {
+                        self.mods.native_voice.deliver(None, &channel, &data);
                         self.mods.mods.custom_payload(None, &channel, &data);
                     } else if let Some(host) = host.as_deref_mut().or(self.lan.as_mut())
                         && let Some(conn) = host

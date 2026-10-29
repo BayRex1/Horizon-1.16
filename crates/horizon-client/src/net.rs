@@ -80,7 +80,11 @@ pub enum Event {
     },
 }
 
+static NEXT_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Session {
+    /// Process-local identity: reconnects never reuse a session grant.
+    pub connection_id: u64,
     events: Receiver<Event>,
     writer: Arc<Mutex<Option<ConnWriter>>>,
     /// The connection is in configuration (else in play). Changed only
@@ -186,6 +190,7 @@ impl Session {
             .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
         Self {
+            connection_id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             events,
             writer,
             configuring,
@@ -842,6 +847,7 @@ mod tests {
         let (mut reader, writer) = Connection::local(client).split();
         let (send, events) = channel();
         let session = Session {
+            connection_id: 0,
             events,
             writer: Arc::new(Mutex::new(Some(writer))),
             configuring: Arc::new(AtomicBool::new(false)),

@@ -125,6 +125,7 @@ mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
 mod native_shaders;
+mod native_voice;
 mod natural_spawning;
 mod nautili;
 mod net_harness;
@@ -5209,8 +5210,10 @@ impl Game<'_> {
         self.tick_totem();
         self.update_totem_ready();
         self.tick_command_extras();
+        self.sync_native_voice();
         self.tick_mods();
         self.native_tick();
+        self.flush_native_voice();
         self.tick_server_mods();
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
@@ -6163,6 +6166,7 @@ impl Game<'_> {
             self.draw_extras(&mut batch);
             self.draw_mod_shapes(&mut batch);
         }
+        self.draw_native_microphone(&mut batch);
         if show_hud {
             // Hud.nextContextualInfoState: the jump bar, the experience bar or
             // the locator bar above the hotbar.
@@ -12817,6 +12821,7 @@ impl ApplicationHandler for Game<'_> {
         }
         if let WindowEvent::Focused(false) = &event {
             self.physical_keys.clear();
+            self.mods.native_voice.stop_capture();
         }
         if let WindowEvent::ModifiersChanged(m) = &event {
             self.modifiers = m.state();

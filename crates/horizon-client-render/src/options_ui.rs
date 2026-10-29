@@ -2230,6 +2230,19 @@ impl OptionsUi {
                 {
                     tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
                 }
+                if let WKind::Button {
+                    act: Act::NativeButton(i, b),
+                    ..
+                } = &wd.kind
+                    && let Some(m) = s.mods.installed.get(*i)
+                    && let Some(label) = m.native.as_ref().and_then(|p| p.buttons.get(*b))
+                {
+                    tooltip = Some(
+                        atlas
+                            .font
+                            .split(&Text::literal(format!("{label}\n{}", m.description)), 170.0),
+                    );
+                }
                 let key = match &wd.kind {
                     WKind::Button {
                         act: Act::Cycle(opt),

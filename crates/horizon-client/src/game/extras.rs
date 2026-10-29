@@ -61,7 +61,9 @@ impl Game<'_> {
         // For mods (`render.frame-stats`, `native_frame_rate`).
         let now = self.extras_now();
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
+        self.sync_native_voice();
         self.native_frame(elapsed);
+        self.flush_native_voice();
     }
     /// The frame counter for mods: fps, min, 1% low.
     pub(super) fn frame_reading(&self) -> (u32, u32, u32) {

@@ -19,9 +19,9 @@ with the same ID still takes precedence over its WebAssembly version. The audio
 feature forwards to both the game mixer and the mod audio backend.
 
 Native mods run with OS privileges and do not gain sandbox guarantees from this
-API. The proposed native service permission model is documented separately in
-[native-voice-permissions.md](../native-voice-permissions.md); these WebAssembly
-interfaces do not implement that proposal.
+API. Native mods use [native hook API 3 services](../native-voice.md) with separate
+session consent, sharing the PCM and UDP backends. Their
+[permission design](../native-voice-permissions.md) describes the trust boundary.
 
 ## Permissions
 

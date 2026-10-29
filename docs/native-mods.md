@@ -38,6 +38,12 @@ the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
 
+API 3 adds [native audio and networking services](native-voice.md): `native_voice_mods`
+declares service users, and `native_voice` exposes per-mod microphone capture, PCM playback,
+scoped UDP/DNS, custom payloads, connection/player events and secure randomness. These work
+without the WebAssembly `mods` feature. Sensitive service access requires separate session
+consent in Options > Mods > Settings; native code still has full OS rights.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
@@ -109,9 +115,10 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 ## Trust
 
-Proposed microphone and network services for native voice mods are described in
-[Native voice permissions](native-voice-permissions.md). This is a design proposal,
-not an implemented permission system or a sandbox for native code.
+The experimental session-only services and their consent controls are described in
+[Native voice services](native-voice.md). The broader
+[permission design](native-voice-permissions.md) also discusses future persistent grants.
+These controls govern Horizon helpers; they do not sandbox native code.
 
 - **Off by default.** The command needs `--trust-native-code`; the window shows a warning in red before every
   build: the mods run with full access to the computer, and their ids and versions. The Mods page says who made

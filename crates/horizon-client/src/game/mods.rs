@@ -38,6 +38,7 @@ use {
 
 #[derive(Default)]
 pub(super) struct ModsState {
+    pub(super) native_voice: horizon_mods::native::Services,
     #[cfg(feature = "mods")]
     pub(super) mods: Mods,
     /// Capability `input`: a claimed item's use while the button is down.
@@ -698,6 +699,10 @@ impl Game<'_> {
     }
     /// [`Game::show_mod_output`], with the hub when it is out of `self.lan`.
     pub(super) fn route_mod_output(&mut self, mut host: Option<&mut LanHost>) {
+        if self.remote.is_some() {
+            // A WASM hook may register its first channel between frames.
+            self.sync_native_voice();
+        }
         for output in self.mods.mods.drain() {
             let line = match output {
                 Output::Chat { name, text } => {
@@ -725,6 +730,13 @@ impl Game<'_> {
                     channel,
                     data,
                 } => {
+                    // The game announces the union of native and WASM channels.
+                    if matches!(
+                        channel.as_str(),
+                        "minecraft:register" | "minecraft:unregister"
+                    ) {
+                        continue;
+                    }
                     if self.remote.is_some() {
                         self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
                             horizon_protocol::packets::configuration::CustomPayload {
@@ -734,6 +746,9 @@ impl Game<'_> {
                         ));
                     } else if self.player.is_some() {
                         let player = self.player_uuid_string();
+                        self.mods
+                            .native_voice
+                            .deliver(Some(&player), &channel, &data);
                         self.mods
                             .mods
                             .custom_payload(Some(&player), &channel, &data);

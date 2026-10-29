@@ -1,6 +1,23 @@
 # Design proposal: microphone and scoped networking for native voice mods
 
-> Status: proposal for discussion; these services and permissions are not implemented.
+> Status: experimental session-only helpers are implemented in Native hooks API 3.
+> Persistent grants and the wider UX below remain a proposal.
+
+## Implemented scope
+
+[Native voice services](native-voice.md) implement separate session consent for microphone,
+exact hostname/port DNS and numeric UDP peers, with explicit local-network labels. They use
+bounded shared PCM/UDP backends without Wasmtime. Reconnect, disconnect, disable and changes
+to a mod declaration discard grants; no permission is persisted. The currently declared
+name, author, version, purpose and server are shown with permission controls. Declaration
+metadata is self-reported native code, not authenticated bundle identity.
+
+This first implementation deliberately has no “remember” action. Persistent consent needs
+launcher-provided reviewed bundle identity, the design below and maintainer agreement. The
+OS resolver is bounded to four workers globally; the consumer times out after ten seconds,
+but an OS lookup already running cannot be forcibly terminated. Link-local, multicast,
+broadcast and unspecified UDP destinations remain unavailable even with local consent.
+
 
 Following the feedback on [the experimental WebAssembly audio/networking PR](https://github.com/horizon-rust/horizon/pull/3276#issuecomment-6488969381), this proposal targets native mods and the stable hook points introduced in [#3345](https://github.com/horizon-rust/horizon/pull/3345), as described in [native-mods.md](native-mods.md).
 

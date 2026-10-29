@@ -1427,6 +1427,10 @@ impl Game<'_> {
                 self.guest_quiet_commands(host, conn, &p.data)
             }
             S::CustomPayload(p) => {
+                let player = super::native_voice::uuid(host.hub.guests[gi].uuid);
+                self.mods
+                    .native_voice
+                    .deliver(Some(&player), &p.channel, &p.data);
                 #[cfg(feature = "mods")]
                 {
                     let uuid = host.hub.guests[gi].uuid;
