@@ -10,6 +10,34 @@ use serde::Deserialize;
 const BLOCKS_JSON: &str = include_str!("../data/legacy_1_16_5/blocks.json");
 const BIOMES_JSON: &str = include_str!("../data/legacy_1_16_5/biomes.json");
 
+/// Overworld vertical geometry in Minecraft Java 1.16.5. Keep this separate
+/// from the modern world's -64..319 build range.
+pub const MIN_BUILD_Y: i32 = 0;
+pub const BUILD_HEIGHT: i32 = 256;
+pub const MAX_BUILD_Y: i32 = MIN_BUILD_Y + BUILD_HEIGHT - 1;
+pub const SECTION_HEIGHT: i32 = 16;
+pub const SECTION_COUNT: usize = (BUILD_HEIGHT / SECTION_HEIGHT) as usize;
+pub const SEA_LEVEL: i32 = 63;
+
+/// Convert a block Y coordinate into the 1.16.5 section slot (0..15).
+pub const fn section_index(y: i32) -> Option<usize> {
+    if y < MIN_BUILD_Y || y > MAX_BUILD_Y {
+        None
+    } else {
+        Some(((y - MIN_BUILD_Y) / SECTION_HEIGHT) as usize)
+    }
+}
+
+/// Convert a section slot (0..15) to its minimum block Y coordinate.
+pub const fn section_min_y(index: usize) -> Option<i32> {
+    if index >= SECTION_COUNT {
+        None
+    } else {
+        Some(MIN_BUILD_Y + index as i32 * SECTION_HEIGHT)
+    }
+}
+
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct LegacyBlockProperty {
     pub name: String,
@@ -73,6 +101,22 @@ pub fn biome_by_name(name: &str) -> Result<Option<LegacyBiome>, serde_json::Erro
     Ok(biomes()?.into_iter().find(|biome| biome.name == name))
 }
 
+/// Resolve a 1.16.5 block-state registry ID to its block and per-block state
+/// offset. The offset is relative to min_state_id, not a modern Horizon ID.
+pub fn block_by_state_id(
+    state_id: u32,
+) -> Result<Option<(LegacyBlock, u32)>, serde_json::Error> {
+    Ok(blocks()?.into_iter().find_map(|block| {
+        (block.min_state_id <= state_id && state_id <= block.max_state_id)
+            .then_some((block, state_id - block.min_state_id))
+    }))
+}
+
+/// Resolve a biome's protocol-era numeric registry ID.
+pub fn biome_by_id(id: u32) -> Result<Option<LegacyBiome>, serde_json::Error> {
+    Ok(biomes()?.into_iter().find(|biome| biome.id == id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +155,42 @@ mod tests {
                 .iter()
                 .any(|property| property.name == "waterlogged")
         );
+    }
+
+    #[test]
+    fn legacy_state_ids_resolve_without_using_modern_registry_ids() {
+        let (stairs, offset) = block_by_state_id(1954)
+            .expect("embedded block data must parse")
+            .expect("first oak stairs state must exist");
+        assert_eq!(stairs.name, "oak_stairs");
+        assert_eq!(offset, 0);
+
+        let (stairs_last, offset) = block_by_state_id(2033)
+            .expect("embedded block data must parse")
+            .expect("last oak stairs state must exist");
+        assert_eq!(stairs_last.name, "oak_stairs");
+        assert_eq!(offset, 79);
+
+        assert!(block_by_state_id(17_112)
+            .expect("embedded block data must parse")
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_dimension_uses_the_1165_build_range() {
+        assert_eq!(MIN_BUILD_Y, 0);
+        assert_eq!(BUILD_HEIGHT, 256);
+        assert_eq!(MAX_BUILD_Y, 255);
+        assert_eq!(SECTION_COUNT, 16);
+        assert_eq!(SEA_LEVEL, 63);
+        assert_eq!(section_index(0), Some(0));
+        assert_eq!(section_index(15), Some(0));
+        assert_eq!(section_index(16), Some(1));
+        assert_eq!(section_index(255), Some(15));
+        assert_eq!(section_index(-1), None);
+        assert_eq!(section_index(256), None);
+        assert_eq!(section_min_y(15), Some(240));
+        assert_eq!(section_min_y(16), None);
     }
 
     #[test]
