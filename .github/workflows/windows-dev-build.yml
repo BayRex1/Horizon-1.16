@@ -1,0 +1,86 @@
+name: Windows development build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - port/minecraft-1.16.5
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'xtask/**'
+      - '.github/workflows/windows-dev-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-x64:
+    name: Build Windows x64 executables
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      HORIZON_TELEMETRY_URL: "off"
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-dev-x64
+
+      - name: Build Horizon executables
+        shell: bash
+        run: |
+          cargo build --release --locked --features horizon-client/mods \
+            -p horizon-client --bin horizon-client --bin horizon-ctl \
+            -p horizon-prepare --bin horizon-prepare \
+            -p horizon-server --bin horizon-server
+
+      - name: Verify executable files exist
+        shell: pwsh
+        run: |
+          $files = @(
+            "target/release/horizon-client.exe",
+            "target/release/horizon-ctl.exe",
+            "target/release/horizon-prepare.exe",
+            "target/release/horizon-server.exe"
+          )
+          foreach ($file in $files) {
+            if (!(Test-Path $file)) { throw "Missing build output: $file" }
+            Get-Item $file | Select-Object Name, Length
+          }
+
+      - name: Smoke-test command-line startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          target/release/horizon-client.exe --help
+          target/release/horizon-ctl.exe --help
+          target/release/horizon-prepare.exe --help
+          target/release/horizon-server.exe --help
+
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-windows-x64-dev
+          path: |
+            target/release/horizon-client.exe
+            target/release/horizon-ctl.exe
+            target/release/horizon-prepare.exe
+            target/release/horizon-server.exe
+          if-no-files-found: error
+          retention-days: 7
