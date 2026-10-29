@@ -74,6 +74,7 @@ pub mod item_use_lifecycle;
 pub mod item_use_start;
 pub mod java_hash_map;
 pub mod level;
+pub mod legacy_1_16_5;
 pub mod liquid_collision;
 pub mod live_attribute_updates;
 pub mod living_air;
