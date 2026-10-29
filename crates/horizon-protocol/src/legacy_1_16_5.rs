@@ -261,8 +261,7 @@ impl LegacyChunkSection {
         let bits = self.bits_per_block as usize;
         let per_long = 64 / bits;
         let word = *self.data.get(index / per_long)? as u64;
-        let palette_index =
-            ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
+        let palette_index = ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
         if self.palette.is_empty() {
             Some(palette_index as i32)
         } else {
