@@ -540,7 +540,7 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
     NamedTag {
         name: JavaString::default(),
         tag: compound([
-            ("DataVersion".to_owned(), Tag::Int(2730)),
+            ("DataVersion".to_owned(), Tag::Int(2586)),
             ("Level".to_owned(), level),
         ]),
     }
@@ -640,11 +640,11 @@ pub fn create_bootstrap_world(
     ]);
     let spawn_y = terrain_height(seed, 8, 8) + 1;
     let data = compound(vec![
-        ("DataVersion", Tag::Int(2730)),
+        ("DataVersion", Tag::Int(2586)),
         ("LevelName", string(name)),
         ("version", Tag::Int(19133)),
         ("Version", compound(vec![
-            ("Id", Tag::Int(2730)),
+            ("Id", Tag::Int(2586)),
             ("Name", string("1.16.5")),
             ("Snapshot", Tag::Byte(0)),
         ])),
@@ -677,7 +677,7 @@ pub fn create_bootstrap_world(
     let root = NamedTag {
         name: JavaString::default(),
         tag: compound(vec![
-            ("DataVersion", Tag::Int(2730)),
+            ("DataVersion", Tag::Int(2586)),
             ("Data", data),
         ]),
     };
@@ -741,7 +741,7 @@ mod tests {
         let other = generate_bootstrap_chunk(5678, 0, 0);
         assert_eq!(first, same);
         assert_ne!(first, other);
-        assert_eq!(first.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+        assert_eq!(first.tag.get("DataVersion"), Some(&Tag::Int(2586)));
         let level = first.tag.get("Level").expect("chunk Level");
         assert_eq!(level.get("xPos"), Some(&Tag::Int(0)));
         assert_eq!(level.get("zPos"), Some(&Tag::Int(0)));
@@ -803,7 +803,7 @@ mod tests {
         let uncompressed = Compression::Gzip.decode(&level_bytes, Limits::default().max_bytes).unwrap();
         let (level_dat, used) = nbt::read_named(&uncompressed, Limits::default()).unwrap();
         assert_eq!(used, uncompressed.len());
-        assert_eq!(level_dat.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+        assert_eq!(level_dat.tag.get("DataVersion"), Some(&Tag::Int(2586)));
         let data = level_dat.tag.get("Data").expect("level.dat Data");
         assert_eq!(data.get("LevelName"), Some(&Tag::String(crate::nbt::JavaString::from("Test World"))));
         assert_eq!(data.get("RandomSeed"), Some(&Tag::Long(987654321)));
@@ -825,7 +825,7 @@ mod tests {
         let mut spawn_region = RegionFile::open(region_dir.join("r.0.0.mca")).unwrap();
         let spawn_chunk = spawn_region.read(horizon_core::position::ChunkPos::new(0, 0)).unwrap().unwrap();
         let chunk_nbt = spawn_chunk.nbt(Limits::default()).unwrap();
-        assert_eq!(chunk_nbt.tag.get("DataVersion"), Some(&Tag::Int(2730)));
+        assert_eq!(chunk_nbt.tag.get("DataVersion"), Some(&Tag::Int(2586)));
 
         std::fs::remove_dir_all(base).unwrap();
     }
@@ -853,7 +853,7 @@ mod tests {
         let decoded = record.nbt(Limits::default()).unwrap();
         assert_eq!(
             decoded.tag.get("DataVersion"),
-            Some(&crate::nbt::Tag::Int(2730))
+            Some(&crate::nbt::Tag::Int(2586))
         );
         assert_eq!(
             decoded.tag.get("Level").and_then(|level| level.get("xPos")),
