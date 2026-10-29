@@ -202,7 +202,7 @@ class Game:
         if where.startswith('Window '):
             # One window button cycles through the windows: on until it names this one (or a new
             # window when it never does: the window isn't open yet).
-            for _ in range(8):
+            for _ in range(16):
                 windows = [l for l in self.labels(by) if l.startswith('Window ')]
                 if not windows or where in windows:
                     break
@@ -735,6 +735,31 @@ def scenario_eight():
 
 
 
+def scenario_sixteen():
+    print('sixteen: sixteen players in a 4x4 grid, P16 moves to its own window and leaves')
+    g = Game(16)
+    try:
+        players = range(1, 17)
+        g.wait(lambda: all(g.ctl(n, 'state').get('player') is not None for n in players),
+               'all sixteen players admitted to the world', seconds=60)
+        check('all sixteen players enter the world', True, True)
+        sizes = g.sizes(players)
+        near = lambda a, b: abs(a - b) <= 1
+        check('all sixteen views have equal dimensions',
+              all(near(w, sizes[0][0]) and near(h, sizes[0][1]) for w, h in sizes), True)
+        drawing = lambda: all(g.ctl(n, 'status')['fps'] > 0 for n in players)
+        g.wait(drawing, 'all sixteen views drawing', seconds=30)
+        check('every player renders', drawing(), True)
+        print('  FPS per player:', [round(g.ctl(n, 'status')['fps'], 1) for n in players])
+        g.play_on(16, 'New window')
+        check('P16 gets its own larger view', g.size(16)[0] > sizes[15][0], True)
+        g.ctl(16, 'disconnect')
+        g.wait(lambda: not g.alive(16), 'P16 leaving')
+        check('P15 still plays after P16 leaves', g.ctl(15, 'state').get('player') is not None, True)
+    finally:
+        g.quit()
+
+
 def scenario_pointer():
     print('pointer: only the player with the keyboard and mouse grabs the pointer')
     g = Game(2)
@@ -851,11 +876,12 @@ SCENARIOS = {
     'pausemenu': scenario_pausemenu,
     'profile_availability': scenario_profile_availability,
     'gui_scales': scenario_gui_scales,
+    'sixteen': scenario_sixteen,
 }
 
 # Related scenarios, for `--only @name`.
 GROUPS = {
-    'layout': ['windows', 'three', 'eight', 'monitor', 'setup'],
+    'layout': ['windows', 'three', 'eight', 'sixteen', 'monitor', 'setup'],
     'joining': ['join', 'picker', 'fullscreen', 'bumpers', 'leave', 'pausemenu'],
     'menus': ['leave', 'setup', 'pausemenu'],
     'controller': ['bumpers', 'setup', 'pointer'],

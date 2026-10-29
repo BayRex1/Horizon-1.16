@@ -407,10 +407,16 @@ impl Game<'_> {
         };
         let owner = launch.owner;
         let published = flags.clone();
+        let local_players = flags.clone();
         let net = NetConfig {
             // No network until it is opened to the LAN; the memory connection
             // is not compressed (`Connection.isMemoryConnection`).
             listen: false,
+            // Registered local seats share this computer; the vanilla LAN capacity still
+            // applies to other connections when the world is published.
+            bypasses_limit: Some(Arc::new(move |uuid| {
+                local_players.split_players.lock().unwrap().contains(&uuid)
+            })),
             gate: Some(Arc::new(move |_, uuid, _| {
                 (uuid != owner
                     && published.published.load(Ordering::Relaxed) == 0

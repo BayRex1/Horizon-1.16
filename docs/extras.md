@@ -130,7 +130,7 @@ and the container screen tests are unchanged).
   engine on random chests.
 
 ### Splitscreen (`splitscreen`, default off; `splitscreenTwo`, `splitscreenThree`, default 0)
-Up to 8 players on one computer, each with a controller, as on a console
+Up to 16 players on one computer, each with a controller, as on a console
 (`game/split.rs`, `game/split/`, `split_ui.rs`, `split_profiles.rs`,
 `split_layout.rs`). Horizon Settings → Splitscreen... opens the Setup screen,
 which holds the switch. While splitscreen is on, every player's pause menu has

@@ -3,15 +3,28 @@
 //! plays in each, before any of it is applied.
 use winit::dpi::PhysicalSize;
 
-/// Players at most: P1 and seven more.
-pub const MAX_PLAYERS: usize = 8;
+/// Players at most: P1 and fifteen more.
+pub const MAX_PLAYERS: usize = 16;
 
 /// A player's view: its window (an index into the windows), its corner there and its size.
 pub type View = (usize, [u32; 2], PhysicalSize<u32>);
 
-/// Rows of five to eight players sharing a window, widest first (columns on a tall window): every
+/// Rows of five to sixteen players sharing a window, widest first (columns on a tall window): every
 /// view stays near a screen's shape, where a full grid would leave a long thin one.
-const ROWS: [&[u32]; 4] = [&[3, 2], &[3, 3], &[3, 2, 2], &[3, 3, 2]];
+const ROWS: [&[u32]; MAX_PLAYERS - 4] = [
+    &[3, 2],
+    &[3, 3],
+    &[3, 2, 2],
+    &[3, 3, 2],
+    &[3, 3, 3],
+    &[4, 3, 3],
+    &[4, 4, 3],
+    &[4, 4, 4],
+    &[4, 3, 3, 3],
+    &[4, 4, 3, 3],
+    &[4, 4, 4, 3],
+    &[4, 4, 4, 4],
+];
 
 /// `order` made a whole order of `n` players: those it names (once, if there are), then the
 /// others, P1 first.
@@ -49,7 +62,7 @@ pub fn place_ordered(
 /// share it in the order they come: two take halves (`two`: 0 side by side when wider than
 /// tall, 1 side by side, 2 top and bottom); three (`three`: 0 the first wide on top and two below,
 /// 1 the first tall on the left and two on the right, 2 three columns); four its quarters; five
-/// to eight rows of three and two (`ROWS`).
+/// to sixteen in balanced rows (`ROWS`).
 pub fn place(windows: &[usize], sizes: &[PhysicalSize<u32>], two: u8, three: u8) -> Vec<View> {
     windows
         .iter()
@@ -94,10 +107,10 @@ pub fn place(windows: &[usize], sizes: &[PhysicalSize<u32>], two: u8, three: u8)
         .collect()
 }
 
-/// Five to eight players: `slot`'s cell `[x0, x1, y0, y1]` in rows of three and two (`ROWS`), or
+/// Five to sixteen players: `slot`'s cell `[x0, x1, y0, y1]` in balanced rows (`ROWS`), or
 /// in columns when the window is taller than wide.
 fn rows(n: usize, slot: u32, w: u32, h: u32) -> [u32; 4] {
-    let counts = ROWS[n.clamp(5, 8) - 5];
+    let counts = ROWS[n.clamp(5, MAX_PLAYERS) - 5];
     let bands = counts.len() as u32;
     let (mut band, mut k) = (0, slot);
     while band + 1 < bands && k >= counts[band as usize] {
@@ -464,9 +477,21 @@ mod tests {
         let seven = place(&[0; 7], &tv, 0, 0);
         assert_eq!(seven[3], (0, [0, 360], size(960, 360)));
         // Every count tiles the window exactly: no gap, no overlap.
-        for n in 5..=8 {
+        for n in 5..=MAX_PLAYERS {
             for screen in [size(1920, 1080), size(1080, 1920), size(1711, 997)] {
                 let views = place(&vec![0; n], &[screen], 0, 0);
+                for (i, (_, [x, y], size)) in views.iter().enumerate() {
+                    assert!(x + size.width <= screen.width && y + size.height <= screen.height);
+                    for (_, [ox, oy], other) in &views[..i] {
+                        assert!(
+                            x + size.width <= *ox
+                                || ox + other.width <= *x
+                                || y + size.height <= *oy
+                                || oy + other.height <= *y,
+                            "overlapping views for {n} in {screen:?}"
+                        );
+                    }
+                }
                 let area: u64 = views
                     .iter()
                     .map(|v| u64::from(v.2.width) * u64::from(v.2.height))
@@ -482,6 +507,26 @@ mod tests {
         let tall = place(&[0; 5], &[size(1080, 1920)], 0, 0);
         assert_eq!(tall[0], (0, [0, 0], size(540, 640)));
         assert_eq!(tall[4], (0, [540, 960], size(540, 960)));
+    }
+
+    #[test]
+    fn sixteen_players_form_a_four_by_four_grid() {
+        let views = place(&[0; 16], &[size(3840, 2160)], 0, 0);
+        for (i, view) in views.iter().enumerate() {
+            assert_eq!(
+                *view,
+                (
+                    0,
+                    [(i as u32 % 4) * 960, (i as u32 / 4) * 540],
+                    size(960, 540)
+                )
+            );
+        }
+        let mut draft = here(16);
+        draft.place_player(15, Spot::New);
+        let views = draft.preview(&monitors(), "Built-in");
+        assert_eq!(views.len(), 16);
+        assert_ne!(views[0].0, views[15].0);
     }
 
     fn monitors() -> Vec<Monitor> {
