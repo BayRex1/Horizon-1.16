@@ -246,7 +246,10 @@ impl Game<'_> {
             for (index, value) in values.iter_mut().enumerate() {
                 let legacy_id = source.block_state(index).unwrap_or(0);
                 *value = if legacy_id >= 0 {
-                    block_state_map.get(legacy_id as usize).copied().unwrap_or(0)
+                    block_state_map
+                        .get(legacy_id as usize)
+                        .copied()
+                        .unwrap_or(0)
                 } else {
                     0
                 };
