@@ -256,9 +256,10 @@ pub fn import_legacy_1_16_5(
         .map(|entry| entry.path())
         .filter(|path| {
             path.extension().is_some_and(|ext| ext == "mca")
-                && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                    n.starts_with("r.") && n.ends_with(".mca")
-                })
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("r.") && n.ends_with(".mca"))
         })
         .collect::<Vec<_>>();
     region_paths.sort();
@@ -299,7 +300,8 @@ pub fn import_legacy_1_16_5(
     if chunks.is_empty() {
         return Ok(0);
     }
-    save.tables.get_or_init(|| Arc::new(SaveTables::new(assets)));
+    save.tables
+        .get_or_init(|| Arc::new(SaveTables::new(assets)));
     save.save(&chunks, assets.registry, biomes)?;
     log::info!(
         "Horizon: imported {} Java 1.16.5 chunks from {}",
