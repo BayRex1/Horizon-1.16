@@ -75,6 +75,55 @@ pub mod login {
     }
 }
 
+/// Packet IDs for the Play state in protocol 754 (Minecraft 1.16.5).
+///
+/// Keep this table isolated from the current protocol's packet IDs.
+pub mod play {
+    pub mod clientbound {
+        /// Disconnect while in the world.
+        pub const DISCONNECT: i32 = 0x1A;
+        /// Keep-alive request carrying a signed 64-bit token.
+        pub const KEEP_ALIVE: i32 = 0x20;
+    }
+
+    pub mod serverbound {
+        /// Acknowledge the server's keep-alive token.
+        pub const KEEP_ALIVE: i32 = 0x10;
+        /// Confirm a server-issued player teleport.
+        pub const TELEPORT_CONFIRM: i32 = 0x00;
+        /// Report player position and rotation.
+        pub const PLAYER_POSITION_ROTATION: i32 = 0x12;
+    }
+}
+
+/// Decode the payload of a protocol-754 Play Keep Alive packet.
+pub fn decode_play_keep_alive(payload: &[u8]) -> crate::Result<i64> {
+    let mut r = crate::buf::Reader::new(payload);
+    let token = r.i64()?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 keep-alive packet"));
+    }
+    Ok(token)
+}
+
+/// Encode the serverbound protocol-754 Play Keep Alive response as a packet body.
+pub fn encode_play_keep_alive(token: i64) -> crate::Result<Vec<u8>> {
+    let mut packet = crate::buf::Writer::new();
+    packet.varint(play::serverbound::KEEP_ALIVE);
+    packet.i64(token);
+    Ok(packet.data)
+}
+
+/// Decode the JSON string carried by the Play Disconnect packet.
+pub fn decode_play_disconnect(payload: &[u8]) -> crate::Result<String> {
+    let mut r = crate::buf::Reader::new(payload);
+    let reason = r.string(32767)?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 play-disconnect packet"));
+    }
+    Ok(reason)
+}
+
 /// Encode the legacy handshake packet and its outer frame.
 ///
 /// `next_state` is 1 for status or 2 for login. This function does not
@@ -340,6 +389,27 @@ mod tests {
         let mut packet = Reader::new(framed);
         assert_eq!(packet.varint().unwrap(), 1);
         assert_eq!(packet.i64().unwrap(), 0x0102030405060708);
+    }
+
+    #[test]
+    fn play_keep_alive_round_trips_the_signed_token() {
+        use crate::buf::Reader;
+        let token = -0x0102030405060708i64;
+        let body = encode_play_keep_alive(token).unwrap();
+        let mut r = Reader::new(&body);
+        assert_eq!(r.varint().unwrap(), play::serverbound::KEEP_ALIVE);
+        assert_eq!(decode_play_keep_alive(&body[r.position()..]).unwrap(), token);
+    }
+
+    #[test]
+    fn play_packet_ids_match_protocol_754_layout() {
+        assert_eq!(play::clientbound::DISCONNECT, 0x1A);
+        assert_eq!(play::clientbound::KEEP_ALIVE, 0x20);
+        assert_eq!(play::serverbound::TELEPORT_CONFIRM, 0x00);
+        assert_eq!(play::serverbound::KEEP_ALIVE, 0x10);
+        assert_eq!(play::serverbound::PLAYER_POSITION_ROTATION, 0x12);
+        assert!(decode_play_keep_alive(&[0; 9]).is_err());
+        assert!(decode_play_disconnect(&[2, b'{', b'}', 0]).is_err());
     }
 
     #[test]
