@@ -25,6 +25,12 @@
 //! click another view); closing a player's own window drops that player. The players' frames are
 //! paced once, at the fastest any wants.
 //!
+//! Design: one process, one `Game` per player, one wgpu device, one compositor per window. The
+//! players share the game's data (`Resources`, the packs), one audio mixer, one controller reader
+//! and P1's server. Not one game process per player in its own window: that needs GPU textures
+//! shared across processes (per OS, unsafe), input, audio and the Setup screen across processes,
+//! and a copy of everything per player. It was weighed and set aside (2026-10-27).
+//!
 //! `HORIZON_SPLIT=N` (testing): splitscreen on, and N-1 players without controllers join once P1
 //! is in a world, as P2, P3... (`HORIZON_SPLIT_PICK=1`: picking profiles instead). The player in
 //! seat N takes `horizon-ctl` on P1's socket path + "N".
