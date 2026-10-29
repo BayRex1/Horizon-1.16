@@ -585,37 +585,58 @@ pub fn create_bootstrap_world(
     let dimension = |dimension_type: &str, settings: &str, biome: &str| {
         compound(vec![
             ("type", string(dimension_type)),
-            ("generator", compound(vec![
-                ("type", string("minecraft:noise")),
-                ("seed", Tag::Long(seed)),
-                ("settings", string(settings)),
-                ("biome_source", compound(vec![
-                    ("type", string("minecraft:fixed")),
-                    ("biome", string(biome)),
-                ])),
-            ])),
+            (
+                "generator",
+                compound(vec![
+                    ("type", string("minecraft:noise")),
+                    ("seed", Tag::Long(seed)),
+                    ("settings", string(settings)),
+                    (
+                        "biome_source",
+                        compound(vec![
+                            ("type", string("minecraft:fixed")),
+                            ("biome", string(biome)),
+                        ]),
+                    ),
+                ]),
+            ),
         ])
     };
     let dimensions = compound(vec![
-        ("minecraft:overworld", compound(vec![
-            ("type", string("minecraft:overworld")),
-            ("generator", compound(vec![
-                ("type", string("minecraft:noise")),
-                ("seed", Tag::Long(seed)),
-                ("settings", string("minecraft:overworld")),
-                ("biome_source", compound(vec![
-                    ("type", string("minecraft:vanilla_layered")),
-                    ("seed", Tag::Long(seed)),
-                    ("large_biomes", Tag::Byte(0)),
-                ])),
-            ])),
-        ])),
-        ("minecraft:the_nether", dimension(
-            "minecraft:the_nether", "minecraft:nether", "minecraft:nether_wastes"
-        )),
-        ("minecraft:the_end", dimension(
-            "minecraft:the_end", "minecraft:end", "minecraft:the_end"
-        )),
+        (
+            "minecraft:overworld",
+            compound(vec![
+                ("type", string("minecraft:overworld")),
+                (
+                    "generator",
+                    compound(vec![
+                        ("type", string("minecraft:noise")),
+                        ("seed", Tag::Long(seed)),
+                        ("settings", string("minecraft:overworld")),
+                        (
+                            "biome_source",
+                            compound(vec![
+                                ("type", string("minecraft:vanilla_layered")),
+                                ("seed", Tag::Long(seed)),
+                                ("large_biomes", Tag::Byte(0)),
+                            ]),
+                        ),
+                    ]),
+                ),
+            ]),
+        ),
+        (
+            "minecraft:the_nether",
+            dimension(
+                "minecraft:the_nether",
+                "minecraft:nether",
+                "minecraft:nether_wastes",
+            ),
+        ),
+        (
+            "minecraft:the_end",
+            dimension("minecraft:the_end", "minecraft:end", "minecraft:the_end"),
+        ),
     ]);
     let game_rules = compound(vec![
         ("doDaylightCycle", string("true")),
@@ -646,11 +667,14 @@ pub fn create_bootstrap_world(
         ("DataVersion", Tag::Int(2586)),
         ("LevelName", string(name)),
         ("version", Tag::Int(19133)),
-        ("Version", compound(vec![
-            ("Id", Tag::Int(2586)),
-            ("Name", string("1.16.5")),
-            ("Snapshot", Tag::Byte(0)),
-        ])),
+        (
+            "Version",
+            compound(vec![
+                ("Id", Tag::Int(2586)),
+                ("Name", string("1.16.5")),
+                ("Snapshot", Tag::Byte(0)),
+            ]),
+        ),
         ("GameType", Tag::Int(0)),
         ("MapFeatures", Tag::Byte(1)),
         ("hardcore", Tag::Byte(0)),
@@ -679,19 +703,23 @@ pub fn create_bootstrap_world(
     ]);
     let root = NamedTag {
         name: JavaString::default(),
-        tag: compound(vec![
-            ("DataVersion", Tag::Int(2586)),
-            ("Data", data),
-        ]),
+        tag: compound(vec![("DataVersion", Tag::Int(2586)), ("Data", data)]),
     };
     let encoded = Compression::Gzip.encode(
-        &nbt::write_named(&root, Limits::default()).map_err(|e| crate::compression::invalid(e.to_string()))?
+        &nbt::write_named(&root, Limits::default())
+            .map_err(|e| crate::compression::invalid(e.to_string()))?,
     )?;
-    let mut level = OpenOptions::new().write(true).create_new(true).open(directory.join("level.dat"))?;
+    let mut level = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join("level.dat"))?;
     level.write_all(&encoded)?;
     level.sync_all()?;
 
-    let mut lock = OpenOptions::new().write(true).create_new(true).open(directory.join("session.lock"))?;
+    let mut lock = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join("session.lock"))?;
     lock.write_all(&now.to_be_bytes())?;
     lock.sync_all()?;
 
@@ -803,17 +831,29 @@ mod tests {
         create_bootstrap_world(&world, "Test World", 987654321).unwrap();
 
         let level_bytes = std::fs::read(world.join("level.dat")).unwrap();
-        let uncompressed = Compression::Gzip.decode(&level_bytes, Limits::default().max_bytes).unwrap();
+        let uncompressed = Compression::Gzip
+            .decode(&level_bytes, Limits::default().max_bytes)
+            .unwrap();
         let (level_dat, used) = nbt::read_named(&uncompressed, Limits::default()).unwrap();
         assert_eq!(used, uncompressed.len());
         assert_eq!(level_dat.tag.get("DataVersion"), Some(&Tag::Int(2586)));
         let data = level_dat.tag.get("Data").expect("level.dat Data");
-        assert_eq!(data.get("LevelName"), Some(&Tag::String(crate::nbt::JavaString::from("Test World"))));
+        assert_eq!(
+            data.get("LevelName"),
+            Some(&Tag::String(crate::nbt::JavaString::from("Test World")))
+        );
         assert_eq!(data.get("RandomSeed"), Some(&Tag::Long(987654321)));
-        assert!(data.get("WorldGenSettings").and_then(|tag| tag.get("dimensions")).is_some());
+        assert!(
+            data.get("WorldGenSettings")
+                .and_then(|tag| tag.get("dimensions"))
+                .is_some()
+        );
         assert_eq!(data.get("SpawnX"), Some(&Tag::Int(8)));
         assert_eq!(data.get("SpawnZ"), Some(&Tag::Int(8)));
-        assert_eq!(std::fs::metadata(world.join("session.lock")).unwrap().len(), 8);
+        assert_eq!(
+            std::fs::metadata(world.join("session.lock")).unwrap().len(),
+            8
+        );
 
         let region_dir = world.join("region");
         let mut count = 0;
@@ -826,7 +866,10 @@ mod tests {
         }
         assert_eq!(count, 25);
         let mut spawn_region = RegionFile::open(region_dir.join("r.0.0.mca")).unwrap();
-        let spawn_chunk = spawn_region.read(horizon_core::position::ChunkPos::new(0, 0)).unwrap().unwrap();
+        let spawn_chunk = spawn_region
+            .read(horizon_core::position::ChunkPos::new(0, 0))
+            .unwrap()
+            .unwrap();
         let chunk_nbt = spawn_chunk.nbt(Limits::default()).unwrap();
         assert_eq!(chunk_nbt.tag.get("DataVersion"), Some(&Tag::Int(2586)));
 
