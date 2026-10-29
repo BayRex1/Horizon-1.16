@@ -33,7 +33,8 @@ Keep this as an isolated branch until the old protocol and gameplay path have te
 
 - [ ] Adapt registry bootstrap, dimension/biome data, block states, items and entity metadata.
 - [x] Add a bounded decoder for the 1.16.5 chunk-data envelope, section masks, heightmap NBT, biome IDs, block-state palettes, packed block-state storage, and block-entity NBT.
-- [ ] Finish renderer integration for protocol-754 chunks: a `remote_legacy_chunk` bridge now converts decoded sections into resident chunk storage and submits them to streaming, but callers must supply a verified 1.16.5-to-client block-state ID map. Legacy biome mapping and protocol-754 lighting updates are still outstanding.
+- [ ] Finish live connection integration for protocol-754 chunks. `remote_legacy_play_event` now routes decoded chunk events into the resident-world bridge, and the bridge converts section/biome layouts and submits columns to streaming. The live `connect_server`/frame loop still does not create or drain a protocol-754 event source, so this is an integration seam, not yet a playable connection.
+- [ ] Generate and verify complete 1.16.5 block-state and biome ID maps against the target runtime registries. The bridge now rejects missing/invalid mappings instead of silently rendering unknown states as air. Lighting and block-entity application remain incomplete.
 - [ ] Adapt movement, interaction, inventory and entity packets to the 1.16.5 layouts.
 - [ ] Load the target version's own assets from the user's legally obtained game installation; do not ship game assets in this repository.
 - [ ] Add a minimal end-to-end test: connect to a local 1.16.5 server, enter a world, receive chunks, move, and disconnect cleanly.
