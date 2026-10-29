@@ -292,6 +292,14 @@ pub(super) fn make_streaming(
         world_root,
         dim.id(),
     )));
+    if dim == Dim::Overworld {
+        horizon_client::save::import_legacy_1_16_5(
+            world_root,
+            &save,
+            pack.assets.as_ref(),
+            res.biomes().as_ref(),
+        )?;
+    }
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
