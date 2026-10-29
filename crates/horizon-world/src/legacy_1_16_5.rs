@@ -929,6 +929,44 @@ mod tests {
     }
 
     #[test]
+    fn legacy_chunk_adapter_exposes_blocks_to_current_runtime() {
+        use crate::chunk::ChunkData;
+        use horizon_core::position::{BlockPos, ChunkPos};
+
+        let legacy = generate_bootstrap_chunk(1234, 0, 0);
+        let runtime = to_runtime_chunk(&legacy).unwrap();
+        assert_eq!(runtime.position(), ChunkPos::new(0, 0));
+        assert_eq!(
+            runtime.block(BlockPos::new(8, 0, 8)).unwrap().unwrap().name,
+            "minecraft:bedrock"
+        );
+        let height = terrain_height(1234, 8, 8);
+        assert_eq!(
+            runtime.block(BlockPos::new(8, height, 8)).unwrap().unwrap().name,
+            "minecraft:grass_block"
+        );
+        let above = if height < SEA_LEVEL {
+            "minecraft:water"
+        } else {
+            "minecraft:air"
+        };
+        assert_eq!(
+            runtime.block(BlockPos::new(8, height + 1, 8)).unwrap().unwrap().name,
+            above
+        );
+
+        let mut wrong_version = legacy;
+        if let crate::nbt::Tag::Compound(root) = &mut wrong_version.tag {
+            root.insert(
+                crate::nbt::JavaString::from("DataVersion"),
+                crate::nbt::Tag::Int(2585),
+            );
+        }
+        assert!(to_runtime_chunk(&wrong_version).is_err());
+        let _: &ChunkData = &runtime;
+    }
+
+    #[test]
     fn bootstrap_world_writes_level_dat_and_spawn_region() {
         use crate::{
             compression::Compression,
