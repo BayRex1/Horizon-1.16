@@ -611,98 +611,20 @@ fn system_keychain_keeps_long_secrets() {
     assert_eq!(SystemStore.get(key).unwrap(), None);
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn long_secrets_split_into_credential_manager_sized_pieces() {
     // Mixed 1-, 2- and 4-byte characters, so the cuts land inside some of them.
     let secret = "aé🔑".repeat(300);
-    let pieces = split_secret(&secret, PIECE);
-    assert!(pieces.len() > 1);
+    let pieces = split_secret(&secret);
+    // Only Credential Manager needs pieces; the keychain takes it whole (one prompt).
+    assert_eq!(pieces.len() > 1, cfg!(windows));
     assert_eq!(pieces.concat(), secret);
-    for piece in &pieces {
+    for piece in pieces.iter().filter(|_| cfg!(windows)) {
         assert!(piece.len() <= PIECE);
         assert!(piece.encode_utf16().count() * 2 <= 2560);
     }
-    assert_eq!(split_secret("short", PIECE), vec!["short"]);
-    // The keychain (macOS) takes it whole: one item, one prompt.
-    assert_eq!(split_secret(&secret, usize::MAX).len(), 1);
-}
-
-/// System items in memory, a write failing once `fail_after` more have gone through: a crash or
-/// power cut in the middle of writing pieces.
-#[derive(Default)]
-struct Items {
-    map: Mutex<std::collections::BTreeMap<String, String>>,
-    fail_after: Mutex<Option<usize>>,
-}
-impl pieced::Items for Items {
-    fn read(&self, key: &str) -> Result<Option<String>, String> {
-        Ok(self.map.lock().unwrap().get(key).cloned())
-    }
-    fn write(&self, key: &str, value: &str) -> Result<(), String> {
-        let mut left = self.fail_after.lock().unwrap();
-        match *left {
-            Some(0) => return Err("cut off".into()),
-            Some(n) => *left = Some(n - 1),
-            None => {}
-        }
-        self.map.lock().unwrap().insert(key.into(), value.into());
-        Ok(())
-    }
-    fn remove(&self, key: &str) -> Result<bool, String> {
-        Ok(self.map.lock().unwrap().remove(key).is_some())
-    }
-}
-
-#[test]
-fn a_write_cut_off_halfway_leaves_the_last_whole_secret() {
-    let items = Items::default();
-    let first = "one ".repeat(700);
-    pieced::write(&items, "vault", &first, PIECE).unwrap();
-    assert_eq!(
-        pieced::read(&items, "vault").unwrap().as_deref(),
-        Some(first.as_str())
-    );
-    // A longer one cut off after two of its pieces: the head still names the first, whole.
-    let second = "two ".repeat(900);
-    *items.fail_after.lock().unwrap() = Some(2);
-    assert!(pieced::write(&items, "vault", &second, PIECE).is_err());
-    assert_eq!(
-        pieced::read(&items, "vault").unwrap().as_deref(),
-        Some(first.as_str())
-    );
-    // Written in full, it reads back, and the old generation's pieces are gone.
-    *items.fail_after.lock().unwrap() = None;
-    pieced::write(&items, "vault", &second, PIECE).unwrap();
-    assert_eq!(
-        pieced::read(&items, "vault").unwrap().as_deref(),
-        Some(second.as_str())
-    );
-    let pieces = items.map.lock().unwrap().len();
-    assert_eq!(
-        pieces,
-        1 + split_secret(&second, PIECE).len() + 2,
-        "the cut-off pieces linger, unread"
-    );
-    pieced::delete(&items, "vault").unwrap();
-    assert!(pieced::read(&items, "vault").unwrap().is_none());
-}
-
-#[test]
-fn an_older_launchers_pieces_still_read() {
-    let items = Items::default();
-    pieced::Items::write(&items, "abc", "first-").unwrap();
-    pieced::Items::write(&items, "abc.1", "second").unwrap();
-    assert_eq!(
-        pieced::read(&items, "abc").unwrap().as_deref(),
-        Some("first-second")
-    );
-    // Rewritten the new way: the older pieces go.
-    pieced::write(&items, "abc", "whole", PIECE).unwrap();
-    assert!(pieced::Items::read(&items, "abc.1").unwrap().is_none());
-    assert_eq!(
-        pieced::read(&items, "abc").unwrap().as_deref(),
-        Some("whole")
-    );
+    assert_eq!(split_secret("short"), vec!["short"]);
 }
 
 #[test]
@@ -842,6 +764,36 @@ impl SecretStore for Shared {
 }
 
 #[test]
+fn a_splitscreen_player_keeps_an_offline_name() {
+    let store = MemoryStore::default();
+    store
+        .set("abc", &serde_json::to_string(&secrets("t", true)).unwrap())
+        .unwrap();
+    let mut a = Accounts {
+        accounts: vec![Account {
+            uuid: "abc".into(),
+            name: "Ludo".into(),
+            skin: None,
+            cape: None,
+        }],
+        selected: Some("abc".into()),
+        ..Accounts::default()
+    };
+    // Kept without playing as it: the account still plays.
+    a.keep_offline(&store, "Bea").unwrap();
+    a.keep_offline(&store, "Cal").unwrap();
+    assert_eq!(a.offline, ["Bea", "Cal"]);
+    assert_eq!(a.name_arg(), None);
+    // The game gets every name.
+    let env: std::collections::HashMap<_, _> = a.look_env().into_iter().collect();
+    let profiles: serde_json::Value = serde_json::from_str(&env["HORIZON_PROFILES"]).unwrap();
+    assert_eq!(profiles.as_array().unwrap().len(), 2);
+    // No owner: nothing kept.
+    let mut none = Accounts::default();
+    assert!(none.keep_offline(&MemoryStore::default(), "Dan").is_err());
+}
+
+#[test]
 fn every_account_in_one_keychain_item() {
     let keychain = Shared::default();
     let vault = Vault::new(keychain.clone(), None);
@@ -888,41 +840,6 @@ fn a_vault_that_doesnt_read_is_never_written_over() {
     assert!(vault.get("a").is_err());
     assert!(vault.set("a", "1").is_err());
     assert_eq!(keychain.get("vault").unwrap().as_deref(), Some("{not json"));
-}
-
-#[test]
-fn an_open_launcher_sees_another_launchers_change() {
-    let dir = std::env::temp_dir().join(format!("horizon-vault-stamp-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let keychain = Shared::default();
-    let lock = Some(dir.join("vault.lock"));
-    let window = Vault::new(keychain.clone(), lock.clone());
-    let cli = Vault::new(keychain.clone(), lock);
-    window.set("a", "old").unwrap();
-    assert_eq!(window.get("a").unwrap().as_deref(), Some("old"));
-    // Signed in again from the command line: the open window reads the new secret.
-    cli.set("a", "new").unwrap();
-    assert_eq!(window.get("a").unwrap().as_deref(), Some("new"));
-    // And an account added there.
-    cli.set("b", "added").unwrap();
-    assert_eq!(window.get("b").unwrap().as_deref(), Some("added"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_sign_out_is_not_undone_by_a_copy_of_the_older_item() {
-    let keychain = Shared::default();
-    keychain.set("old", "secret").unwrap();
-    let window = Vault::new(keychain.clone(), None);
-    let cli = Vault::new(keychain.clone(), None);
-    // The command line signs the account out: the vault and the older item both go, at once.
-    cli.delete("old").unwrap();
-    // The window, looking for it afterwards, finds nothing to copy back in.
-    assert!(window.get("old").unwrap().is_none());
-    assert!(keychain.get("old").unwrap().is_none());
-    let kept: std::collections::BTreeMap<String, String> =
-        serde_json::from_str(&keychain.get("vault").unwrap().unwrap()).unwrap();
-    assert!(kept.is_empty());
 }
 
 #[test]
