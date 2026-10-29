@@ -100,21 +100,26 @@ pub struct RenderAssets {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+/// Rejects a resource bundle from another Minecraft data version before its registry is read.
+fn validate_resource_data_version(found: Option<i64>) -> io::Result<()> {
+    if found == Some(i64::from(DATA_VERSION)) {
+        return Ok(());
+    }
+    let found = found
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| "missing or invalid".to_owned());
+    Err(invalid(&format!(
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). Prepare resources from the matching Minecraft version; a 26.3 bundle cannot be used for 1.16.5.",
+        horizon_core::version::VERSION_ID
+    )))
+}
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
             root.join("horizon-resources.json"),
         )?))?;
-        let resource_data_version = manifest["data_version"].as_i64();
-        if resource_data_version != Some(i64::from(DATA_VERSION)) {
-            let found = resource_data_version
-                .map(|version| version.to_string())
-                .unwrap_or_else(|| "missing or invalid".to_owned());
-            return Err(invalid(&format!(
-                "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). Prepare resources from the matching Minecraft version; a 26.3 bundle cannot be used for 1.16.5.",
-                horizon_core::version::VERSION_ID
-            )).into());
-        }
+        validate_resource_data_version(manifest["data_version"].as_i64())?;
         let (registry, flags) =
             BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
         let bundle: Value =
@@ -239,5 +244,27 @@ impl RenderAssets {
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
         })
+    }
+}
+
+
+#[cfg(test)]
+mod resource_version_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_the_compiled_data_version() {
+        assert!(validate_resource_data_version(Some(i64::from(DATA_VERSION))).is_ok());
+        assert!(validate_resource_data_version(Some(2586)).is_err());
+        assert!(validate_resource_data_version(None).is_err());
+    }
+
+    #[test]
+    fn mismatch_error_identifies_both_versions() {
+        let error = validate_resource_data_version(Some(2586)).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("2586"), "{message}");
+        assert!(message.contains(&DATA_VERSION.to_string()), "{message}");
+        assert!(message.contains(horizon_core::version::VERSION_ID), "{message}");
     }
 }
