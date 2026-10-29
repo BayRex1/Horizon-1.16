@@ -318,7 +318,7 @@ pub fn import_legacy_1_16_5(
                     // entire column. Sample its centre in each 4x4 cell and
                     // expand it vertically into Horizon's 3D quart-biome grid.
                     if let Some(Tag::Compound(level)) = root.tag.get("Level")
-                        && let Some(Tag::IntArray(old_biomes)) = level.get("Biomes")
+                        && let Some(Tag::IntArray(old_biomes)) = level.get(&JavaString::from("Biomes"))
                         && old_biomes.len() == 256
                     {
                         for qz in 0..4 {
@@ -353,7 +353,7 @@ pub fn import_legacy_1_16_5(
                                 };
                                 let biome_id = biomes.id(&format!("minecraft:{current_name}"));
                                 for qy in 16..80 {
-                                    chunk.set_biome_cell(qx, qy, qz, biome_id);
+                                    chunk.set_biome_cell(qx as i32, qy, qz as i32, biome_id);
                                 }
                             }
                         }
