@@ -84,6 +84,8 @@ pub mod play {
         pub const DISCONNECT: i32 = 0x1A;
         /// Keep-alive request carrying a signed 64-bit token.
         pub const KEEP_ALIVE: i32 = 0x20;
+        /// Server correction of player position and rotation.
+        pub const PLAYER_POSITION_LOOK: i32 = 0x34;
     }
 
     pub mod serverbound {
@@ -183,6 +185,80 @@ pub fn encode_player_position_rotation(
     packet.f32(pitch);
     packet.bool(on_ground);
     Ok(packet.data)
+}
+
+/// Minimal player state maintained while processing protocol-754 Play packets.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerState {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub on_ground: bool,
+}
+
+/// Result of dispatching one packet received in the 1.16.5 Play state.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlayEvent {
+    PositionUpdated(PlayerState),
+    Disconnected(String),
+    Ignored,
+}
+
+/// Dispatch one packet from a protocol-754 Play connection.
+///
+/// This keeps the connection alive, acknowledges server teleports, and tracks
+/// server position corrections. Unknown gameplay packets are ignored for now.
+pub fn handle_play_packet(
+    connection: &mut crate::connection::Connection,
+    packet_id: i32,
+    payload: &[u8],
+    state: &mut PlayerState,
+) -> crate::Result<PlayEvent> {
+    match packet_id {
+        play::clientbound::KEEP_ALIVE => {
+            let token = decode_play_keep_alive(payload)?;
+            connection.send(&encode_play_keep_alive(token)?)?;
+            Ok(PlayEvent::Ignored)
+        }
+        play::clientbound::DISCONNECT => {
+            Ok(PlayEvent::Disconnected(decode_play_disconnect(payload)?))
+        }
+        play::clientbound::PLAYER_POSITION_LOOK => {
+            let update = decode_player_position_look(payload)?;
+            if update.flags & 0x01 != 0 { state.x += update.x; } else { state.x = update.x; }
+            if update.flags & 0x02 != 0 { state.y += update.y; } else { state.y = update.y; }
+            if update.flags & 0x04 != 0 { state.z += update.z; } else { state.z = update.z; }
+            if update.flags & 0x08 != 0 { state.yaw += update.yaw; } else { state.yaw = update.yaw; }
+            if update.flags & 0x10 != 0 { state.pitch += update.pitch; } else { state.pitch = update.pitch; }
+            if ![state.x, state.y, state.z].iter().all(|v| v.is_finite())
+                || !state.yaw.is_finite() || !state.pitch.is_finite() {
+                return Err(crate::Error::new("server sent non-finite 1.16.5 player position"));
+            }
+            connection.send(&encode_teleport_confirm(update.teleport_id)?)?;
+            connection.send(&encode_player_position_rotation(
+                state.x, state.y, state.z, state.yaw, state.pitch, state.on_ground
+            )?)?;
+            Ok(PlayEvent::PositionUpdated(*state))
+        }
+        _ => Ok(PlayEvent::Ignored),
+    }
+}
+
+/// Run the protocol-754 Play receive loop until the server disconnects or the
+/// socket errors. World packets are still ignored until chunk and registry
+/// support is implemented.
+pub fn run_play_loop(login: OfflineLogin) -> crate::Result<(String, PlayerState)> {
+    let mut connection = login.connection;
+    let mut state = PlayerState::default();
+    loop {
+        let (packet_id, payload) = connection.recv()?;
+        match handle_play_packet(&mut connection, packet_id, &payload, &mut state)? {
+            PlayEvent::Disconnected(reason) => return Ok((reason, state)),
+            PlayEvent::PositionUpdated(_) | PlayEvent::Ignored => {}
+        }
+    }
 }
 
 /// Decode the JSON string carried by the Play Disconnect packet.
@@ -498,6 +574,26 @@ mod tests {
     }
 
     #[test]
+    fn relative_position_flags_are_applied_to_existing_state() {
+        let mut payload = crate::buf::Writer::new();
+        payload.f64(2.0);
+        payload.f64(3.0);
+        payload.f64(-4.0);
+        payload.f32(10.0);
+        payload.f32(5.0);
+        payload.u8(0x1f);
+        payload.varint(1);
+        let update = decode_player_position_look(&payload.data).unwrap();
+        let mut state = PlayerState { x: 10.0, y: 60.0, z: 8.0, yaw: 90.0, pitch: 0.0, on_ground: false };
+        if update.flags & 0x01 != 0 { state.x += update.x; }
+        if update.flags & 0x02 != 0 { state.y += update.y; }
+        if update.flags & 0x04 != 0 { state.z += update.z; }
+        if update.flags & 0x08 != 0 { state.yaw += update.yaw; }
+        if update.flags & 0x10 != 0 { state.pitch += update.pitch; }
+        assert_eq!(state, PlayerState { x: 12.0, y: 63.0, z: 4.0, yaw: 100.0, pitch: 5.0, on_ground: false });
+    }
+
+    #[test]
     fn player_position_rotation_rejects_nan() {
         assert!(encode_player_position_rotation(
             f64::NAN, 64.0, 0.0, 0.0, 0.0, true
@@ -510,6 +606,7 @@ mod tests {
     fn play_packet_ids_match_protocol_754_layout() {
         assert_eq!(play::clientbound::DISCONNECT, 0x1A);
         assert_eq!(play::clientbound::KEEP_ALIVE, 0x20);
+        assert_eq!(play::clientbound::PLAYER_POSITION_LOOK, 0x34);
         assert_eq!(play::serverbound::TELEPORT_CONFIRM, 0x00);
         assert_eq!(play::serverbound::KEEP_ALIVE, 0x10);
         assert_eq!(play::serverbound::PLAYER_POSITION_ROTATION, 0x12);
