@@ -6770,7 +6770,13 @@ impl Game<'_> {
                 self.inventory[i] = Some(stack);
             }
             DisplayClick::Offhand(stack) => self.offhand = Some(stack),
-            DisplayClick::Drop(stack) => self.player_drop(stack),
+            DisplayClick::Drop(stack) => {
+                if self.remote.is_some() {
+                    self.remote_creative_drop_stack(stack);
+                } else {
+                    self.player_drop(stack);
+                }
+            }
             _ => {}
         }
     }
@@ -7249,10 +7255,20 @@ impl Game<'_> {
         if !offhand_mapped {
             self.offhand = menu.player_item(40).cloned();
         }
-        if !predicting {
+        if self.screen == Screen::Creative {
+            for stack in dropped {
+                if self.remote.is_some() {
+                    self.remote_creative_drop_stack(stack);
+                } else {
+                    self.player_drop(stack);
+                }
+            }
+        } else if !predicting {
             for stack in dropped {
                 self.player_drop(stack);
             }
+        }
+        if !predicting {
             self.award_crafted(&crafted);
             for stack in &brewed {
                 self.trigger_brewed_potion(stack);
@@ -7463,7 +7479,7 @@ impl Game<'_> {
                     return;
                 }
                 if let Some(moved) = self.last_quick_moved.clone() {
-                    if self.remote.is_some() {
+                    if self.remote.is_some() && self.screen != Screen::Creative {
                         self.remote_quick_move_all(slot, &moved);
                     } else {
                         self.menu_session(|menu, env, to_menu| {

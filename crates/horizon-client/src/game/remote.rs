@@ -516,7 +516,7 @@ impl Game<'_> {
             death_message: None,
             show_death_screen: true,
             player_type,
-            synced: vec![None; 37],
+            synced: vec![None; 41],
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
@@ -4437,28 +4437,35 @@ impl Game<'_> {
             out.push(packet);
         }
         // Creative inventory edits are sent slot by slot (SetCreativeModeSlot);
-        // `synced[36]` is the off hand.
+        // `synced[36]` is the off hand, `synced[37..41]` is the armour.
         let mut creative_slots = Vec::new();
         if self.creative {
-            for i in 0..37 {
-                let stack = self.inventory.get(i).unwrap_or(&self.offhand);
-                if *stack != r.synced[i] {
+            for i in 0..41 {
+                let stack = if i < 36 {
+                    self.inventory.get(i).cloned().flatten()
+                } else if i == 36 {
+                    self.offhand.clone()
+                } else {
+                    self.armor.get(i - 37).cloned().flatten()
+                };
+                if stack != r.synced[i] {
                     r.synced[i] = stack.clone();
-                    creative_slots.push(i);
+                    creative_slots.push((i, stack));
                 }
             }
         }
         for packet in out {
             self.send(packet);
         }
-        for i in creative_slots {
-            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45.
+        for (i, stack) in creative_slots {
+            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45, the armour 5..=8.
             let slot = match i {
                 0..9 => 36 + i,
                 36 => 45,
+                37..41 => 5 + (i - 37),
                 _ => i,
             } as i16;
-            let item = self.to_network(self.inventory.get(i).unwrap_or(&self.offhand));
+            let item = self.to_network(&stack);
             self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
                 slot,
                 item,
@@ -4469,6 +4476,7 @@ impl Game<'_> {
     fn remote_synced(&mut self) {
         let mut inventory = self.inventory.clone();
         inventory.push(self.offhand.clone());
+        inventory.extend(self.armor.clone());
         if let Some(r) = self.remote.as_mut() {
             r.synced = inventory;
         }
@@ -5588,6 +5596,13 @@ impl Game<'_> {
         } else {
             Input::Pickup
         };
+        if self.screen == Screen::Creative {
+            // CreativeModeInventoryScreen.slotClicked clicks the client's own
+            // menu and never sends a ContainerClick; the changed slots go out
+            // as SetCreativeModeSlot.
+            self.menu_click(Some(internal), i32::from(right), input);
+            return;
+        }
         self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
@@ -5731,7 +5746,7 @@ impl Game<'_> {
     /// one of it) is dropped through `handleCreativeModeItemDrop`, a SetCreativeModeSlot to slot
     /// -1, and the hand swings as `Player.drop` predicts.
     pub(super) fn remote_creative_drop(&mut self, right: bool) {
-        let one = right && !self.creative_inventory_open();
+        let one = right;
         let Some(carried) = self.carried.as_mut() else {
             return;
         };
@@ -5744,11 +5759,16 @@ impl Game<'_> {
         } else {
             self.carried.take().expect("carried")
         };
+        self.remote_creative_drop_stack(thrown);
+    }
+    /// Dropping a stack from the creative screen (`handleCreativeModeItemDrop`):
+    /// sends SetCreativeModeSlot with slot -1, and swings the arm.
+    pub(super) fn remote_creative_drop_stack(&mut self, stack: ItemStack) {
         if !self.creative {
             return;
         }
         self.swing_arm();
-        let item = self.to_network(&Some(thrown));
+        let item = self.to_network(&Some(stack));
         self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
             slot: -1,
             item,
@@ -6651,5 +6671,47 @@ mod tests {
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 354), None);
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
         assert_eq!(Game::menu_slot_index("unknown", 0), None);
+    }
+
+    #[test]
+    fn creative_synced_slots_map_to_inventory_menu_network_slots() {
+        let to_network_slot = |i: usize| -> i16 {
+            (match i {
+                0..9 => 36 + i,
+                36 => 45,
+                37..41 => 5 + (i - 37),
+                _ => i,
+            }) as i16
+        };
+        // Hotbar (network 36..=44)
+        for i in 0..9 {
+            assert_eq!(to_network_slot(i), (36 + i) as i16);
+        }
+        // Main inventory (network 9..=35)
+        for i in 9..36 {
+            assert_eq!(to_network_slot(i), i as i16);
+        }
+        // Off hand (network 45)
+        assert_eq!(to_network_slot(36), 45);
+        // Armour: head (5), chest (6), legs (7), feet (8)
+        assert_eq!(to_network_slot(37), 5);
+        assert_eq!(to_network_slot(38), 6);
+        assert_eq!(to_network_slot(39), 7);
+        assert_eq!(to_network_slot(40), 8);
+    }
+
+    #[test]
+    fn inventory_menu_armour_and_offhand_slot_mappings() {
+        assert_eq!(Game::menu_slot("inventory", 5), Some(500));
+        assert_eq!(Game::menu_slot("inventory", 6), Some(501));
+        assert_eq!(Game::menu_slot("inventory", 7), Some(502));
+        assert_eq!(Game::menu_slot("inventory", 8), Some(503));
+        assert_eq!(Game::menu_slot("inventory", 45), Some(504));
+
+        assert_eq!(Game::menu_slot_index("inventory", 500), Some(5));
+        assert_eq!(Game::menu_slot_index("inventory", 501), Some(6));
+        assert_eq!(Game::menu_slot_index("inventory", 502), Some(7));
+        assert_eq!(Game::menu_slot_index("inventory", 503), Some(8));
+        assert_eq!(Game::menu_slot_index("inventory", 504), Some(45));
     }
 }
