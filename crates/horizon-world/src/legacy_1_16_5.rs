@@ -1293,6 +1293,8 @@ mod tests {
 
     #[test]
     fn client_chunk_adapter_offsets_legacy_sections_into_modern_vertical_range() {
+        use crate::nbt::Tag;
+
         let root = generate_bootstrap_chunk(123, 0, 0);
         let client = to_client_runtime_chunk(&root).expect("client adapter should succeed");
         let Tag::List(sections) = client.tag.get("sections").expect("sections") else {
