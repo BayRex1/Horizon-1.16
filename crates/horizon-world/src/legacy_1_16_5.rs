@@ -499,6 +499,40 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
     })
 }
 
+
+/// Convert a legacy chunk into the vertical section coordinate system expected
+/// by the current client (whose world starts at Y=-64).
+///
+/// The storage-level `ChunkData` adapter intentionally keeps section Y in the
+/// original 1.16.5 range 0..15. The renderer's decoder instead computes its
+/// section slot relative to MIN_Y=-64, so client-facing NBT must use Y=4..19.
+/// This returns a separate NBT value and never mutates the legacy source file.
+pub fn to_client_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::nbt::NamedTag> {
+    use crate::{
+        compression::invalid,
+        nbt::{NamedTag, Tag},
+    };
+
+    let chunk = to_runtime_chunk(root)?;
+    let mut adapted = chunk.into_nbt();
+    let Some(Tag::List(sections)) = adapted.tag.get_mut("sections") else {
+        return Err(invalid("adapted legacy chunk is missing sections"));
+    };
+    for section in sections {
+        let Some(Tag::Byte(y)) = section.get_mut("Y") else {
+            return Err(invalid("adapted legacy section is missing Y"));
+        };
+        if !(0..SECTION_COUNT as i8).contains(y) {
+            return Err(invalid(format!("legacy section Y outside 0..15: {y}")));
+        }
+        *y += 4;
+    }
+    Ok(NamedTag {
+        name: adapted.name,
+        tag: adapted.tag,
+    })
+}
+
 fn terrain_hash(seed: i64, x: i32, z: i32) -> u64 {
     let mut value = (seed as u64)
         ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -1255,6 +1289,27 @@ mod tests {
                 .expect("embedded block data must parse")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn client_chunk_adapter_offsets_legacy_sections_into_modern_vertical_range() {
+        let root = generate_bootstrap_chunk(123, 0, 0);
+        let client = to_client_runtime_chunk(&root).expect("client adapter should succeed");
+        let Tag::List(sections) = client.tag.get("sections").expect("sections") else {
+            panic!("sections should be a list");
+        };
+        assert_eq!(sections.len(), SECTION_COUNT);
+        assert_eq!(sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(4)));
+        assert_eq!(sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(19)));
+        // The original chunk stays in the 1.16.5 coordinate system.
+        let Tag::Compound(level) = root.tag.get("Level").expect("legacy Level") else {
+            panic!("legacy Level should be a compound");
+        };
+        let Tag::List(legacy_sections) = level.get("Sections").expect("legacy sections") else {
+            panic!("legacy sections should be a list");
+        };
+        assert_eq!(legacy_sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(0)));
+        assert_eq!(legacy_sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(15)));
     }
 
     #[test]
