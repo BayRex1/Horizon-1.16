@@ -27,12 +27,13 @@ Keep this as an isolated branch until the old protocol and gameplay path have te
 - [ ] Add protocol tests using captured/generated fixtures and verify status ping, offline/local login where supported, and disconnect handling.
 - [x] Add isolated protocol-754 Play packet IDs and keep-alive encode/decode helpers with unit tests. This is packet groundwork only; it does not yet implement the Play-state loop.
 - [x] Add protocol-754 player position/look decoding, teleport-confirm encoding, and player position/rotation encoding with unit tests.
-- [x] Add a minimal Play packet dispatcher/receive loop for keep-alive replies, server disconnects, and server position corrections; unknown gameplay packets are currently ignored.
+- [x] Add a minimal Play packet dispatcher/receive loop for keep-alive replies, server disconnects, server position corrections, and chunk-data decoding. The receive loop currently reports chunk coordinates/section counts but does not yet install chunks into the renderer; most other gameplay packets are ignored.
 
 ### Milestone 3 — playable world
 
 - [ ] Adapt registry bootstrap, dimension/biome data, block states, items and entity metadata.
-- [ ] Port 1.16.5 chunk sections, palettes, light data, heightmaps and block entities.
+- [x] Add a bounded decoder for the 1.16.5 chunk-data envelope, section masks, heightmap NBT, biome IDs, block-state palettes, packed block-state storage, and block-entity NBT.
+- [ ] Integrate decoded chunk columns into the renderer and implement the separate lighting update path.
 - [ ] Adapt movement, interaction, inventory and entity packets to the 1.16.5 layouts.
 - [ ] Load the target version's own assets from the user's legally obtained game installation; do not ship game assets in this repository.
 - [ ] Add a minimal end-to-end test: connect to a local 1.16.5 server, enter a world, receive chunks, move, and disconnect cleanly.
