@@ -544,9 +544,7 @@ impl HudAtlas {
         // (`heart_colors`): one slot per sprite variant and configured color,
         // so turning the extra on needs no restart and a pack's own hearts
         // recolor too.
-        if full
-            && let Some(hearts) = hearts
-        {
+        if full && let Some(hearts) = hearts {
             heart_slots(&mut images, hearts);
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
