@@ -86,9 +86,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             let seed: i64 = args[2].parse()?;
             let chunk_x: i32 = args[3].parse()?;
             let chunk_z: i32 = args[4].parse()?;
-            horizon_world::legacy_1_16_5::save_bootstrap_chunk(
-                &args[1], seed, chunk_x, chunk_z
-            )?;
+            horizon_world::legacy_1_16_5::save_bootstrap_chunk(&args[1], seed, chunk_x, chunk_z)?;
             println!(
                 "Generated Java 1.16.5 bootstrap chunk {},{} (seed {}) in {}",
                 chunk_x, chunk_z, seed, args[1]
