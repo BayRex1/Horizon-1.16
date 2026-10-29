@@ -844,6 +844,63 @@ mod tests {
     }
 
     #[test]
+    fn offline_login_runs_over_a_real_local_tcp_connection() {
+        use crate::{buf::Writer, connection::Connection};
+        use std::{
+            net::TcpListener,
+            thread,
+            time::Duration,
+        };
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut connection = Connection::from_stream(stream).unwrap();
+
+            // The client sends the legacy handshake followed by Login Start.
+            let (handshake_id, handshake) = connection.recv().unwrap();
+            assert_eq!(handshake_id, handshake::INTENTION);
+            let mut r = crate::buf::Reader::new(&handshake);
+            assert_eq!(r.varint().unwrap(), PROTOCOL_VERSION);
+            assert_eq!(r.string(255).unwrap(), "127.0.0.1");
+            assert_eq!(r.u16().unwrap(), port);
+            assert_eq!(r.varint().unwrap(), 2);
+
+            let (login_id, login) = connection.recv().unwrap();
+            assert_eq!(login_id, login::serverbound::START);
+            let mut r = crate::buf::Reader::new(&login);
+            assert_eq!(r.string(16).unwrap(), "BayRex");
+            assert_eq!(r.remaining(), 0);
+
+            let mut success = Writer::new();
+            success.varint(login::clientbound::SUCCESS);
+            success.string("123e4567-e89b-12d3-a456-426614174000");
+            success.string("BayRex");
+            connection.send(&success.data).unwrap();
+
+            let mut disconnect = Writer::new();
+            disconnect.varint(play::clientbound::DISCONNECT);
+            disconnect.string(r#"{"text":"test complete"}"#);
+            connection.send(&disconnect.data).unwrap();
+        });
+
+        let login = connect_offline(
+            "127.0.0.1",
+            port,
+            "BayRex",
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        assert_eq!(login.username, "BayRex");
+        assert_eq!(login.uuid, "123e4567-e89b-12d3-a456-426614174000");
+        let (reason, state) = run_play_loop(login).unwrap();
+        assert_eq!(reason, r#"{"text":"test complete"}"#);
+        assert_eq!(state, PlayerState::default());
+        server.join().unwrap();
+    }
+
+    #[test]
     fn targets_java_1_16_5() {
         assert_eq!(GAME_VERSION, "1.16.5");
         assert_eq!(PROTOCOL_VERSION, 754);
