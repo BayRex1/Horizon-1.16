@@ -75,7 +75,6 @@ pub mod login {
     }
 }
 
-
 /// Encode the legacy handshake packet and its outer frame.
 ///
 /// `next_state` is 1 for status or 2 for login. This function does not
@@ -87,7 +86,9 @@ pub fn encode_handshake(host: &str, port: u16, next_state: i32) -> crate::Result
         return Err(crate::Error::new("invalid 1.16.5 server host"));
     }
     if next_state != 1 && next_state != 2 {
-        return Err(crate::Error::new("handshake next_state must be 1 (status) or 2 (login)"));
+        return Err(crate::Error::new(
+            "handshake next_state must be 1 (status) or 2 (login)",
+        ));
     }
 
     let mut packet = Writer::new();
@@ -108,7 +109,9 @@ pub fn encode_login_start(username: &str) -> crate::Result<Vec<u8>> {
 
     if username.is_empty()
         || username.len() > 16
-        || !username.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        || !username
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
         return Err(crate::Error::new("invalid 1.16.5 username"));
     }
@@ -132,8 +135,6 @@ pub fn encode_status_ping(payload: i64) -> crate::Result<Vec<u8>> {
     packet.i64(payload);
     crate::frame::encode(&packet.data, None)
 }
-
-
 
 /// Result of the legacy offline-mode login handshake. The returned connection
 /// is already in Play state at the protocol level; world/play packet handling
@@ -177,7 +178,9 @@ pub fn connect_offline(
         match packet_id {
             login::clientbound::DISCONNECT => {
                 let reason = decode_login_disconnect(&payload)?;
-                return Err(crate::Error::new(format!("server rejected login: {reason}")));
+                return Err(crate::Error::new(format!(
+                    "server rejected login: {reason}"
+                )));
             }
             login::clientbound::ENCRYPTION_REQUEST => {
                 return Err(crate::Error::new(
@@ -190,7 +193,11 @@ pub fn connect_offline(
             }
             login::clientbound::SUCCESS => {
                 let (uuid, username) = decode_login_success(&payload)?;
-                return Ok(OfflineLogin { uuid, username, connection });
+                return Ok(OfflineLogin {
+                    uuid,
+                    username,
+                    connection,
+                });
             }
             login::clientbound::PLUGIN_REQUEST => {
                 // Unknown login plugin channels are answered with "not understood".
@@ -217,7 +224,9 @@ pub fn decode_set_compression(payload: &[u8]) -> crate::Result<i32> {
     let mut r = crate::buf::Reader::new(payload);
     let threshold = r.varint()?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 set-compression packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 set-compression packet",
+        ));
     }
     Ok(threshold)
 }
@@ -229,7 +238,9 @@ pub fn decode_login_success(payload: &[u8]) -> crate::Result<(String, String)> {
     let uuid = r.string(36)?;
     let username = r.string(16)?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 login-success packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 login-success packet",
+        ));
     }
     if uuid.len() != 36
         || !uuid.bytes().enumerate().all(|(i, b)| {
@@ -240,7 +251,9 @@ pub fn decode_login_success(payload: &[u8]) -> crate::Result<(String, String)> {
             }
         })
     {
-        return Err(crate::Error::new("invalid UUID in 1.16.5 login-success packet"));
+        return Err(crate::Error::new(
+            "invalid UUID in 1.16.5 login-success packet",
+        ));
     }
     Ok((uuid, username))
 }
@@ -250,7 +263,9 @@ pub fn decode_login_disconnect(payload: &[u8]) -> crate::Result<String> {
     let mut r = crate::buf::Reader::new(payload);
     let reason = r.string(32767)?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 login-disconnect packet"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 login-disconnect packet",
+        ));
     }
     Ok(reason)
 }
@@ -270,7 +285,9 @@ mod tests {
             let b = framed[0];
             framed = &framed[1..];
             len |= usize::from(b & 0x7f) << shift;
-            if b & 0x80 == 0 { break; }
+            if b & 0x80 == 0 {
+                break;
+            }
             shift += 7;
         }
         assert_eq!(framed.len(), len);
@@ -356,7 +373,10 @@ mod tests {
         payload.string("BayRex");
         assert_eq!(
             decode_login_success(&payload.data).unwrap(),
-            ("123e4567-e89b-12d3-a456-426614174000".to_owned(), "BayRex".to_owned())
+            (
+                "123e4567-e89b-12d3-a456-426614174000".to_owned(),
+                "BayRex".to_owned()
+            )
         );
         assert_eq!(decode_set_compression(&[0x80, 0x01]).unwrap(), 128);
         assert!(decode_set_compression(&[1, 0]).is_err());
@@ -372,5 +392,4 @@ mod tests {
         assert_eq!(decode_login_disconnect(&[2, b'{', b'}']).unwrap(), "{}");
         assert!(decode_login_disconnect(&[2, b'{', b'}', 0]).is_err());
     }
-
 }
