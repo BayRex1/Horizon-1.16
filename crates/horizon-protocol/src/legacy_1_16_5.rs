@@ -271,8 +271,7 @@ impl LegacyChunkSection {
             let mask = (1u64 << bits) - 1;
             for index in 0..4096 {
                 let word = data[index / per_long] as u64;
-                let palette_index =
-                    ((word >> ((index % per_long) * bits)) & mask) as usize;
+                let palette_index = ((word >> ((index % per_long) * bits)) & mask) as usize;
                 if palette_index >= palette.len() {
                     return Err(crate::Error::new(
                         "1.16.5 block palette index is outside the local palette",
