@@ -990,7 +990,7 @@ mod tests {
         for z in -1..=1 {
             for x in -1..=1 {
                 let mut c = Chunk::empty(x, z);
-                for y in MIN_Y..4 {
+                for y in MIN_Y..0 {
                     for i in 0..256 {
                         c.set(i & 15, y, i >> 4, STONE);
                     }
