@@ -114,3 +114,21 @@ The port can be researched and implemented using public technical references and
 - [x] Record source/version caveats in `crates/horizon-world/data/legacy_1_16_5/source.json`.
 
 **Source caveat:** PrismarineJS currently exposes Java block/biome dumps under 1.16.2 rather than a separate 1.16.5 directory. These are useful as a 1.16.5 reference because no new block types were introduced in the intervening patch releases, but they are explicitly kept isolated and are not claimed as a complete 1.16.5 world-generation dataset. Biome numeric IDs must not be confused with the later 1.16.5 network registry ordering without a version-specific mapping. The next step is to import the exact 1.16.5 worldgen JSON (noise settings, density functions, carvers, features, biome definitions) from a versioned source and adapt the Rust generator to the 1.16.5 0..255 height range.
+
+
+## Public-data import — implemented starter
+
+- [x] Add `tools/import_1_16_5_reference_data.py` to fetch versioned worldgen JSON from `misode/mcmeta@1.16.5-data`.
+- [x] Fetch reference block/biome tables from PrismarineJS `1.16.2` and exact target protocol metadata from `1.16.5`; the importer labels the patch-version caveat rather than pretending the 1.16.2 table is independently verified as exact.
+- [x] Record each downloaded file's source URL, SHA-256, size and JSON type in a manifest.
+- [x] Add unit tests for version pins, digest shape, invalid JSON and output-directory safety.
+- [ ] Run the importer in CI and inspect actual downloaded file counts and schema.
+- [ ] Convert imported definitions into Rust-consumable version-specific data and wire them into a 1.16.5 generator adapter.
+
+Run on a developer machine (Python 3; no Java or JAR needed):
+
+```powershell
+py -3 tools/import_1_16_5_reference_data.py --out .local\horizon-client\1.16.5-reference
+```
+
+This step downloads structured reference JSON only. It does not download the Minecraft client/server JAR, and it does not yet make the Rust client playable. The already checked-in `crates/horizon-world/data/legacy_1_16_5/` block/biome tables remain the initial lookup reference until the importer output is validated and deliberately promoted.
