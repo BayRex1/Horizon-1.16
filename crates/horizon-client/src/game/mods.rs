@@ -305,10 +305,10 @@ impl Game<'_> {
             (enabled.contains(id) || dev_ids.iter().any(|d| d == id))
                 && !native.iter().any(|n| n.id == id)
         };
-        let mods = Mods::load_for_with_microphones(
-            self.mod_runs(), &paths, on, vanilla_command,
-            |id| self.settings.mods.microphones.contains(id),
-        );
+        let mods =
+            Mods::load_for_with_microphones(self.mod_runs(), &paths, on, vanilla_command, |id| {
+                self.settings.mods.microphones.contains(id)
+            });
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));

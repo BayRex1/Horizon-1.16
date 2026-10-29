@@ -11,6 +11,18 @@ The complete contract is in [mods-reference.md](mods-reference.md). The working
 [voice-lab example](../../crates/horizon-mod-sdk/examples/voice-lab/) demonstrates
 local Push-to-Talk monitoring, binary UDP and a versioned custom payload.
 
+## Runtime compatibility
+
+These interfaces belong to the experimental WebAssembly runtime, enabled by the
+client's `mods` feature. They coexist with the native hook points; a native mod
+with the same ID still takes precedence over its WebAssembly version. The audio
+feature forwards to both the game mixer and the mod audio backend.
+
+Native mods run with OS privileges and do not gain sandbox guarantees from this
+API. The proposed native service permission model is documented separately in
+[native-voice-permissions.md](../native-voice-permissions.md); these WebAssembly
+interfaces do not implement that proposal.
+
 ## Permissions
 
 Mods declare each capability they use in both `capabilities` and `experimental`:

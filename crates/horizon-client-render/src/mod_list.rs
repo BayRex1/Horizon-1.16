@@ -43,9 +43,10 @@ pub struct Installed {
     /// The running mod set a page of widgets (capability `ui`): its row
     /// gains a Settings button.
     pub has_settings: bool,
+    /// A sandboxed mod declares microphone access; capture still needs a grant.
+    pub requests_microphone: bool,
     /// A native mod (`game/native_hooks.rs`): built into the game, on until
     /// the player turns it off, and its settings page.
-    pub requests_microphone: bool,
     pub native: Option<NativePage>,
 }
 
@@ -235,5 +236,15 @@ mod microphone_tests {
         let granted = ModList::parse("mod.voice:true\nmicrophone.voice:true\n");
         assert!(granted.microphones.contains("voice"));
         assert_eq!(ModList::parse(&granted.serialize()), granted);
+    }
+
+    #[test]
+    fn microphone_grants_preserve_native_disabled_state() {
+        let text = "mod.native_voice:false\nmod.voice:true\nmicrophone.voice:true\nkey.native_voice.ptt:key.keyboard.v\n";
+        let list = ModList::parse(text);
+        assert!(list.disabled.contains("native_voice"));
+        assert!(list.microphones.contains("voice"));
+        assert!(!list.microphones.contains("native_voice"));
+        assert_eq!(ModList::parse(&list.serialize()), list);
     }
 }
