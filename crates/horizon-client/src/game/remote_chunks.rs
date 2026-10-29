@@ -161,7 +161,11 @@ type Decoded = (Box<C>, Result<Chunk, String>);
 /// section's quart-cell order. Protocol 754 stores biomes as
 /// `(quart_x * 4 + quart_z) * 64 + quart_y`; resident sections use
 /// `(quart_y << 4) | (quart_z << 2) | quart_x`.
-fn legacy_biome_cells(chunk: &horizon_protocol::legacy_1_16_5::LegacyChunkColumn, legacy_y: usize, biome_map: &[u32]) -> [u32; 64] {
+fn legacy_biome_cells(
+    chunk: &horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
+    legacy_y: usize,
+    biome_map: &[u32],
+) -> [u32; 64] {
     let mut cells = [0u32; 64];
     if !chunk.full_chunk || chunk.biomes.len() != 1024 || legacy_y >= 16 {
         return cells;
