@@ -55,10 +55,11 @@ python3 tools/physics_visual_smoke.py --bin-dir target/debug --resources /absolu
 python3 tools/physics_visual_smoke.py --bin-dir target/debug --resources /absolute/path/to/26.3 --in-frame
 ```
 
-It creates fresh scratch homes, launches through `horizon-ctl`, builds the test
+It creates fresh scratch homes, launches the game and controls it through `horizon-ctl`, builds the test
 platform, checks actual received body IDs/positions, bounce/rest, antigravity and
 clear, requires submitted stone-model vertices, and saves screenshots, pose traces,
-control replies and a result report under `.local/physics-visual-smoke/run-*`.
+control replies, game logs and a result report under `.local/physics-visual-smoke/run-*`.
+The runner owns and stops its child game before removing scratch homes, even on failure.
 Screenshots still require visual review: submitted vertices are not proof of
 visible pixels. `--offscreen` is available where the graphics backend supports it.
 Missing resources stop the check with `BLOCKED`/exit 2, never a passing result.

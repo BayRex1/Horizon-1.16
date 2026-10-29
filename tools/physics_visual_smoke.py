@@ -75,13 +75,25 @@ def main():
                 math.degrees(math.atan2(-dy, math.hypot(dx, dz))))
             ctl('screenshot', str(out / f'{name}.png'))
 
+        game = None
+        game_log = (out / 'game.log').open('w')
         try:
-            launch = ['launch', '--game', str(bins / 'horizon-client'), '--world', 'PhysicsVisual', '--creative', '--seed', '5', '--wait', '--resources', str(args.resources.resolve())]
+            launch = [str(bins / 'horizon-client'), '--world', 'PhysicsVisual', '--creative', '--seed', '5', '--control-socket', str(socket), '--resources', str(args.resources.resolve())]
             if args.in_frame:
                 launch.append('--in-frame')
             if args.offscreen:
                 launch.append('--offscreen')
-            ctl(*launch, timeout=180)
+            # Own the process directly so a failed control connection or timeout
+            # cannot leave an untracked GUI game running after scratch cleanup.
+            game = subprocess.Popen(launch, cwd=lab.ROOT, env=env, stdin=subprocess.DEVNULL,
+                                    stdout=game_log, stderr=subprocess.STDOUT)
+            end = time.monotonic() + 120
+            while not socket.exists():
+                if game.poll() is not None:
+                    raise RuntimeError(f'game exited {game.returncode}; see game.log')
+                if time.monotonic() > end:
+                    raise RuntimeError('game control endpoint did not start in 120 seconds')
+                time.sleep(0.05)
             ctl('wait-ready', '120', timeout=130)
             # Deterministic stage in a NEW scratch world only.
             ctl('command', 'tp @s 12 77 12')
@@ -118,10 +130,22 @@ def main():
         except Exception as error:
             result['error'] = str(error)
         finally:
-            try:
-                ctl('quit', timeout=15)
-            except Exception:
-                pass
+            if game is not None:
+                try:
+                    if game.poll() is None and socket.exists():
+                        ctl('quit', timeout=15)
+                except Exception:
+                    pass
+                try:
+                    game.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    game.terminate()
+                    try:
+                        game.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        game.kill()
+                        game.wait(timeout=5)
+            game_log.close()
             (out / 'result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result))
     return 0 if result['status'] == 'passed' else 1
