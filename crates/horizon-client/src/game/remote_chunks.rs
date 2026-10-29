@@ -423,11 +423,11 @@ mod tests {
             for quart_z in 0..4 {
                 for quart_y in 0..64 {
                     let source = (quart_x * 4 + quart_z) * 64 + quart_y;
-                    column.biomes[source] = (quart_y / 4) as i32 + 1;
+                    column.biomes[source] = quart_y as i32 + 1;
                 }
             }
         }
-        let map: Vec<u32> = (0..17).map(|v| v * 3).collect();
+        let map: Vec<u32> = (0..32).map(|v| v * 3).collect();
         let cells = legacy_biome_cells(&column, 5, &map);
         for quart_y in 0..4 {
             for quart_z in 0..4 {
