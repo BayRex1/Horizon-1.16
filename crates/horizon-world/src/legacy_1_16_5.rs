@@ -499,7 +499,6 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
     })
 }
 
-
 /// Convert a legacy chunk into the vertical section coordinate system expected
 /// by the current client (whose world starts at Y=-64).
 ///
@@ -507,7 +506,9 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
 /// original 1.16.5 range 0..15. The renderer's decoder instead computes its
 /// section slot relative to MIN_Y=-64, so client-facing NBT must use Y=4..19.
 /// This returns a separate NBT value and never mutates the legacy source file.
-pub fn to_client_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::nbt::NamedTag> {
+pub fn to_client_runtime_chunk(
+    root: &crate::nbt::NamedTag,
+) -> std::io::Result<crate::nbt::NamedTag> {
     use crate::{
         compression::invalid,
         nbt::{NamedTag, Tag},
@@ -1301,8 +1302,14 @@ mod tests {
             panic!("sections should be a list");
         };
         assert_eq!(sections.len(), SECTION_COUNT);
-        assert_eq!(sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(4)));
-        assert_eq!(sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(19)));
+        assert_eq!(
+            sections.first().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(4))
+        );
+        assert_eq!(
+            sections.last().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(19))
+        );
         // The original chunk stays in the 1.16.5 coordinate system.
         let Tag::Compound(level) = root.tag.get("Level").expect("legacy Level") else {
             panic!("legacy Level should be a compound");
@@ -1310,8 +1317,14 @@ mod tests {
         let Tag::List(legacy_sections) = level.get("Sections").expect("legacy sections") else {
             panic!("legacy sections should be a list");
         };
-        assert_eq!(legacy_sections.first().and_then(|s| s.get("Y")), Some(&Tag::Byte(0)));
-        assert_eq!(legacy_sections.last().and_then(|s| s.get("Y")), Some(&Tag::Byte(15)));
+        assert_eq!(
+            legacy_sections.first().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(0))
+        );
+        assert_eq!(
+            legacy_sections.last().and_then(|s| s.get("Y")),
+            Some(&Tag::Byte(15))
+        );
     }
 
     #[test]
