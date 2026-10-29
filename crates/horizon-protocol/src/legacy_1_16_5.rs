@@ -261,7 +261,8 @@ impl LegacyChunkSection {
         let bits = self.bits_per_block as usize;
         let per_long = 64 / bits;
         let word = *self.data.get(index / per_long)? as u64;
-        let palette_index = ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
+        let palette_index =
+            ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize;
         if self.palette.is_empty() {
             Some(palette_index as i32)
         } else {
@@ -300,9 +301,13 @@ pub fn decode_chunk_data(payload: &[u8]) -> crate::Result<LegacyChunkColumn> {
     let biomes = if full_chunk {
         let count = r.count(1024)?;
         if count != 1024 {
-            return Err(crate::Error::new("1.16.5 full chunk must contain 1024 biome IDs"));
+            return Err(crate::Error::new(
+                "1.16.5 full chunk must contain 1024 biome IDs",
+            ));
         }
-        (0..count).map(|_| r.varint()).collect::<crate::Result<Vec<_>>>()?
+        (0..count)
+            .map(|_| r.varint())
+            .collect::<crate::Result<Vec<_>>>()?
     } else {
         Vec::new()
     };
@@ -421,7 +426,9 @@ pub fn handle_play_packet(
                 || !state.yaw.is_finite()
                 || !state.pitch.is_finite()
             {
-                return Err(crate::Error::new("server sent non-finite 1.16.5 player position"));
+                return Err(crate::Error::new(
+                    "server sent non-finite 1.16.5 player position",
+                ));
             }
             connection.send(&encode_teleport_confirm(update.teleport_id)?)?;
             connection.send(&encode_player_position_rotation(
