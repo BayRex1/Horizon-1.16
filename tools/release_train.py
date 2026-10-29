@@ -83,11 +83,11 @@ LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 # its notes open with the way to the launcher (#1647). Raw HTML on one line, which GitHub shows and every launcher's
 # notes view and one-line summary skip (pulldown-cmark's HTML events), so launchers never tell players to get
 # themselves. The site's Releases page leaves it out too.
-PLAYERS = ('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher</a>, not the files '
-           'below</h3><p>It installs this version and keeps it up to date. It is also on GitHub: <a href="'
-           f'https://github.com/{REPO}/releases?q=launcher&amp;expanded=true">the launcher releases</a>. You need your '
-           "own copy of Minecraft: Java Edition. The files below are what the launcher installs, and the dedicated "
-           "server for people who host one.</p>")
+PLAYERS_FOOTER = ('<h1>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher</a>.</h1> '
+                  '<h1> Do NOT run the file below. It will not work.</h1>')
+PLAYERS = (PLAYERS_FOOTER + '<p>The launcher installs the latest version and keeps it up to date. You need your own '
+           'copy of Minecraft: Java Edition. The files below are what the launcher installs, and the dedicated server '
+           'for people who host one.</p>')
 LAUNCHER_FOOTER = ("Your launcher updates itself. New here? Download the archive for your system below, extract it, "
                    "and run `horizon-launcher`. Website: https://playhorizon.dev")
 DISCLAIMER = "Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft."
@@ -411,6 +411,8 @@ def notes(kind, version, prs, issues, previous=None):
     if kind == "launcher":
         parts.append(LAUNCHER_FOOTER)
     parts.append(DISCLAIMER)
+    if kind == "game":
+        parts.append(PLAYERS_FOOTER)
     return title, "\n\n".join(parts) + "\n"
 
 
