@@ -550,3 +550,53 @@ fn each_system_has_its_launcher_folders() {
     );
     assert!(got.contains(&"ATLauncher: C:/Users/r/AppData/Roaming/ATLauncher".into()));
 }
+
+/// ElyPrism shares Prism's global libraries and assets, not the instance's minecraft folder.
+#[test]
+fn elyprism_instances_and_automatic_discovery_use_shared_files() {
+    let s = Scratch::new("elyprism-tree");
+    let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+    let dir = s.launcher("ElyPrismLauncher", "", jar);
+    s.write(
+        "ElyPrismLauncher/meta/net.minecraft/26.3.json",
+        br#"{"mainJar":{"name":"com.mojang:minecraft:26.3:client"}}"#,
+    );
+    for chosen in [
+        "instances",
+        "instances/26.3",
+        "instances/26.3/minecraft",
+        "instances/26.3/minecraft/saves",
+    ] {
+        let chosen = dir.join(chosen);
+        fs::create_dir_all(&chosen).unwrap();
+        let linked = s.0.join("linked-ely");
+        let got = resolve_with(&chosen, &[], &linked, &Mojang::new(MANIFEST)).unwrap();
+        assert_eq!(got, linked);
+        assert_linked(&linked, &dir, jar);
+    }
+    let folders = Folders {
+        home: s.0.clone(),
+        data: s.0.clone(),
+        config: s.0.clone(),
+    };
+    for os in [Os::Windows, Os::Linux, Os::MacOs] {
+        let known = known_folders(os, &folders);
+        assert!(known
+            .iter()
+            .any(|(name, path)| *name == "ElyPrismLauncher" && path == &dir));
+        let linked = s.0.join("linked-auto");
+        let got = resolve_with(
+            &s.0.join("empty-official"),
+            &known,
+            &linked,
+            &Mojang::new(MANIFEST),
+        )
+        .unwrap();
+        assert_eq!(got, linked);
+        assert_linked(&linked, &dir, jar);
+    }
+    assert_eq!(
+        launcher_of(&dir.join("instances/26.3/minecraft")),
+        Some("ElyPrismLauncher")
+    );
+}
