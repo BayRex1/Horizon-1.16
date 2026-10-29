@@ -186,7 +186,7 @@ fn legacy_biome_cells(
             }
         }
     }
-    cells
+    Ok(cells)
 }
 
 /// One thread that decodes chunk packets in the order they arrived; its
