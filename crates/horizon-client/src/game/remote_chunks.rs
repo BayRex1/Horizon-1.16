@@ -227,7 +227,7 @@ impl Game<'_> {
         &mut self,
         chunk: horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
         block_state_map: &[u32],
-    ) -> Result<(), String> {
+    ) -> std::result::Result<(), String> {
         if !self.remote_chunk_in_range(chunk.x, chunk.z) {
             return Ok(());
         }
