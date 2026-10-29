@@ -9,6 +9,8 @@ pub mod crypto;
 pub mod entity_data;
 pub mod frame;
 pub mod ids;
+/// Initial, isolated wire-format facts for the Minecraft 1.16.5 port.
+pub mod legacy_1_16_5;
 pub mod item;
 pub mod packets;
 pub mod quiet;
