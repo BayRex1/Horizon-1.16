@@ -846,11 +846,7 @@ mod tests {
     #[test]
     fn offline_login_runs_over_a_real_local_tcp_connection() {
         use crate::{buf::Writer, connection::Connection};
-        use std::{
-            net::TcpListener,
-            thread,
-            time::Duration,
-        };
+        use std::{net::TcpListener, thread, time::Duration};
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -885,13 +881,7 @@ mod tests {
             connection.send(&disconnect.data).unwrap();
         });
 
-        let login = connect_offline(
-            "127.0.0.1",
-            port,
-            "BayRex",
-            Duration::from_secs(3),
-        )
-        .unwrap();
+        let login = connect_offline("127.0.0.1", port, "BayRex", Duration::from_secs(3)).unwrap();
         assert_eq!(login.username, "BayRex");
         assert_eq!(login.uuid, "123e4567-e89b-12d3-a456-426614174000");
         let (reason, state) = run_play_loop(login).unwrap();
