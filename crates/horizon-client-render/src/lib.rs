@@ -73,6 +73,7 @@ pub mod spans;
 pub mod split_layout;
 pub mod split_profiles;
 pub mod split_ui;
+mod sprite_cache;
 pub mod sprites;
 pub mod streaming;
 pub mod tab_list;
