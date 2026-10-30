@@ -78,20 +78,24 @@ mod tests {
 
     #[test]
     fn rejects_non_finite_composition_parameters() {
-        assert!(LegacyDoublePerlinNoise1_16_5::new(
-            stack(1, 1.0, 1.0),
-            stack(2, 1.0, 1.0),
-            f64::NAN,
-            1.0,
-        )
-        .is_none());
-        assert!(LegacyDoublePerlinNoise1_16_5::new(
-            stack(1, 1.0, 1.0),
-            stack(2, 1.0, 1.0),
-            1.0,
-            f64::INFINITY,
-        )
-        .is_none());
+        assert!(
+            LegacyDoublePerlinNoise1_16_5::new(
+                stack(1, 1.0, 1.0),
+                stack(2, 1.0, 1.0),
+                f64::NAN,
+                1.0,
+            )
+            .is_none()
+        );
+        assert!(
+            LegacyDoublePerlinNoise1_16_5::new(
+                stack(1, 1.0, 1.0),
+                stack(2, 1.0, 1.0),
+                1.0,
+                f64::INFINITY,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -104,25 +108,15 @@ mod tests {
         let expected = (first.sample(point[0], point[1], point[2])
             + second.sample(point[0] * scale, point[1] * scale, point[2] * scale))
             * amplitude;
-        let sampler = LegacyDoublePerlinNoise1_16_5::new(
-            first,
-            second,
-            scale,
-            amplitude,
-        )
-        .unwrap();
+        let sampler = LegacyDoublePerlinNoise1_16_5::new(first, second, scale, amplitude).unwrap();
         assert_eq!(sampler.sample(point[0], point[1], point[2]), expected);
     }
 
     #[test]
     fn zero_amplitude_produces_zero() {
-        let sampler = LegacyDoublePerlinNoise1_16_5::new(
-            stack(31, 1.0, 1.0),
-            stack(37, 1.0, 1.0),
-            1.0,
-            0.0,
-        )
-        .unwrap();
+        let sampler =
+            LegacyDoublePerlinNoise1_16_5::new(stack(31, 1.0, 1.0), stack(37, 1.0, 1.0), 1.0, 0.0)
+                .unwrap();
         assert_eq!(sampler.sample(3.0, 5.0, 7.0), 0.0);
     }
 }
