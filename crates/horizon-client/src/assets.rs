@@ -245,7 +245,10 @@ impl RenderAssets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
-        log::info!("Horizon: RenderAssets::load: finalizing {} sprite layers", sprites.count());
+        log::info!(
+            "Horizon: RenderAssets::load: finalizing {} sprite layers",
+            sprites.count()
+        );
         sprites.finish();
         log::info!("Horizon: RenderAssets::load: complete");
         Ok(Self {
