@@ -187,6 +187,38 @@ impl LegacyNetherClimate {
     }
 }
 
+/// The four noise values sampled by Minecraft 1.16.5's Nether biome source.
+/// The preset's fifth coordinate, offset, belongs to each candidate biome point;
+/// it is not a fifth independently sampled noise field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegacyNetherNoiseSample {
+    pub temperature: f32,
+    pub humidity: f32,
+    pub altitude: f32,
+    pub weirdness: f32,
+}
+
+impl LegacyNetherNoiseSample {
+    /// Convert the four sampled channels into the query point used by the
+    /// five-axis preset-distance calculation. The query offset is zero; each
+    /// candidate biome retains its own configured offset.
+    pub fn climate_point(self) -> LegacyNetherClimate {
+        LegacyNetherClimate {
+            temperature: self.temperature,
+            humidity: self.humidity,
+            altitude: self.altitude,
+            weirdness: self.weirdness,
+            offset: 0.0,
+        }
+    }
+
+    pub fn is_finite(self) -> bool {
+        [self.temperature, self.humidity, self.altitude, self.weirdness]
+            .iter()
+            .all(|value| value.is_finite())
+    }
+}
+
 /// Vanilla 1.16.x Nether multi-noise preset points.
 ///
 /// These five points are the built-in Nether preset values (temperature,
@@ -244,6 +276,18 @@ const VANILLA_NETHER_BIOME_POINTS: [(&str, LegacyNetherClimate); 5] = [
         },
     ),
 ];
+
+/// Resolve a sampled 1.16.5 Nether climate using the four noise channels.
+/// This is the preset-selection adapter only: callers must supply values from
+/// the version-correct seeded DoublePerlin samplers.
+pub fn vanilla_nether_biome_from_noise(
+    sample: LegacyNetherNoiseSample,
+) -> Result<Option<LegacyBiome>, serde_json::Error> {
+    if !sample.is_finite() {
+        return Ok(None);
+    }
+    vanilla_nether_biome_by_climate(sample.climate_point())
+}
 
 /// Resolve a climate sample against the actual built-in Nether preset points.
 /// This does not generate the climate noise itself; it only performs the
@@ -1661,6 +1705,28 @@ mod tests {
             }
             .is_finite()
         );
+        let noise_sample = LegacyNetherNoiseSample {
+            temperature: 0.0,
+            humidity: -0.5,
+            altitude: 0.0,
+            weirdness: 0.0,
+        };
+        assert_eq!(noise_sample.climate_point().offset, 0.0);
+        assert_eq!(
+            vanilla_nether_biome_from_noise(noise_sample)
+                .expect("four-channel Nether sample should resolve")
+                .unwrap()
+                .name,
+            "soul_sand_valley"
+        );
+        assert!(vanilla_nether_biome_from_noise(LegacyNetherNoiseSample {
+            temperature: f32::NAN,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+        })
+        .expect("invalid samples should be rejected")
+        .is_none());
         for (name, point) in VANILLA_NETHER_BIOME_POINTS {
             let selected = vanilla_nether_biome_by_climate(point)
                 .expect("vanilla Nether preset should parse")
