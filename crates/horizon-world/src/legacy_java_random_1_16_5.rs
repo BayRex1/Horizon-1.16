@@ -34,6 +34,11 @@ impl JavaRandom48 {
         (self.seed >> (48 - bits)) as u32
     }
 
+    /// Returns Java-compatible nextBoolean().
+    pub fn next_bool(&mut self) -> bool {
+        self.next_bits(1) != 0
+    }
+
     /// Returns Java-compatible nextInt().
     pub fn next_i32(&mut self) -> i32 {
         self.next_bits(32) as i32
@@ -57,6 +62,11 @@ impl JavaRandom48 {
                 return value;
             }
         }
+    }
+
+    /// Returns Java-compatible nextFloat() using the high 24 random bits.
+    pub fn next_f32(&mut self) -> f32 {
+        (self.next_bits(24) as f32) * (1.0 / ((1_u32 << 24) as f32))
     }
 
     /// Returns Java-compatible nextDouble() using two consecutive draws.
@@ -110,6 +120,15 @@ mod tests {
     fn matches_java_next_long_seed_zero() {
         let mut random = JavaRandom48::new(0);
         assert_eq!(random.next_i64(), -4_962_768_465_676_381_896);
+    }
+
+    #[test]
+    fn matches_java_boolean_and_float_draws() {
+        let mut boolean_rng = JavaRandom48::new(0);
+        assert!(!boolean_rng.next_bool());
+
+        let mut float_rng = JavaRandom48::new(0);
+        assert!((float_rng.next_f32() - 0.73096776).abs() < f32::EPSILON);
     }
 
     #[test]
