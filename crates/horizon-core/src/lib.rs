@@ -20,5 +20,6 @@ pub mod ticks;
 
 pub mod release;
 pub mod version;
+pub mod legacy_1_16_5;
 
 pub use version::VANILLA_VERSION;
