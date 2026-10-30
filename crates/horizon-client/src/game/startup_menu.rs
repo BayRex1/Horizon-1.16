@@ -275,7 +275,8 @@ impl Loading {
                     Err(TryRecvError::Disconnected) => {
                         let detail = match self.handle.take() {
                             Some(handle) => match handle.join() {
-                                Ok(()) => "worker exited without sending its completion message".to_owned(),
+                                Ok(()) => "worker exited without sending its completion message"
+                                    .to_owned(),
                                 Err(panic) => panic
                                     .downcast_ref::<&str>()
                                     .copied()
@@ -286,9 +287,9 @@ impl Loading {
                             None => "worker handle was already unavailable".to_owned(),
                         };
                         log::error!("Horizon: resource loader channel disconnected: {detail}");
-                        return Err(format!(
-                            "resource loader stopped before finishing: {detail}"
-                        ).into());
+                        return Err(
+                            format!("resource loader stopped before finishing: {detail}").into(),
+                        );
                     }
                 }
             }
