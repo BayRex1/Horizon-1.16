@@ -165,7 +165,7 @@ mod tests {
             expected_rng.next_f64() * 256.0,
         ];
         for index in 0..256 {
-            expected_rng.next_int((256 - index) as i32);
+            expected_rng.next_int(256 - index);
         }
 
         assert_eq!(sampler.offsets(), expected_offsets);
