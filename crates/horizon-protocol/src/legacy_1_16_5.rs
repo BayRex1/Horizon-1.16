@@ -1069,3 +1069,116 @@ mod tests {
         assert!(decode_login_disconnect(&[2, b'{', b'}', 0]).is_err());
     }
 }
+
+/// Encode a protocol-754 handshake packet and its VarInt frame.
+/// next_state is 1 for Status or 2 for Login.
+pub fn encode_handshake(server_address: &str, server_port: u16, next_state: State) -> crate::Result<Vec<u8>> {
+    if server_address.is_empty() || server_address.len() > 255 || server_address.chars().any(char::is_control) {
+        return Err(crate::Error::new("invalid 1.16.5 handshake server address"));
+    }
+    let next_state_id = match next_state {
+        State::Status => 1,
+        State::Login => 2,
+        State::Handshake => return Err(crate::Error::new("invalid handshake next state")),
+    };
+    let mut packet = crate::buf::Writer::new();
+    packet.varint(handshake::INTENTION);
+    packet.varint(PROTOCOL_VERSION);
+    packet.string(server_address);
+    packet.u16(server_port);
+    packet.varint(next_state_id);
+    crate::frame::encode(&packet.data, None)
+}
+
+/// Encode the empty serverbound Status Request packet, including its frame.
+pub fn encode_status_request() -> Vec<u8> {
+    crate::frame::encode(&[status::serverbound::REQUEST], None)
+        .expect("a one-byte status request always fits in a frame")
+}
+
+/// Encode a serverbound Status Ping packet, including its frame.
+pub fn encode_status_ping(payload: i64) -> Vec<u8> {
+    let mut packet = crate::buf::Writer::new();
+    packet.varint(status::serverbound::PING);
+    packet.i64(payload);
+    crate::frame::encode(&packet.data, None)
+        .expect("a nine-byte status ping always fits in a frame")
+}
+
+/// Decode the JSON string in a protocol-754 Status Response packet body.
+pub fn decode_status_response(payload: &[u8]) -> crate::Result<String> {
+    let mut r = crate::buf::Reader::new(payload);
+    if r.varint()? != status::clientbound::RESPONSE {
+        return Err(crate::Error::new("unexpected 1.16.5 status response packet id"));
+    }
+    let json = r.string(32767)?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 status response"));
+    }
+    Ok(json)
+}
+
+/// Decode the signed 64-bit payload in a protocol-754 Status Pong packet body.
+pub fn decode_status_pong(payload: &[u8]) -> crate::Result<i64> {
+    let mut r = crate::buf::Reader::new(payload);
+    if r.varint()? != status::clientbound::PONG {
+        return Err(crate::Error::new("unexpected 1.16.5 status pong packet id"));
+    }
+    let value = r.i64()?;
+    if r.remaining() != 0 {
+        return Err(crate::Error::new("trailing bytes in 1.16.5 status pong"));
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use crate::buf::Reader;
+
+    #[test]
+    fn status_handshake_uses_protocol_754_and_frames_packet() {
+        let mut bytes = encode_handshake("localhost", 25565, State::Status).unwrap();
+        let body = crate::frame::split(&mut bytes).unwrap().unwrap();
+        assert!(bytes.is_empty());
+        let mut r = Reader::new(&body);
+        assert_eq!(r.varint().unwrap(), handshake::INTENTION);
+        assert_eq!(r.varint().unwrap(), 754);
+        assert_eq!(r.string(255).unwrap(), "localhost");
+        assert_eq!(r.u16().unwrap(), 25565);
+        assert_eq!(r.varint().unwrap(), 1);
+        assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn login_handshake_uses_login_next_state() {
+        let mut bytes = encode_handshake("example.org", 25565, State::Login).unwrap();
+        let body = crate::frame::split(&mut bytes).unwrap().unwrap();
+        let mut r = Reader::new(&body);
+        assert_eq!(r.varint().unwrap(), 0);
+        assert_eq!(r.varint().unwrap(), 754);
+        assert_eq!(r.string(255).unwrap(), "example.org");
+        assert_eq!(r.u16().unwrap(), 25565);
+        assert_eq!(r.varint().unwrap(), 2);
+    }
+
+    #[test]
+    fn status_packets_round_trip() {
+        assert_eq!(encode_status_request(), [1, 0]);
+        let mut ping = encode_status_ping(0x0102_0304_0506_0708);
+        let body = crate::frame::split(&mut ping).unwrap().unwrap();
+        let mut r = Reader::new(&body);
+        assert_eq!(r.varint().unwrap(), status::serverbound::PING);
+        assert_eq!(r.i64().unwrap(), 0x0102_0304_0506_0708);
+        assert_eq!(decode_status_response(&[0, 2, b'{', b'}']).unwrap(), "{}");
+        assert_eq!(decode_status_pong(&[1, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap(), 0x0102_0304_0506_0708);
+    }
+
+    #[test]
+    fn rejects_invalid_handshake_and_status_payloads() {
+        assert!(encode_handshake("", 25565, State::Status).is_err());
+        assert!(encode_handshake("localhost", 25565, State::Handshake).is_err());
+        assert!(decode_status_response(&[1, 0]).is_err());
+        assert!(decode_status_pong(&[0, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+    }
+}
