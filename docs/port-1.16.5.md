@@ -106,6 +106,16 @@ The port can be researched and implemented using public technical references and
 **Important:** public reference data can remove the need for a developer to manually download the JARs for every iteration, but it does not make a complete generator appear automatically. The Rust implementation and seed-based validation remain required. Check each source's license/terms before copying or redistributing its data.
 
 
+## Nether biome preset — implemented selection stage
+
+- [x] Add the five vanilla 1.16.x Nether multi-noise preset points for Nether Wastes, Soul Sand Valley, Crimson Forest, Warped Forest and Basalt Deltas.
+- [x] Add a separate five-axis nearest-point selector, without mapping Nether coordinates into the six-axis Overworld climate index.
+- [x] Reject non-finite climate samples and test each preset point.
+- [ ] Generate the five climate-noise inputs from the 1.16.5 world seed and sample coordinates; the current selector accepts already-computed climate values only.
+- [ ] Validate the generated biome samples against a vanilla 1.16.5 reference world before connecting this selector to chunk generation.
+
+The preset coordinates are cross-checked against the historical Nether dimension JSON example at [alcatrazEscapee's reference](https://gist.github.com/alcatrazEscapee/b4c7f2cb94d48c5f5a0ba035d162ea3d). This is a source for the five preset points, not proof that the Rust implementation already reproduces vanilla climate noise or complete Nether terrain.
+
 ## Milestone — initial 1.16.x registry reference data
 
 - [x] Add a compact machine-readable block registry reference at `crates/horizon-world/data/legacy_1_16_5/blocks.json` (763 block types; state ID range 0–17111).
