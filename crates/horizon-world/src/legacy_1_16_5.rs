@@ -157,7 +157,21 @@ impl From<&LegacyBiomeClimate> for LegacyNetherClimate {
 }
 
 impl LegacyNetherClimate {
+    /// Whether all five climate coordinates are finite numbers.
+    pub fn is_finite(self) -> bool {
+        [
+            self.temperature,
+            self.humidity,
+            self.altitude,
+            self.weirdness,
+            self.offset,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+    }
+
     /// Squared Euclidean distance in the five legacy Nether climate axes.
+    /// Callers should reject non-finite points before comparing distances.
     pub fn distance_squared(self, target: Self) -> f64 {
         let delta = [
             self.temperature - target.temperature,
@@ -178,13 +192,23 @@ impl LegacyNetherClimate {
 pub fn nether_biome_by_climate(
     target: LegacyNetherClimate,
 ) -> Result<Option<LegacyBiome>, serde_json::Error> {
+    // Invalid coordinates have no meaningful nearest biome. Returning None
+    // avoids NaN comparisons silently selecting the first registry entry.
+    if !target.is_finite() {
+        return Ok(None);
+    }
+
     let mut best: Option<(f64, LegacyBiome)> = None;
     for biome in biomes()?
         .into_iter()
         .filter(|biome| biome.dimension.as_deref() == Some("nether"))
     {
         for climate in &biome.climates {
-            let distance = LegacyNetherClimate::from(climate).distance_squared(target);
+            let point = LegacyNetherClimate::from(climate);
+            if !point.is_finite() {
+                continue;
+            }
+            let distance = point.distance_squared(target);
             if best
                 .as_ref()
                 .is_none_or(|(best_distance, _)| distance < *best_distance)
@@ -1530,17 +1554,28 @@ mod tests {
         .expect("legacy Nether climate table must parse")
         .expect("a biome with explicit Nether climate data must resolve");
         assert_eq!(selected.name, "nether_wastes");
-        assert!(
-            nether_biome_by_climate(LegacyNetherClimate {
-                temperature: f32::NAN,
-                humidity: 0.0,
-                altitude: 0.0,
-                weirdness: 0.0,
-                offset: 0.0,
-            })
-            .expect("climate data must parse")
-            .is_some()
-        );
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(
+                nether_biome_by_climate(LegacyNetherClimate {
+                    temperature: invalid,
+                    humidity: 0.0,
+                    altitude: 0.0,
+                    weirdness: 0.0,
+                    offset: 0.0,
+                })
+                .expect("climate data must parse")
+                .is_none(),
+                "non-finite climate coordinates must not resolve a biome"
+            );
+        }
+        assert!(!LegacyNetherClimate {
+            temperature: f32::NAN,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.0,
+        }
+        .is_finite());
         for name in [
             "plains",
             "the_void",
