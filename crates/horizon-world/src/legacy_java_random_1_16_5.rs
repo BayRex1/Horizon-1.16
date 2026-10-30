@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn matches_java_boolean_and_float_draws() {
         let mut boolean_rng = JavaRandom48::new(0);
-        assert!(!boolean_rng.next_bool());
+        assert!(boolean_rng.next_bool());
 
         let mut float_rng = JavaRandom48::new(0);
         assert!((float_rng.next_f32() - 0.73096776).abs() < f32::EPSILON);
