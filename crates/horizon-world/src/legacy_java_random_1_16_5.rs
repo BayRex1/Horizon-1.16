@@ -72,8 +72,7 @@ impl JavaRandom48 {
         let mut remaining = draws;
         while remaining != 0 {
             if remaining & 1 != 0 {
-                accumulated_multiplier =
-                    accumulated_multiplier.wrapping_mul(multiplier) & MASK;
+                accumulated_multiplier = accumulated_multiplier.wrapping_mul(multiplier) & MASK;
                 accumulated_addend = accumulated_addend
                     .wrapping_mul(multiplier)
                     .wrapping_add(addend)
