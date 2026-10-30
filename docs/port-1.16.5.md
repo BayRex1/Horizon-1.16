@@ -82,7 +82,7 @@ py -3 tools/prepare_1_16_5.py `
 
 You do not need Linux or a running Minecraft server. This script is for developers preparing source data; someone testing a prebuilt Horizon Windows package should not need to run it at all.
 
-The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. The remaining critical work is a 1.16.5 Java-side exporter compatible with that release's obfuscated classes, followed by Rust adapters for its block-state IDs, biome registry, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
+The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. If you already generated the official 1.16.5 DataGenerator `reports/blocks.json`, pass `--blocks-report "path/to/blocks.json"`; the preparer then runs `tools/export_1_16_5_registry.py` and writes `facts.json` into the output directory. This exports block-state identities/default states only, not a playable bundle. The block-state identity exporter can now be invoked by the preparation script when a verified DataGenerator report is supplied. The remaining critical work includes exact block behavior/tag facts, biome registry and biome-source adapters, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
 
 
 ## Public research sources — no manual JAR downloads for the tester

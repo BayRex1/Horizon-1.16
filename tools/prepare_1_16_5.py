@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -97,7 +98,8 @@ def safe_extract(archive: zipfile.ZipFile, members: list[str], destination: Path
     return count
 
 
-def stage(client: Path, server: Path, manifest_path: Path, output: Path) -> dict:
+def stage(client: Path, server: Path, manifest_path: Path, output: Path,
+          blocks_report: Path | None = None) -> dict:
     manifest = validate_manifest(manifest_path)
     verify_jar(client, CLIENT_SHA1, "client")
     verify_jar(server, SERVER_SHA1, "server")
@@ -120,6 +122,32 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path) -> dict
                 "the bundled-jar layout may have changed and must be handled explicitly."
             )
         data_count = safe_extract(archive, data_members, data_dir)
+    registry = None
+    if blocks_report is not None:
+        report_path = blocks_report.expanduser().resolve()
+        if not report_path.is_file():
+            raise FileNotFoundError(f"Missing 1.16.5 DataGenerator blocks report: {report_path}")
+        exporter = Path(__file__).with_name("export_1_16_5_registry.py")
+        facts_path = output / "facts.json"
+        subprocess.run(
+            [sys.executable, str(exporter), str(report_path), "--out", str(facts_path)],
+            check=True,
+        )
+        registry = {
+            "source_report": str(report_path),
+            "facts_file": "facts.json",
+            "status": "block-state-identities-exported",
+        }
+
+    missing_work = [
+        "1.16.5 biome registry and biome-source adapter",
+        "1.16.5 noise settings, density functions, carvers and feature placement adapter",
+        "1.16.5 chunk section layout, heightmaps, lighting and spawn integration",
+        "1.16.5 save/load NBT and data-fixer compatibility",
+    ]
+    if registry is None:
+        missing_work.insert(0, "1.16.5 block-state and registry facts exporter")
+
     result = {
         "format": 1,
         "minecraft_version": VERSION,
@@ -133,14 +161,10 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path) -> dict
         "asset_index": manifest.get("assetIndex", {}).get("id"),
         "extracted_client_asset_files": asset_count,
         "extracted_server_data_files": data_count,
-        "status": "inputs-staged-not-playable-resource-bundle",
-        "missing_work": [
-            "1.16.5 block-state and registry facts exporter",
-            "1.16.5 biome registry and biome-source adapter",
-            "1.16.5 noise settings, density functions, carvers and feature placement adapter",
-            "1.16.5 chunk section layout, heightmaps, lighting and spawn integration",
-            "1.16.5 save/load NBT and data-fixer compatibility",
-        ],
+        "status": ("inputs-and-block-registry-staged-not-playable-resource-bundle"
+                   if registry else "inputs-staged-not-playable-resource-bundle"),
+        "block_registry": registry,
+        "missing_work": missing_work,
     }
     (output / "horizon-1.16.5-inputs.json").write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
@@ -158,6 +182,8 @@ def main() -> int:
                         help="optional local official 1.16.5 server jar (downloaded automatically if omitted)")
     parser.add_argument("--manifest", type=Path,
                         help="override versions/1.16.5/1.16.5.json")
+    parser.add_argument("--blocks-report", type=Path,
+                        help="optional official 1.16.5 DataGenerator reports/blocks.json; exports facts.json")
     parser.add_argument("--out", type=Path, required=True,
                         help="new/empty directory for staged input data")
     args = parser.parse_args()
@@ -175,7 +201,7 @@ def main() -> int:
     try:
         if args.server_jar:
             server = args.server_jar.expanduser()
-            result = stage(client, server, manifest.expanduser(), args.out.expanduser())
+            result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report)
         else:
             # This is a developer-only preparation step; users testing a packaged build
             # do not need Python, the server jar, or a Minecraft server running.
