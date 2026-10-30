@@ -187,6 +187,89 @@ impl LegacyNetherClimate {
     }
 }
 
+/// Vanilla 1.16.x Nether multi-noise preset points.
+///
+/// These five points are the built-in Nether preset values (temperature,
+/// humidity, altitude, weirdness, offset). They are kept separate from the
+/// incomplete per-biome metadata dump above.
+const VANILLA_NETHER_BIOME_POINTS: [(&str, LegacyNetherClimate); 5] = [
+    (
+        "nether_wastes",
+        LegacyNetherClimate {
+            temperature: 0.0,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.0,
+        },
+    ),
+    (
+        "soul_sand_valley",
+        LegacyNetherClimate {
+            temperature: 0.0,
+            humidity: -0.5,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.0,
+        },
+    ),
+    (
+        "crimson_forest",
+        LegacyNetherClimate {
+            temperature: 0.4,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.0,
+        },
+    ),
+    (
+        "warped_forest",
+        LegacyNetherClimate {
+            temperature: 0.0,
+            humidity: 0.5,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.375,
+        },
+    ),
+    (
+        "basalt_deltas",
+        LegacyNetherClimate {
+            temperature: -0.5,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.175,
+        },
+    ),
+];
+
+/// Resolve a climate sample against the actual built-in Nether preset points.
+/// This does not generate the climate noise itself; it only performs the
+/// vanilla preset's nearest-point biome choice.
+pub fn vanilla_nether_biome_by_climate(
+    target: LegacyNetherClimate,
+) -> Result<Option<LegacyBiome>, serde_json::Error> {
+    if !target.is_finite() {
+        return Ok(None);
+    }
+
+    let biomes = biomes()?;
+    let mut best: Option<(f64, &str)> = None;
+    for (name, point) in &VANILLA_NETHER_BIOME_POINTS {
+        let distance = point.distance_squared(target);
+        if best
+            .as_ref()
+            .is_none_or(|(best_distance, _)| distance < *best_distance)
+        {
+            best = Some((distance, *name));
+        }
+    }
+
+    Ok(best.and_then(|(_, name)| biomes.into_iter().find(|biome| biome.name == name)))
+}
+
 /// Resolve only from climate points actually present in the pinned data.
 /// Missing climate records are not guessed from display temperature/rainfall.
 pub fn nether_biome_by_climate(
@@ -1576,6 +1659,25 @@ mod tests {
             offset: 0.0,
         }
         .is_finite());
+        for (name, point) in VANILLA_NETHER_BIOME_POINTS {
+            let selected = vanilla_nether_biome_by_climate(point)
+                .expect("vanilla Nether preset should parse")
+                .expect("preset biome should exist");
+            assert_eq!(selected.name, name);
+        }
+        assert_eq!(
+            vanilla_nether_biome_by_climate(LegacyNetherClimate {
+                temperature: 0.0,
+                humidity: -0.5,
+                altitude: 0.0,
+                weirdness: 0.0,
+                offset: 0.0,
+            })
+            .expect("vanilla Nether preset should parse")
+            .unwrap()
+            .name,
+            "soul_sand_valley"
+        );
         for name in [
             "plains",
             "the_void",
