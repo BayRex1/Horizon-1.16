@@ -220,29 +220,42 @@ pub(super) fn spawn_loader(
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
         .spawn(move || {
-            let mut pack_error = None;
-            let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
-                .unwrap_or_else(|error| {
-                    pack_error = Some(error.to_string());
-                    vanilla_root.clone()
-                });
-            let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
-            let result = load_resources(
-                root,
-                &vanilla_root,
-                &settings,
-                started,
-                true,
-                &progress,
-                &mut |gui, root| {
-                    let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
-                },
-            )
-            .map(|mut loaded| {
-                loaded.pack_error = loaded.pack_error.or(pack_error);
-                loaded
-            })
-            .map_err(|error| error.to_string());
+            // A panic in the worker previously disconnected the channel after
+            // the UI bundle had been published, hiding the actual failure
+            // behind "resource loader stopped before finishing".
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut pack_error = None;
+                let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
+                    .unwrap_or_else(|error| {
+                        pack_error = Some(error.to_string());
+                        vanilla_root.clone()
+                    });
+                let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
+                load_resources(
+                    root,
+                    &vanilla_root,
+                    &settings,
+                    started,
+                    true,
+                    &progress,
+                    &mut |gui, root| {
+                        let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
+                    },
+                )
+                .map(|mut loaded| {
+                    loaded.pack_error = loaded.pack_error.or(pack_error);
+                    loaded
+                })
+                .map_err(|error| error.to_string())
+            }))
+            .unwrap_or_else(|panic| {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic payload");
+                Err(format!("resource loader panicked: {message}"))
+            });
             let _ = sender.send(LoaderMsg::Done(result));
         })?;
     Ok((receiver, handle))
