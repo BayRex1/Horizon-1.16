@@ -16,22 +16,28 @@ pub struct LegacyNoiseOctave1_16_5 {
 
 impl LegacyNoiseOctave1_16_5 {
     /// Creates a layer with explicit coordinate frequency and output amplitude.
-    pub fn new(
-        sampler: LegacyImprovedNoise1_16_5,
-        frequency: f64,
-        amplitude: f64,
-    ) -> Option<Self> {
+    pub fn new(sampler: LegacyImprovedNoise1_16_5, frequency: f64, amplitude: f64) -> Option<Self> {
         if !frequency.is_finite() || !amplitude.is_finite() {
             return None;
         }
-        Some(Self { sampler, frequency, amplitude })
+        Some(Self {
+            sampler,
+            frequency,
+            amplitude,
+        })
     }
 
-    pub fn frequency(&self) -> f64 { self.frequency }
-    pub fn amplitude(&self) -> f64 { self.amplitude }
+    pub fn frequency(&self) -> f64 {
+        self.frequency
+    }
+
+    pub fn amplitude(&self) -> f64 {
+        self.amplitude
+    }
 
     pub fn sample(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.sampler.sample(x * self.frequency, y * self.frequency, z * self.frequency)
+        self.sampler
+            .sample(x * self.frequency, y * self.frequency, z * self.frequency)
             * self.amplitude
     }
 }
@@ -48,13 +54,24 @@ pub struct LegacyOctaveStack1_16_5 {
 }
 
 impl LegacyOctaveStack1_16_5 {
-    pub fn new(octaves: Vec<LegacyNoiseOctave1_16_5>) -> Self { Self { octaves } }
-    pub fn octaves(&self) -> &[LegacyNoiseOctave1_16_5] { &self.octaves }
-    pub fn is_empty(&self) -> bool { self.octaves.is_empty() }
+    pub fn new(octaves: Vec<LegacyNoiseOctave1_16_5>) -> Self {
+        Self { octaves }
+    }
+
+    pub fn octaves(&self) -> &[LegacyNoiseOctave1_16_5] {
+        &self.octaves
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.octaves.is_empty()
+    }
 
     /// Adds the weighted contribution of every configured octave.
     pub fn sample(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.octaves.iter().map(|octave| octave.sample(x, y, z)).sum()
+        self.octaves
+            .iter()
+            .map(|octave| octave.sample(x, y, z))
+            .sum()
     }
 }
 
@@ -86,6 +103,9 @@ mod tests {
 
     #[test]
     fn empty_stack_is_zero() {
-        assert_eq!(LegacyOctaveStack1_16_5::default().sample(1.0, 2.0, 3.0), 0.0);
+        assert_eq!(
+            LegacyOctaveStack1_16_5::default().sample(1.0, 2.0, 3.0),
+            0.0
+        );
     }
 }
