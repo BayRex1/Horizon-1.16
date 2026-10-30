@@ -222,7 +222,7 @@ pub(super) fn spawn_loader(
         .spawn(move || {
             // A panic in the worker previously disconnected the channel after
             // the UI bundle had been published, hiding the actual failure
-            // behind "resource loader stopped before finishing".
+            // behind "resource loader stopped before finishing: worker handle was already unavailable".
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut pack_error = None;
                 let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
