@@ -818,7 +818,7 @@ mod tests {
         let mut loading = loading(receiver);
         assert_eq!(
             loading.poll_menu_resources().unwrap_err().to_string(),
-            "resource loader stopped before finishing"
+            "resource loader stopped before finishing: worker handle was already unavailable"
         );
     }
 }
