@@ -132,6 +132,61 @@ pub fn biome_by_id(id: u32) -> Result<Option<LegacyBiome>, serde_json::Error> {
     Ok(biomes()?.into_iter().find(|biome| biome.id == id))
 }
 
+/// Five-dimensional multi-noise point used by the 1.16.x Nether biome source.
+/// This is deliberately separate from the six-axis Overworld climate index:
+/// Nether uses temperature, humidity, altitude, weirdness and offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegacyNetherClimate {
+    pub temperature: f32,
+    pub humidity: f32,
+    pub altitude: f32,
+    pub weirdness: f32,
+    pub offset: f32,
+}
+
+impl From<&LegacyBiomeClimate> for LegacyNetherClimate {
+    fn from(value: &LegacyBiomeClimate) -> Self {
+        Self {
+            temperature: value.temperature,
+            humidity: value.humidity,
+            altitude: value.altitude,
+            weirdness: value.weirdness,
+            offset: value.offset,
+        }
+    }
+}
+
+impl LegacyNetherClimate {
+    /// Squared Euclidean distance in the five legacy Nether climate axes.
+    pub fn distance_squared(self, target: Self) -> f64 {
+        let delta = [
+            self.temperature - target.temperature,
+            self.humidity - target.humidity,
+            self.altitude - target.altitude,
+            self.weirdness - target.weirdness,
+            self.offset - target.offset,
+        ];
+        delta.iter().map(|value| f64::from(*value) * f64::from(*value)).sum()
+    }
+}
+
+/// Resolve only from climate points actually present in the pinned data.
+/// Missing climate records are not guessed from display temperature/rainfall.
+pub fn nether_biome_by_climate(
+    target: LegacyNetherClimate,
+) -> Result<Option<LegacyBiome>, serde_json::Error> {
+    let mut best: Option<(f64, LegacyBiome)> = None;
+    for biome in biomes()?.into_iter().filter(|biome| biome.dimension.as_deref() == Some("nether")) {
+        for climate in &biome.climates {
+            let distance = LegacyNetherClimate::from(climate).distance_squared(target);
+            if best.as_ref().is_none_or(|(best_distance, _)| distance < *best_distance) {
+                best = Some((distance, biome.clone()));
+            }
+        }
+    }
+    Ok(best.map(|(_, biome)| biome))
+}
+
 /// One Java Edition 1.16.5 chunk section (16×16×16 blocks).
 ///
 /// Serialized fields use the legacy Anvil format: Palette entries use Name/Properties,
@@ -1456,6 +1511,25 @@ mod tests {
         assert_eq!(nether_wastes.climates[0].altitude, 0.0);
         assert_eq!(nether_wastes.climates[0].weirdness, 0.0);
         assert_eq!(nether_wastes.climates[0].offset, 0.0);
+        let selected = nether_biome_by_climate(LegacyNetherClimate {
+            temperature: 0.01,
+            humidity: -0.01,
+            altitude: 0.02,
+            weirdness: 0.0,
+            offset: 0.0,
+        })
+        .expect("legacy Nether climate table must parse")
+        .expect("a biome with explicit Nether climate data must resolve");
+        assert_eq!(selected.name, "nether_wastes");
+        assert!(nether_biome_by_climate(LegacyNetherClimate {
+            temperature: f32::NAN,
+            humidity: 0.0,
+            altitude: 0.0,
+            weirdness: 0.0,
+            offset: 0.0,
+        })
+        .expect("climate data must parse")
+        .is_some());
         for name in [
             "plains",
             "the_void",
