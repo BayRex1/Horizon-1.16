@@ -1072,8 +1072,15 @@ mod tests {
 
 /// Encode a protocol-754 handshake packet and its VarInt frame.
 /// next_state is 1 for Status or 2 for Login.
-pub fn encode_handshake(server_address: &str, server_port: u16, next_state: State) -> crate::Result<Vec<u8>> {
-    if server_address.is_empty() || server_address.len() > 255 || server_address.chars().any(char::is_control) {
+pub fn encode_handshake(
+    server_address: &str,
+    server_port: u16,
+    next_state: State,
+) -> crate::Result<Vec<u8>> {
+    if server_address.is_empty()
+        || server_address.len() > 255
+        || server_address.chars().any(char::is_control)
+    {
         return Err(crate::Error::new("invalid 1.16.5 handshake server address"));
     }
     let next_state_id = match next_state {
@@ -1109,11 +1116,15 @@ pub fn encode_status_ping(payload: i64) -> Vec<u8> {
 pub fn decode_status_response(payload: &[u8]) -> crate::Result<String> {
     let mut r = crate::buf::Reader::new(payload);
     if r.varint()? != status::clientbound::RESPONSE {
-        return Err(crate::Error::new("unexpected 1.16.5 status response packet id"));
+        return Err(crate::Error::new(
+            "unexpected 1.16.5 status response packet id",
+        ));
     }
     let json = r.string(32767)?;
     if r.remaining() != 0 {
-        return Err(crate::Error::new("trailing bytes in 1.16.5 status response"));
+        return Err(crate::Error::new(
+            "trailing bytes in 1.16.5 status response",
+        ));
     }
     Ok(json)
 }
@@ -1171,7 +1182,10 @@ mod handshake_tests {
         assert_eq!(r.varint().unwrap(), status::serverbound::PING);
         assert_eq!(r.i64().unwrap(), 0x0102_0304_0506_0708);
         assert_eq!(decode_status_response(&[0, 2, b'{', b'}']).unwrap(), "{}");
-        assert_eq!(decode_status_pong(&[1, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap(), 0x0102_0304_0506_0708);
+        assert_eq!(
+            decode_status_pong(&[1, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap(),
+            0x0102_0304_0506_0708
+        );
     }
 
     #[test]
