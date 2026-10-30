@@ -209,8 +209,8 @@ def main() -> int:
                 server = Path(temp_dir) / "minecraft_server.1.16.5.jar"
                 print(f"Downloading official Minecraft {VERSION} data jar...")
                 urllib.request.urlretrieve(SERVER_URL, server)
-                result = stage(client, server, manifest.expanduser(), args.out.expanduser())
-    except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+                result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report)
+    except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(f"1.16.5 resource staging failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2))
