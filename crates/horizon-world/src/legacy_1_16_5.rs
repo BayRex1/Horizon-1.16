@@ -1651,14 +1651,16 @@ mod tests {
                 "non-finite climate coordinates must not resolve a biome"
             );
         }
-        assert!(!LegacyNetherClimate {
-            temperature: f32::NAN,
-            humidity: 0.0,
-            altitude: 0.0,
-            weirdness: 0.0,
-            offset: 0.0,
-        }
-        .is_finite());
+        assert!(
+            !LegacyNetherClimate {
+                temperature: f32::NAN,
+                humidity: 0.0,
+                altitude: 0.0,
+                weirdness: 0.0,
+                offset: 0.0,
+            }
+            .is_finite()
+        );
         for (name, point) in VANILLA_NETHER_BIOME_POINTS {
             let selected = vanilla_nether_biome_by_climate(point)
                 .expect("vanilla Nether preset should parse")
