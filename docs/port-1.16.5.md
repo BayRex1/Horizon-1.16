@@ -106,6 +106,15 @@ The port can be researched and implemented using public technical references and
 **Important:** public reference data can remove the need for a developer to manually download the JARs for every iteration, but it does not make a complete generator appear automatically. The Rust implementation and seed-based validation remain required. Check each source's license/terms before copying or redistributing its data.
 
 
+## Nether biome preset — four-channel query adapter
+
+- [x] Model the four sampled channels used by the 1.16.5 Nether multi-noise source: temperature, humidity, altitude and weirdness.
+- [x] Keep the preset offset as candidate-biome metadata; do not model it as a fifth sampled noise field.
+- [x] Add `vanilla_nether_biome_from_noise` to pass four finite samples into the five-axis nearest-preset selector.
+- [ ] Implement the four seed-initialized 1.16.5 `DoublePerlinNoiseSampler` instances and verify their sample coordinates against vanilla fixtures.
+
+The adapter does not construct noise samplers and is not yet a seed-to-biome generator. Its input must come from the exact 1.16.5 sampler implementation; arbitrary or modern-version noise values are not valid parity evidence.
+
 ## Nether biome preset — implemented selection stage
 
 - [x] Add the five vanilla 1.16.x Nether multi-noise preset points for Nether Wastes, Soul Sand Valley, Crimson Forest, Warped Forest and Basalt Deltas.
