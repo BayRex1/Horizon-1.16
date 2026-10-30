@@ -74,6 +74,7 @@ pub mod item_use_lifecycle;
 pub mod item_use_start;
 pub mod java_hash_map;
 pub mod legacy_1_16_5;
+pub mod legacy_double_perlin_noise_1_16_5;
 pub mod legacy_improved_noise_1_16_5;
 pub mod legacy_java_random_1_16_5;
 pub mod legacy_octave_noise_1_16_5;
