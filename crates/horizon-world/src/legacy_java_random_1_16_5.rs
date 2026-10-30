@@ -39,6 +39,11 @@ impl JavaRandom48 {
         self.next_bits(32) as i32
     }
 
+    /// Returns Java-compatible nextLong(), including signed int extension.
+    pub fn next_i64(&mut self) -> i64 {
+        ((self.next_i32() as i64) << 32).wrapping_add(self.next_i32() as i64)
+    }
+
     /// Returns Java-compatible nextInt(bound).
     pub fn next_int(&mut self, bound: i32) -> i32 {
         assert!(bound > 0, "bound must be positive");
@@ -99,6 +104,12 @@ mod tests {
         assert_eq!(random.next_i32(), -1_155_484_576);
         assert_eq!(random.next_i32(), -723_955_400);
         assert_eq!(random.next_i32(), 1_033_096_058);
+    }
+
+    #[test]
+    fn matches_java_next_long_seed_zero() {
+        let mut random = JavaRandom48::new(0);
+        assert_eq!(random.next_i64(), -4_962_768_465_676_381_896);
     }
 
     #[test]
