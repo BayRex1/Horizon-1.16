@@ -13841,20 +13841,32 @@ fn load_resources(
     };
     let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
     let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
-    log::info!("Horizon: resource loader stage 3: loading block facts, biomes and environment ({} workers)", threads);
+    log::info!(
+        "Horizon: resource loader stage 3: loading block facts, biomes and environment ({} workers)",
+        threads
+    );
     let (facts, biomes, environment) = if threads > 1 {
         std::thread::scope(|scope| {
             let facts = scope.spawn(load_facts);
             let biomes = scope.spawn(load_biomes);
             let environment = scope.spawn(load_environment);
             let facts = facts.join().unwrap_or_else(|panic| {
-                Err(format!("block facts worker panicked: {}", worker_panic_message(panic)))
+                Err(format!(
+                    "block facts worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
             });
             let biomes = biomes.join().unwrap_or_else(|panic| {
-                Err(format!("biome worker panicked: {}", worker_panic_message(panic)))
+                Err(format!(
+                    "biome worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
             });
             let environment = environment.join().unwrap_or_else(|panic| {
-                Err(format!("environment worker panicked: {}", worker_panic_message(panic)))
+                Err(format!(
+                    "environment worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
             });
             (facts, biomes, environment)
         })
