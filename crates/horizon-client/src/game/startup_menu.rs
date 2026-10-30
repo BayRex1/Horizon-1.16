@@ -273,10 +273,22 @@ impl Loading {
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        if let Some(handle) = self.handle.take() {
-                            let _ = handle.join();
-                        }
-                        return Err("resource loader stopped before finishing".into());
+                        let detail = match self.handle.take() {
+                            Some(handle) => match handle.join() {
+                                Ok(()) => "worker exited without sending its completion message".to_owned(),
+                                Err(panic) => panic
+                                    .downcast_ref::<&str>()
+                                    .copied()
+                                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                                    .unwrap_or("worker panicked with a non-string payload")
+                                    .to_owned(),
+                            },
+                            None => "worker handle was already unavailable".to_owned(),
+                        };
+                        log::error!("Horizon: resource loader channel disconnected: {detail}");
+                        return Err(format!(
+                            "resource loader stopped before finishing: {detail}"
+                        ).into());
                     }
                 }
             }
