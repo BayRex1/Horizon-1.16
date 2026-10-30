@@ -1,4 +1,5 @@
 name: Windows development build
+# Push changes to this workflow file intentionally trigger a fresh Windows build.
 
 on:
   workflow_dispatch:
