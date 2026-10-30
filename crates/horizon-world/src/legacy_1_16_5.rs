@@ -70,6 +70,15 @@ pub struct LegacyBlock {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct LegacyBiomeClimate {
+    pub temperature: f32,
+    pub humidity: f32,
+    pub altitude: f32,
+    pub weirdness: f32,
+    pub offset: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyBiome {
     pub id: u32,
@@ -82,6 +91,11 @@ pub struct LegacyBiome {
     pub display_name: Option<String>,
     pub color: Option<u32>,
     pub rainfall: Option<f32>,
+    /// Optional biome variant used by the legacy biome data source.
+    pub child: Option<u32>,
+    /// Climate point(s) used by multi-noise biome selection in 1.16.x.
+    #[serde(default)]
+    pub climates: Vec<LegacyBiomeClimate>,
 }
 
 pub fn blocks() -> Result<Vec<LegacyBlock>, serde_json::Error> {
@@ -1432,6 +1446,16 @@ mod tests {
         assert_eq!(biomes[0].id, 0);
         assert_eq!(biomes[0].name, "ocean");
         assert!(biomes.windows(2).all(|pair| pair[0].id < pair[1].id));
+        assert_eq!(biomes[1].child, Some(129));
+        let nether_wastes = biome_by_name("nether_wastes")
+            .expect("data must parse")
+            .expect("nether wastes must exist");
+        assert_eq!(nether_wastes.climates.len(), 1);
+        assert_eq!(nether_wastes.climates[0].temperature, 0.0);
+        assert_eq!(nether_wastes.climates[0].humidity, 0.0);
+        assert_eq!(nether_wastes.climates[0].altitude, 0.0);
+        assert_eq!(nether_wastes.climates[0].weirdness, 0.0);
+        assert_eq!(nether_wastes.climates[0].offset, 0.0);
         for name in [
             "plains",
             "the_void",
