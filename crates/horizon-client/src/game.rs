@@ -13731,6 +13731,16 @@ fn synchronous_startup(options: &Options) -> bool {
         || std::env::var_os("HORIZON_NET_REPORT").is_some()
 }
 
+/// Preserve the panic payload when a resource sub-worker fails.
+fn worker_panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+        .to_owned()
+}
+
 /// The synchronous launch loads both phases; an ordinary launch returns the
 /// core bundle while the rest worker keeps loading.
 fn load_resources(
@@ -13742,6 +13752,7 @@ fn load_resources(
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
 ) -> Result<Loaded> {
+    log::info!("Horizon: resource loader stage 0: resolving resource root");
     let requested_root = root.clone();
     let threads = settings.horizon.worker_threads();
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
@@ -13775,6 +13786,7 @@ fn load_resources(
         }
         ui_ready = true;
     }
+    log::info!("Horizon: resource loader stage 1: loading asset registry and render resources");
     progress.set(0);
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
@@ -13816,6 +13828,7 @@ fn load_resources(
     }
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(1);
+    log::info!("Horizon: resource loader stage 2: reading block behaviour data");
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
@@ -13828,20 +13841,27 @@ fn load_resources(
     };
     let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
     let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
+    log::info!("Horizon: resource loader stage 3: loading block facts, biomes and environment ({} workers)", threads);
     let (facts, biomes, environment) = if threads > 1 {
         std::thread::scope(|scope| {
             let facts = scope.spawn(load_facts);
             let biomes = scope.spawn(load_biomes);
             let environment = scope.spawn(load_environment);
-            (
-                facts.join().unwrap(),
-                biomes.join().unwrap(),
-                environment.join().unwrap(),
-            )
+            let facts = facts.join().unwrap_or_else(|panic| {
+                Err(format!("block facts worker panicked: {}", worker_panic_message(panic)))
+            });
+            let biomes = biomes.join().unwrap_or_else(|panic| {
+                Err(format!("biome worker panicked: {}", worker_panic_message(panic)))
+            });
+            let environment = environment.join().unwrap_or_else(|panic| {
+                Err(format!("environment worker panicked: {}", worker_panic_message(panic)))
+            });
+            (facts, biomes, environment)
         })
     } else {
         (load_facts(), load_biomes(), load_environment())
     };
+    log::info!("Horizon: resource loader stage 4: validating worker results");
     let (facts, gameplay_projection) =
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
@@ -13850,6 +13870,7 @@ fn load_resources(
     progress.set(2);
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(3);
+    log::info!("Horizon: resource loader stage 5: loading light and pack tables");
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
@@ -13861,6 +13882,7 @@ fn load_resources(
             &settings.language,
         ));
     }
+    log::info!("Horizon: resource loader stage 6: loading collision and motion data");
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load_with_facts(&root, &registry_owner, &facts)?;
@@ -13890,6 +13912,7 @@ fn load_resources(
     }
     // Finish fallible CPU preparation before starting the tail, so an error
     // cannot detach a tail worker that races the next pack-loader generation.
+    log::info!("Horizon: resource loader stage 7: preparing game and renderer CPU resources");
     let prepared_at = Instant::now();
     let game_cpu = menu.then(|| GameCpuResources::load(&root)).transpose()?;
     let renderer_cpu = menu.then(|| prepare_renderer_textures(&pack));
