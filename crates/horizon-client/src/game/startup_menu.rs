@@ -265,7 +265,9 @@ pub(super) fn spawn_loader(
                 Err(error) => log::error!("Horizon: resource-loader finished with error: {error}"),
             }
             if sender.send(LoaderMsg::Done(result)).is_err() {
-                log::error!("Horizon: resource-loader could not publish Done: receiver disconnected");
+                log::error!(
+                    "Horizon: resource-loader could not publish Done: receiver disconnected"
+                );
             } else {
                 log::info!("Horizon: resource-loader published Done");
             }
