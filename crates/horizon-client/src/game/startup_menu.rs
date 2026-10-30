@@ -220,6 +220,7 @@ pub(super) fn spawn_loader(
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
         .spawn(move || {
+            log::info!("Horizon: resource-loader thread started");
             // A panic in the worker previously disconnected the channel after
             // the UI bundle had been published, hiding the actual failure
             // behind "resource loader stopped before finishing: worker handle was already unavailable".
@@ -231,6 +232,8 @@ pub(super) fn spawn_loader(
                         vanilla_root.clone()
                     });
                 let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
+                log::info!("Horizon: resource-loader root resolved: {}", root.display());
+                log::info!("Horizon: resource-loader calling load_resources");
                 load_resources(
                     root,
                     &vanilla_root,
@@ -243,6 +246,7 @@ pub(super) fn spawn_loader(
                     },
                 )
                 .map(|mut loaded| {
+                    log::info!("Horizon: resource-loader load_resources returned successfully");
                     loaded.pack_error = loaded.pack_error.or(pack_error);
                     loaded
                 })
@@ -256,7 +260,15 @@ pub(super) fn spawn_loader(
                     .unwrap_or("non-string panic payload");
                 Err(format!("resource loader panicked: {message}"))
             });
-            let _ = sender.send(LoaderMsg::Done(result));
+            match &result {
+                Ok(_) => log::info!("Horizon: resource-loader finished with success"),
+                Err(error) => log::error!("Horizon: resource-loader finished with error: {error}"),
+            }
+            if sender.send(LoaderMsg::Done(result)).is_err() {
+                log::error!("Horizon: resource-loader could not publish Done: receiver disconnected");
+            } else {
+                log::info!("Horizon: resource-loader published Done");
+            }
         })?;
     Ok((receiver, handle))
 }
