@@ -213,9 +213,14 @@ impl LegacyNetherNoiseSample {
     }
 
     pub fn is_finite(self) -> bool {
-        [self.temperature, self.humidity, self.altitude, self.weirdness]
-            .iter()
-            .all(|value| value.is_finite())
+        [
+            self.temperature,
+            self.humidity,
+            self.altitude,
+            self.weirdness,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
     }
 }
 
@@ -1719,14 +1724,16 @@ mod tests {
                 .name,
             "soul_sand_valley"
         );
-        assert!(vanilla_nether_biome_from_noise(LegacyNetherNoiseSample {
-            temperature: f32::NAN,
-            humidity: 0.0,
-            altitude: 0.0,
-            weirdness: 0.0,
-        })
-        .expect("invalid samples should be rejected")
-        .is_none());
+        assert!(
+            vanilla_nether_biome_from_noise(LegacyNetherNoiseSample {
+                temperature: f32::NAN,
+                humidity: 0.0,
+                altitude: 0.0,
+                weirdness: 0.0,
+            })
+            .expect("invalid samples should be rejected")
+            .is_none()
+        );
         for (name, point) in VANILLA_NETHER_BIOME_POINTS {
             let selected = vanilla_nether_biome_by_climate(point)
                 .expect("vanilla Nether preset should parse")
