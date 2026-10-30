@@ -86,11 +86,21 @@ impl LegacyImprovedNoise1_16_5 {
         let x01 = lerp(
             fade_x,
             grad(self.permutation[aa + 1], local_x, local_y, local_z - 1.0),
-            grad(self.permutation[ba + 1], local_x - 1.0, local_y, local_z - 1.0),
+            grad(
+                self.permutation[ba + 1],
+                local_x - 1.0,
+                local_y,
+                local_z - 1.0,
+            ),
         );
         let x11 = lerp(
             fade_x,
-            grad(self.permutation[ab + 1], local_x, local_y - 1.0, local_z - 1.0),
+            grad(
+                self.permutation[ab + 1],
+                local_x,
+                local_y - 1.0,
+                local_z - 1.0,
+            ),
             grad(
                 self.permutation[bb + 1],
                 local_x - 1.0,
@@ -180,11 +190,7 @@ mod tests {
         let mut second_rng = JavaRandom48::new(-123456789);
         let second = LegacyImprovedNoise1_16_5::new(&mut second_rng);
 
-        for point in [
-            [0.0, 0.0, 0.0],
-            [1.25, -9.5, 42.75],
-            [-128.0, 64.0, 0.5],
-        ] {
+        for point in [[0.0, 0.0, 0.0], [1.25, -9.5, 42.75], [-128.0, 64.0, 0.5]] {
             let a = first.sample(point[0], point[1], point[2]);
             let b = second.sample(point[0], point[1], point[2]);
             assert!(a.is_finite());
