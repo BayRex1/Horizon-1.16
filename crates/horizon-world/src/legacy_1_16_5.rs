@@ -166,7 +166,10 @@ impl LegacyNetherClimate {
             self.weirdness - target.weirdness,
             self.offset - target.offset,
         ];
-        delta.iter().map(|value| f64::from(*value) * f64::from(*value)).sum()
+        delta
+            .iter()
+            .map(|value| f64::from(*value) * f64::from(*value))
+            .sum()
     }
 }
 
@@ -176,10 +179,16 @@ pub fn nether_biome_by_climate(
     target: LegacyNetherClimate,
 ) -> Result<Option<LegacyBiome>, serde_json::Error> {
     let mut best: Option<(f64, LegacyBiome)> = None;
-    for biome in biomes()?.into_iter().filter(|biome| biome.dimension.as_deref() == Some("nether")) {
+    for biome in biomes()?
+        .into_iter()
+        .filter(|biome| biome.dimension.as_deref() == Some("nether"))
+    {
         for climate in &biome.climates {
             let distance = LegacyNetherClimate::from(climate).distance_squared(target);
-            if best.as_ref().is_none_or(|(best_distance, _)| distance < *best_distance) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_distance, _)| distance < *best_distance)
+            {
                 best = Some((distance, biome.clone()));
             }
         }
@@ -1521,15 +1530,17 @@ mod tests {
         .expect("legacy Nether climate table must parse")
         .expect("a biome with explicit Nether climate data must resolve");
         assert_eq!(selected.name, "nether_wastes");
-        assert!(nether_biome_by_climate(LegacyNetherClimate {
-            temperature: f32::NAN,
-            humidity: 0.0,
-            altitude: 0.0,
-            weirdness: 0.0,
-            offset: 0.0,
-        })
-        .expect("climate data must parse")
-        .is_some());
+        assert!(
+            nether_biome_by_climate(LegacyNetherClimate {
+                temperature: f32::NAN,
+                humidity: 0.0,
+                altitude: 0.0,
+                weirdness: 0.0,
+                offset: 0.0,
+            })
+            .expect("climate data must parse")
+            .is_some()
+        );
         for name in [
             "plains",
             "the_void",
