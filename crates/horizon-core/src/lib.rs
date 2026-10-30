@@ -18,8 +18,8 @@ pub mod storage;
 pub mod text;
 pub mod ticks;
 
+pub mod legacy_1_16_5;
 pub mod release;
 pub mod version;
-pub mod legacy_1_16_5;
 
 pub use version::VANILLA_VERSION;
