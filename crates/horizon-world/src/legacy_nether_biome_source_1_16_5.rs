@@ -4,9 +4,7 @@
 //! connects noise sampling to the legacy preset selector without pretending
 //! that the sampler constructors are seed-compatible with vanilla yet.
 
-use crate::legacy_1_16_5::{
-    vanilla_nether_biome_from_noise, LegacyBiome, LegacyNetherNoiseSample,
-};
+use crate::legacy_1_16_5::{LegacyBiome, LegacyNetherNoiseSample, vanilla_nether_biome_from_noise};
 use crate::legacy_double_perlin_noise_1_16_5::LegacyDoublePerlinNoise1_16_5;
 
 /// Four-channel Nether biome source for the 1.16.5 climate preset.
