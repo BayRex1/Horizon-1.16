@@ -77,6 +77,7 @@ pub mod legacy_1_16_5;
 pub mod legacy_double_perlin_noise_1_16_5;
 pub mod legacy_improved_noise_1_16_5;
 pub mod legacy_java_random_1_16_5;
+pub mod legacy_nether_biome_source_1_16_5;
 pub mod legacy_octave_noise_1_16_5;
 pub mod level;
 pub mod liquid_collision;
