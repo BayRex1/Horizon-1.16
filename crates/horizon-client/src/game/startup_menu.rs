@@ -470,7 +470,7 @@ impl Loading {
     fn menu_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
         if let Some(error) = self.menu.resource_error.clone() {
             if matches!(
-                action,
+                &action,
                 Action::Play { .. } | Action::Create { .. } | Action::Connect { .. }
             ) {
                 if let Some(title) = &mut self.menu.title {
