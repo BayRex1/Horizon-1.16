@@ -27,7 +27,9 @@ pub fn apply_chunk(
 ) -> crate::Result<()> {
     let key = (column.x, column.z);
     if column.full_chunk || !world.chunks.contains_key(&key) {
-        world.chunks.insert(key, Arc::new(Chunk::empty(column.x, column.z)));
+        world
+            .chunks
+            .insert(key, Arc::new(Chunk::empty(column.x, column.z)));
     }
     world.air = air;
     for (section_y, section) in column.sections.iter().enumerate() {
@@ -37,7 +39,8 @@ pub fn apply_chunk(
         }
         let mut resolved = Vec::with_capacity(4096);
         for index in 0..4096 {
-            let legacy_id = section.block_state(index)
+            let legacy_id = section
+                .block_state(index)
                 .ok_or("invalid 1.16.5 block-state palette index")?;
             let state = resolve_state(legacy_id)
                 .ok_or_else(|| format!("unmapped 1.16.5 block-state ID {legacy_id}"))?;
@@ -51,7 +54,9 @@ pub fn apply_chunk(
         }
     }
     if !column.block_entities.is_empty() {
-        world.loaded_entities.push((key, column.block_entities.clone()));
+        world
+            .loaded_entities
+            .push((key, column.block_entities.clone()));
     }
     world.dirty_light.insert(key);
     Ok(())
@@ -65,13 +70,26 @@ mod tests {
     #[test]
     fn applies_legacy_section_blocks_without_y_offset() {
         let mut world = World::new(BlockStateId(0), 0);
-        let section = LegacyChunkSection { non_air_blocks: 1, bits_per_block: 0, palette: vec![1], data: Vec::new() };
-        let column = LegacyChunkColumn {
-            x: 2, z: -1, full_chunk: true, section_mask: 1,
-            heightmaps: horizon_world::nbt::Tag::End, biomes: Vec::new(),
-            sections: vec![Some(section)], block_entities: Vec::new(),
+        let section = LegacyChunkSection {
+            non_air_blocks: 1,
+            bits_per_block: 0,
+            palette: vec![1],
+            data: Vec::new(),
         };
-        apply_chunk(&mut world, &column, BlockStateId(0), |id| Some(BlockStateId(id as u32))).unwrap();
+        let column = LegacyChunkColumn {
+            x: 2,
+            z: -1,
+            full_chunk: true,
+            section_mask: 1,
+            heightmaps: horizon_world::nbt::Tag::End,
+            biomes: Vec::new(),
+            sections: vec![Some(section)],
+            block_entities: Vec::new(),
+        };
+        apply_chunk(&mut world, &column, BlockStateId(0), |id| {
+            Some(BlockStateId(id as u32))
+        })
+        .unwrap();
         assert_eq!(world.block(32, 0, -16), BlockStateId(1));
         assert_eq!(world.block(32, 15, -16), BlockStateId(1));
         assert_eq!(world.block(32, 16, -16), BlockStateId(0));
@@ -81,15 +99,26 @@ mod tests {
     #[test]
     fn rejects_unmapped_legacy_registry_states() {
         let mut world = World::new(BlockStateId(0), 0);
-        let section = LegacyChunkSection { non_air_blocks: 1, bits_per_block: 0, palette: vec![999], data: Vec::new() };
+        let section = LegacyChunkSection {
+            non_air_blocks: 1,
+            bits_per_block: 0,
+            palette: vec![999],
+            data: Vec::new(),
+        };
         let column = LegacyChunkColumn {
-            x: 0, z: 0, full_chunk: true, section_mask: 1,
-            heightmaps: horizon_world::nbt::Tag::End, biomes: Vec::new(),
-            sections: vec![Some(section)], block_entities: Vec::new(),
+            x: 0,
+            z: 0,
+            full_chunk: true,
+            section_mask: 1,
+            heightmaps: horizon_world::nbt::Tag::End,
+            biomes: Vec::new(),
+            sections: vec![Some(section)],
+            block_entities: Vec::new(),
         };
         assert!(apply_chunk(&mut world, &column, BlockStateId(0), |_| None).is_err());
     }
 }
+
 /// Feed a decoded protocol-754 event into the live resident world.
 ///
 /// Network code can call this from its game-thread event drain. Chunk events
