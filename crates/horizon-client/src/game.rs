@@ -14588,10 +14588,12 @@ impl Loading {
                 // The title/loading screen has no simulation to advance. Polling
                 // continuously redraws it hundreds of times per second and can
                 // saturate a CPU, especially with a software graphics adapter.
-                // Keep the menu responsive while limiting its idle redraw rate.
+                // The software adapter on older Windows systems is expensive.
+                // The title screen has no simulation; 15 FPS is enough for its
+                // subtle splash/panorama animation and leaves the CPU idle longer.
                 w.request_redraw();
                 event_loop.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + Duration::from_millis(33),
+                    Instant::now() + Duration::from_millis(66),
                 ));
             }
         } else {
