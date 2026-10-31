@@ -17,6 +17,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare compile-exporters [--root PATH]
+       horizon-prepare verify-1.16.5 --resources-dir PATH [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
        horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
@@ -34,7 +35,7 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
 Needs Minecraft played once from the official launcher, and Java of the version
 research-lock.json pins. Releases use a runtime; development or changed exporters need a JDK.
 compile-exporters builds and validates a release bundle from the already imported pinned jars.
-The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -71,11 +72,12 @@ fn main() -> ExitCode {
         java_home: None,
     };
     let mut root = None;
+    let mut resources_dir = None;
     let mut args = std::env::args_os().skip(1).peekable();
     let assets = args.next_if(|a| {
         matches!(
             a.to_str(),
-            Some("sounds" | "panorama" | "fonts" | "packs" | "languages" | "compile-exporters")
+            Some("sounds" | "panorama" | "fonts" | "packs" | "languages" | "compile-exporters" | "verify-1.16.5")
         )
     });
     while let Some(arg) = args.next() {
@@ -106,6 +108,7 @@ fn main() -> ExitCode {
             "--server-jar" => value("--server-jar").map(|v| options.server_jar = Some(v)),
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
+            "--resources-dir" if assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5") => value("--resources-dir").map(|v| resources_dir = Some(v)),
             "-h" | "--help" => {
                 print!("{HELP}");
                 return ExitCode::SUCCESS;
@@ -134,6 +137,7 @@ fn main() -> ExitCode {
         let _ = out.flush();
     };
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
+        Some("verify-1.16.5") => resources_dir.as_deref().ok_or_else(|| "--resources-dir PATH is required".to_string()).and_then(|dir| horizon_prepare::client_only::verify_1_16_5(dir, &options.root, &log).map(|_| ())),
         Some("compile-exporters") => horizon_prepare::compile_exporters(&options, &log)
             .inspect(|dir| log(&dir.display().to_string())),
         Some("sounds") => {
