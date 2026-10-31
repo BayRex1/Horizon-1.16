@@ -167,12 +167,7 @@ impl LegacyImprovedNoise1_16_5 {
         );
         let x01 = lerp(
             fade_x,
-            grad(
-                self.permutation[aa + 1],
-                local_x,
-                gradient_y,
-                local_z - 1.0,
-            ),
+            grad(self.permutation[aa + 1], local_x, gradient_y, local_z - 1.0),
             grad(
                 self.permutation[ba + 1],
                 local_x - 1.0,
