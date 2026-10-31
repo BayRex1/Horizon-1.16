@@ -362,6 +362,16 @@ mod tests {
     }
 
     #[test]
+    fn legacy_nether_seed_fixture_is_stable_at_known_quart_coordinates() {
+        let noise = LegacyNetherNoise1_16_5::from_seed(987654321).unwrap();
+        let sample = noise.sample_quart(12, -8);
+        assert!((sample.temperature - (-0.06475469)).abs() < 1.0e-6);
+        assert!((sample.humidity - (-0.3163646)).abs() < 1.0e-6);
+        assert_eq!(sample.altitude, 0.0);
+        assert_eq!(sample.weirdness, 0.0);
+    }
+
+    #[test]
     fn nether_seed_channels_are_independent() {
         let first = LegacyNetherNoise1_16_5::from_seed(42).unwrap();
         let second = LegacyNetherNoise1_16_5::from_seed(43).unwrap();
