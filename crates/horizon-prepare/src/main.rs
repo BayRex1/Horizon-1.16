@@ -161,19 +161,19 @@ fn main() -> ExitCode {
             })
         }
         Some("sounds") => {
-            horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
+            horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log).map(|_| ())
         }
         Some("panorama") => {
-            horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log)
+            horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log).map(|_| ())
         }
         Some("fonts") => {
-            horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log)
+            horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log).map(|_| ())
         }
         Some("packs") => {
-            horizon_prepare::packs(&options.root, options.minecraft_dir.as_deref(), &log)
+            horizon_prepare::packs(&options.root, options.minecraft_dir.as_deref(), &log).map(|_| ())
         }
         Some("languages") => {
-            horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log)
+            horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log).map(|_| ())
         }
         _ => horizon_prepare::prepare(&options, &log),
     };
