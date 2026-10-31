@@ -117,14 +117,7 @@ impl LegacyImprovedNoise1_16_5 {
     /// The y coordinate used by the gradient is shifted by whole multiples of
     /// y_scale, while the interpolation fade remains based on the unshifted
     /// local y coordinate. A zero y_scale disables this adjustment.
-    pub fn sample_with_y_scale(
-        &self,
-        x: f64,
-        y: f64,
-        z: f64,
-        y_scale: f64,
-        min_y: f64,
-    ) -> f64 {
+    pub fn sample_with_y_scale(&self, x: f64, y: f64, z: f64, y_scale: f64, min_y: f64) -> f64 {
         let x = x + self.x_offset;
         let y = y + self.y_offset;
         let z = z + self.z_offset;
