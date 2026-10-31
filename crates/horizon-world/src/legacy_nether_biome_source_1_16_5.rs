@@ -108,6 +108,20 @@ impl LegacyNetherBiomeSource1_16_5 {
         vanilla_nether_biome_from_noise(sample)
     }
 
+    /// Resolves the legacy 1.16.5 numeric biome registry ID at quart coordinates.
+    ///
+    /// The returned ID belongs to the 1.16.5 biome registry and must not be
+    /// interpreted as a modern Horizon biome ID.
+    pub fn biome_id_at_quart(
+        &self,
+        biome_x: i32,
+        biome_z: i32,
+    ) -> Result<Option<u32>, serde_json::Error> {
+        Ok(self
+            .biome_at_quart(biome_x, biome_z)?
+            .map(|biome| biome.id))
+    }
+
     /// Samples climate noise and resolves the nearest built-in Nether biome.
     ///
     /// Non-finite coordinates or noise results resolve to None. For a seeded
@@ -185,6 +199,27 @@ mod tests {
         assert_eq!(sample.altitude, 0.0);
         assert_eq!(sample.weirdness, 0.0);
         assert!(source.biome_at_quart(12, -8).unwrap().is_some());
+    }
+
+    #[test]
+    fn quart_biome_id_is_from_the_legacy_registry() {
+        let source = LegacyNetherBiomeSource1_16_5::from_seed(987654321).unwrap();
+        let id = source.biome_id_at_quart(12, -8).unwrap().unwrap();
+        let biome = crate::legacy_1_16_5::biome_by_id(id)
+            .unwrap()
+            .expect("returned ID exists in the 1.16.5 biome registry");
+        assert!(matches!(
+            biome.name.as_str(),
+            "nether_wastes"
+                | "soul_sand_valley"
+                | "crimson_forest"
+                | "warped_forest"
+                | "basalt_deltas"
+        ));
+        assert_eq!(
+            source.biome_at_quart(12, -8).unwrap().unwrap().id,
+            id
+        );
     }
 
     #[test]
