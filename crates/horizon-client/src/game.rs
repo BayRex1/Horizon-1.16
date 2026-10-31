@@ -335,12 +335,11 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
     let objects = index.get("objects").and_then(serde_json::Value::as_object)
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
-    let cache = root.join(".horizon-cache").join("1.16.5");
-    let marker = cache.join(format!(".asset-index-{index_id}"));
+    let marker = root.join("assets").join(format!(".horizon-materialized-{index_id}"));
     if marker.is_file() {
-        return Ok(cache);
+        return Ok(root.to_path_buf());
     }
-    std::fs::create_dir_all(cache.join("assets"))?;
+    std::fs::create_dir_all(root.join("assets"))?;
     let mut copied = 0usize;
     for (name, entry) in objects {
         let Some(hash) = entry.get("hash").and_then(serde_json::Value::as_str) else { continue };
@@ -349,7 +348,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         if relative.components().any(|c| !matches!(c, std::path::Component::Normal(_))) { continue; }
         let source = root.join("assets/objects").join(&hash[..2]).join(hash);
         if !source.is_file() { continue; }
-        let destination = cache.join("assets").join(relative);
+        let destination = root.join("assets").join(relative);
         if destination.is_file() { continue; }
         if let Some(parent) = destination.parent() { std::fs::create_dir_all(parent)?; }
         match std::fs::copy(&source, &destination) {
@@ -359,7 +358,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
     }
     std::fs::write(&marker, format!("index={index_id}\nfiles={copied}\n"))?;
     log::info!("Horizon: materialized {copied} Minecraft assets from index {index_id}");
-    Ok(cache)
+    Ok(root.to_path_buf())
 }
 
 impl Options {
@@ -413,7 +412,7 @@ impl Options {
             && resources.join("assets/objects").is_dir()
         {
             match materialize_asset_objects(&resources) {
-                Ok(cache) => cache,
+                Ok(prepared_root) => prepared_root,
                 Err(error) => {
                     log::warn!("Horizon: could not prepare indexed Minecraft assets: {error}");
                     resources
