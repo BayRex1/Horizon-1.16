@@ -79,8 +79,11 @@ Nether noise path instead of requiring callers to assemble four synthetic
 samplers. Its `sample_quart(x, z)` and `biome_at_quart(x, z)` methods use
 quart-grid coordinates, sample temperature and humidity at y=0, set altitude
 and weirdness to zero, and resolve the built-in five-point Nether preset.
-The older `new(temperature, humidity, altitude, weirdness)` constructor is
-retained for explicit/custom sampler injection and tests.
+`biome_id_at_quart(x, z)` additionally exposes the selected numeric ID from
+the 1.16.5 biome registry for legacy chunk-data adapters; it is explicitly not
+a modern registry ID. The older
+`new(temperature, humidity, altitude, weirdness)` constructor is retained for
+explicit/custom sampler injection and tests.
 
 This is a version-isolated biome-source API. It is not yet selected by the
 modern 26.3 runtime resolver or a complete 1.16.5 chunk generator; those
