@@ -24,6 +24,8 @@ pub(super) struct StartupMenu {
     selection: AppendSelection,
     pub pending: Option<PendingWorldEntry>,
     pub reload_packs: bool,
+    /// Full gameplay resources may fail after the menu UI has loaded.
+    resource_error: Option<String>,
     pub perf: horizon_client::telemetry::Session,
 }
 
@@ -86,9 +88,7 @@ impl StartupMenu {
     pub(super) fn show_resource_error(&mut self, message: String) {
         self.pending = None;
         self.perf.cancel_world_opening();
-        self.options.open_at(false, Page::Packs);
-        self.options.resource_error = Some(message);
-        self.options_open = true;
+        self.resource_error = Some(message);
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
@@ -468,6 +468,17 @@ impl Loading {
     }
 
     fn menu_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+        if let Some(error) = self.menu.resource_error.clone() {
+            if matches!(
+                action,
+                Action::Play { .. } | Action::Create { .. } | Action::Connect { .. }
+            ) {
+                if let Some(title) = &mut self.menu.title {
+                    title.failed(format!("Game resources are unavailable: {error}"));
+                }
+                return;
+            }
+        }
         match action {
             Action::Quit => event_loop.exit(),
             Action::Options => self.open_menu_options(Page::Main),
@@ -781,9 +792,9 @@ mod tests {
         menu.show_resource_error("missing resource manifest".into());
 
         assert!(menu.pending.is_none());
-        assert!(menu.options_open);
+        assert!(!menu.options_open);
         assert_eq!(
-            menu.options.resource_error.as_deref(),
+            menu.resource_error.as_deref(),
             Some("missing resource manifest")
         );
     }
