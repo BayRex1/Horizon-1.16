@@ -1852,10 +1852,19 @@ mod classic_tests {
 
             let options = buttons.iter().find(|button| button.id == 3).unwrap();
             let quit = buttons.iter().find(|button| button.id == 2).unwrap();
-            assert_eq!((options.x, options.y, options.w), (cx - 100.0, y + 72.0, 98.0));
+            assert_eq!(
+                (options.x, options.y, options.w),
+                (cx - 100.0, y + 72.0, 98.0)
+            );
             assert_eq!((quit.x, quit.y, quit.w), (cx + 2.0, y + 72.0, 98.0));
-            assert_eq!(title.click(options.x + 10.0, options.y + 10.0, (w, h)).0, Action::Options);
-            assert_eq!(title.click(quit.x + 10.0, quit.y + 10.0, (w, h)).0, Action::Quit);
+            assert_eq!(
+                title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
+                Action::Options
+            );
+            assert_eq!(
+                title.click(quit.x + 10.0, quit.y + 10.0, (w, h)).0,
+                Action::Quit
+            );
             assert!(!buttons.iter().any(|button| matches!(button.id, 5..=7)));
         }
     }
