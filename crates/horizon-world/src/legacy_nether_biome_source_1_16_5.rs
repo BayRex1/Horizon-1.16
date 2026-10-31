@@ -91,9 +91,7 @@ impl LegacyNetherBiomeSource1_16_5 {
     /// Nether source. Returns None for explicitly configured sources.
     pub fn sample_quart(&self, biome_x: i32, biome_z: i32) -> Option<LegacyNetherNoiseSample> {
         match &self.source {
-            NetherNoiseSource1_16_5::Seeded(noise) => {
-                Some(noise.sample_quart(biome_x, biome_z))
-            }
+            NetherNoiseSource1_16_5::Seeded(noise) => Some(noise.sample_quart(biome_x, biome_z)),
             NetherNoiseSource1_16_5::Explicit { .. } => None,
         }
     }
@@ -175,7 +173,9 @@ mod tests {
     fn seeded_source_is_connected_to_real_seeded_climate_fields() {
         let source = LegacyNetherBiomeSource1_16_5::from_seed(987654321)
             .expect("built-in Nether sampler parameters are valid");
-        let sample = source.sample_quart(12, -8).expect("seeded source exposes quart sampling");
+        let sample = source
+            .sample_quart(12, -8)
+            .expect("seeded source exposes quart sampling");
         assert_eq!(
             sample,
             crate::legacy_seeded_noise_1_16_5::LegacyNetherNoise1_16_5::from_seed(987654321)
