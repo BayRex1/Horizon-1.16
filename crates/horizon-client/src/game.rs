@@ -14805,7 +14805,25 @@ fn run_loading(
     Ok(())
 }
 
+/// Make direct launches use the same writable game home as the launcher.
+/// Windows can start a program with System32 as its working directory; relative
+/// saves/options/profile paths must never be resolved there.
+#[cfg(windows)]
+fn prepare_game_home() -> Result<()> {
+    let app_data = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
+    let home = std::path::PathBuf::from(app_data).join("horizon");
+    std::fs::create_dir_all(&home)?;
+    std::env::set_current_dir(home)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn prepare_game_home() -> Result<()> {
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
+    prepare_game_home()?;
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };
