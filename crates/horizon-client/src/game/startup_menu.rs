@@ -288,7 +288,7 @@ pub(super) fn spawn_loader(
 
 impl Loading {
     pub(super) fn poll_menu_resources(&mut self) -> Result<()> {
-        if self.loaded.is_none() {
+        if self.loaded.is_none() && !self.resource_failed {
             loop {
                 match self.receiver.try_recv() {
                     Ok(LoaderMsg::Ui(gui, root)) => self.set_ui(gui, root),
@@ -760,10 +760,32 @@ mod tests {
             receiver,
             loaded: None,
             handle: None,
+            resource_failed: false,
             shown: false,
             menu: StartupMenu::default(),
             error: None,
         }
+    }
+
+    #[test]
+    fn resource_failure_keeps_menu_open_and_disables_world_entry() {
+        let mut menu = StartupMenu::default();
+        menu.pending = Some(PendingWorldEntry::Local {
+            folder: "New World".into(),
+            name: None,
+            seed: Some(0),
+            creative: false,
+            create: None,
+        });
+
+        menu.show_resource_error("missing resource manifest".into());
+
+        assert!(menu.pending.is_none());
+        assert!(menu.options_open);
+        assert_eq!(
+            menu.options.resource_error.as_deref(),
+            Some("missing resource manifest")
+        );
     }
 
     #[test]
