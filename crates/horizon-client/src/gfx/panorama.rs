@@ -1,7 +1,10 @@
 //! Vanilla 26.3's CubeMapTexture and CubeMap, separate from the pixel-filtered GUI atlas.
 use crate::{Result, hud::decode};
 use glam::Mat4;
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use wgpu::util::DeviceExt;
 
 /// Native cube order: +X, -X, +Y, -Y, +Z, -Z (CubeMapTexture.SUFFIXES).
@@ -57,22 +60,53 @@ fn panorama_face_path(root: &Path, face: u8) -> Result<PathBuf> {
     }
     let indexes = root.join("assets/indexes");
     let entries = fs::read_dir(&indexes).map_err(|error| {
-        format!("missing panorama {face}: neither {} nor an asset index is available ({error})", direct.display())
+        format!(
+            "missing panorama {face}: neither {} nor an asset index is available ({error})",
+            direct.display()
+        )
     })?;
     let mut files: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
     files.sort();
-    for index_path in files.into_iter().filter(|path| path.extension().is_some_and(|ext| ext == "json")) {
-        let Ok(bytes) = fs::read(&index_path) else { continue };
-        let Ok(index) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
-        let Some(object) = index.get("objects").and_then(serde_json::Value::as_object).and_then(|objects| {
-            objects.get(&relative).or_else(|| objects.get(&format!("textures/gui/title/background/panorama_{face}.png")))
-        }) else { continue };
-        let Some(hash) = object.get("hash").and_then(serde_json::Value::as_str) else { continue };
-        if hash.len() != 40 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) { continue; }
+    for index_path in files
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+    {
+        let Ok(bytes) = fs::read(&index_path) else {
+            continue;
+        };
+        let Ok(index) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(object) = index
+            .get("objects")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|objects| {
+                objects.get(&relative).or_else(|| {
+                    objects.get(&format!(
+                        "textures/gui/title/background/panorama_{face}.png"
+                    ))
+                })
+            })
+        else {
+            continue;
+        };
+        let Some(hash) = object.get("hash").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if hash.len() != 40 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
         let path = root.join("assets/objects").join(&hash[..2]).join(hash);
-        if path.is_file() { return Ok(path); }
+        if path.is_file() {
+            return Ok(path);
+        }
     }
-    Err(format!("missing panorama {face}: not found unpacked at {} or in {}", direct.display(), indexes.display()).into())
+    Err(format!(
+        "missing panorama {face}: not found unpacked at {} or in {}",
+        direct.display(),
+        indexes.display()
+    )
+    .into())
 }
 
 fn projection(width: u32, height: u32, yaw: f32, pitch: f32) -> Mat4 {
