@@ -633,6 +633,9 @@ impl Font {
         };
         // FontManager.prepare: every font definition of the resources.
         let mut ids = font_ids(root);
+        if !ids.iter().any(|id| id == DEFAULT) {
+            ids.push(DEFAULT.to_owned());
+        }
         ids.sort_by_key(|id| id != DEFAULT);
         let sets = ids
             .into_iter()
