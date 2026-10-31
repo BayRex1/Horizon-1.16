@@ -1982,9 +1982,12 @@ mod classic_tests {
         assert_eq!(batch.vertices[0].pos, [cx - 128.0, 30.0]);
         assert_eq!(batch.vertices[2].pos, [cx + 128.0, 74.0]);
         assert_eq!(batch.vertices[2].uv, [1.0, 44.0 / 64.0]);
-        assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
-        assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
-        assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
+        // Horizon renders its edition label as bitmap-font text rather than
+        // the vanilla edition sprite. Keep checking the label's placement
+        // without requiring the unused 128x16 sprite geometry.
+        assert_eq!(batch.vertices[6].pos[1], 69.0);
+        assert!(batch.vertices[6].pos[0] > cx - 128.0);
+        assert!(batch.vertices[6].pos[0] < cx + 128.0);
         for i in 0..3 {
             let quad = batch
                 .vertices
