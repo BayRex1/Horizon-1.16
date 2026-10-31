@@ -105,6 +105,7 @@ pub mod keybinds;
 pub mod keymapping;
 pub mod lan;
 pub mod landing;
+pub mod legacy_1_16_5;
 pub mod level_loading;
 pub mod light;
 pub mod locator_bar;
