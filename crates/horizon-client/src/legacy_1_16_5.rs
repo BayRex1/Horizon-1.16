@@ -62,6 +62,28 @@ pub fn apply_chunk(
     Ok(())
 }
 
+/// Feed a decoded protocol-754 event into the live resident world.
+///
+/// Network code can call this from its game-thread event drain. Chunk events
+/// are converted and queued for the normal dirty-section/light pipeline;
+/// position and disconnect events are returned to the caller for player and
+/// screen-state updates.
+pub fn apply_play_event(
+    world: &mut World,
+    event: horizon_protocol::legacy_1_16_5::PlayEvent,
+    air: BlockStateId,
+    resolve_state: impl FnMut(i32) -> Option<BlockStateId>,
+) -> crate::Result<horizon_protocol::legacy_1_16_5::PlayEvent> {
+    match event {
+        horizon_protocol::legacy_1_16_5::PlayEvent::ChunkReceived { column } => {
+            apply_chunk(world, &column, air, resolve_state)?;
+            Ok(horizon_protocol::legacy_1_16_5::PlayEvent::Ignored)
+        }
+        other => Ok(other),
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,26 +138,5 @@ mod tests {
             block_entities: Vec::new(),
         };
         assert!(apply_chunk(&mut world, &column, BlockStateId(0), |_| None).is_err());
-    }
-}
-
-/// Feed a decoded protocol-754 event into the live resident world.
-///
-/// Network code can call this from its game-thread event drain. Chunk events
-/// are converted and queued for the normal dirty-section/light pipeline;
-/// position and disconnect events are returned to the caller for player and
-/// screen-state updates.
-pub fn apply_play_event(
-    world: &mut World,
-    event: horizon_protocol::legacy_1_16_5::PlayEvent,
-    air: BlockStateId,
-    resolve_state: impl FnMut(i32) -> Option<BlockStateId>,
-) -> crate::Result<horizon_protocol::legacy_1_16_5::PlayEvent> {
-    match event {
-        horizon_protocol::legacy_1_16_5::PlayEvent::ChunkReceived { column } => {
-            apply_chunk(world, &column, air, resolve_state)?;
-            Ok(horizon_protocol::legacy_1_16_5::PlayEvent::Ignored)
-        }
-        other => Ok(other),
     }
 }
