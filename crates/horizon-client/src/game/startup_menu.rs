@@ -80,6 +80,17 @@ impl StartupMenu {
         }
     }
 
+    /// Keep the already-loaded title UI usable when the full game resources
+    /// are missing. The normal pack error panel explains why world entry is
+    /// unavailable without closing the window.
+    pub(super) fn show_resource_error(&mut self, message: String) {
+        self.pending = None;
+        self.perf.cancel_world_opening();
+        self.options.open_at(false, Page::Packs);
+        self.options.resource_error = Some(message);
+        self.options_open = true;
+    }
+
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
         game.title = self.title.take();
         game.pending_entry = self.pending.take();
