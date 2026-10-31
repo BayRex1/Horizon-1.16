@@ -77,7 +77,7 @@ fn main() -> ExitCode {
     let assets = args.next_if(|a| {
         matches!(
             a.to_str(),
-            Some("sounds" | "panorama" | "fonts" | "packs" | "languages" | "compile-exporters" | "verify-1.16.5")
+            Some(\n                "sounds"\n                    | "panorama"\n                    | "fonts"\n                    | "packs"\n                    | "languages"\n                    | "compile-exporters"\n                    | "verify-1.16.5"\n            )
         )
     });
     while let Some(arg) = args.next() {
@@ -108,7 +108,7 @@ fn main() -> ExitCode {
             "--server-jar" => value("--server-jar").map(|v| options.server_jar = Some(v)),
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
-            "--resources-dir" if assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5") => value("--resources-dir").map(|v| resources_dir = Some(v)),
+            "--resources-dir"\n                if assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5") =>\n            {\n                value("--resources-dir").map(|v| resources_dir = Some(v))\n            }
             "-h" | "--help" => {
                 print!("{HELP}");
                 return ExitCode::SUCCESS;
@@ -137,7 +137,7 @@ fn main() -> ExitCode {
         let _ = out.flush();
     };
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
-        Some("verify-1.16.5") => resources_dir.as_deref().ok_or_else(|| "--resources-dir PATH is required".to_string()).and_then(|dir| horizon_prepare::client_only::verify_1_16_5(dir, &options.root, &log).map(|_| ())),
+        Some("verify-1.16.5") => resources_dir\n            .as_deref()\n            .ok_or_else(|| "--resources-dir PATH is required".to_string())\n            .and_then(|dir| {\n                horizon_prepare::client_only::verify_1_16_5(dir, &options.root, &log).map(|_| ())\n            }),
         Some("compile-exporters") => horizon_prepare::compile_exporters(&options, &log)
             .inspect(|dir| log(&dir.display().to_string())),
         Some("sounds") => {
