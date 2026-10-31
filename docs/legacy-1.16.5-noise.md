@@ -71,3 +71,18 @@ non-zero amplitude positions.
 - The algorithm and constants have independent source support, but a
   version-pinned vanilla oracle run is still required to certify numerical
   parity for selected seeds and coordinates.
+
+## Seeded Nether biome-source wiring
+
+`LegacyNetherBiomeSource1_16_5::from_seed(world_seed)` now owns the seeded
+Nether noise path instead of requiring callers to assemble four synthetic
+samplers. Its `sample_quart(x, z)` and `biome_at_quart(x, z)` methods use
+quart-grid coordinates, sample temperature and humidity at y=0, set altitude
+and weirdness to zero, and resolve the built-in five-point Nether preset.
+The older `new(temperature, humidity, altitude, weirdness)` constructor is
+retained for explicit/custom sampler injection and tests.
+
+This is a version-isolated biome-source API. It is not yet selected by the
+modern 26.3 runtime resolver or a complete 1.16.5 chunk generator; those
+runtime/dimension wiring steps remain separate work. No vanilla bit-for-bit
+parity claim is made until the executable 1.16.5 oracle is run.
