@@ -84,10 +84,7 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("Asset {name} has an invalid SHA-1"));
         }
-        let path = resources
-            .join("assets/objects")
-            .join(&hash[..2])
-            .join(hash);
+        let path = resources.join("assets/objects").join(&hash[..2]).join(hash);
         require_sha1(&path, hash, &format!("Asset object {name}"))?;
         checked += 1;
     }
