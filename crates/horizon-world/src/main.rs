@@ -52,6 +52,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     match command {
         "--help" | "-h" if args.len() == 1 => println!(
             "Horizon world data tools — Java Edition {}\n\
+             create-legacy-world <new-world-directory> <world-name> <seed>\n\
+             generate-legacy-chunk <region-directory> <seed> <chunk-x> <chunk-z>\n\
              inspect <region.mca>\n\
              copy-region <source.mca> <new-directory/r.x.z.mca> [gzip|zlib|none|lz4]\n\
              get-block <region.mca> <x> <y> <z>\n\
@@ -80,6 +82,24 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             };
             write_new(&args[2], &codec(&args[4])?.encode(&encoded)?)?;
             println!("Wrote {}", args[2]);
+        }
+        "create-legacy-world" if args.len() == 4 => {
+            let seed: i64 = args[3].parse()?;
+            horizon_world::legacy_1_16_5::create_bootstrap_world(&args[1], &args[2], seed)?;
+            println!(
+                "Created Java 1.16.5 bootstrap world '{}' at {} (seed {})",
+                args[2], args[1], seed
+            );
+        }
+        "generate-legacy-chunk" if args.len() == 5 => {
+            let seed: i64 = args[2].parse()?;
+            let chunk_x: i32 = args[3].parse()?;
+            let chunk_z: i32 = args[4].parse()?;
+            horizon_world::legacy_1_16_5::save_bootstrap_chunk(&args[1], seed, chunk_x, chunk_z)?;
+            println!(
+                "Generated Java 1.16.5 bootstrap chunk {},{} (seed {}) in {}",
+                chunk_x, chunk_z, seed, args[1]
+            );
         }
         "inspect" if args.len() == 2 => {
             let mut region = RegionFile::open(&args[1])?;

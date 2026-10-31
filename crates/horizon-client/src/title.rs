@@ -681,7 +681,7 @@ impl Title {
             Mode::Main => {
                 let cx = (w / 2.0).floor();
                 let y = (h / 4.0).floor() + 48.0;
-                let mut buttons = vec![
+                vec![
                     b(
                         cx - 100.0,
                         y,
@@ -708,7 +708,7 @@ impl Title {
                     ),
                     b(
                         cx - 100.0,
-                        y + 96.0,
+                        y + 72.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
@@ -716,40 +716,13 @@ impl Title {
                     ),
                     b(
                         cx + 2.0,
-                        y + 96.0,
+                        y + 72.0,
                         98.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
                     ),
-                ];
-                // CommonButtons' icon buttons; Horizon's Join a Friend (an
-                // invite code) sits behind vanilla's Friends button.
-                for (i, (key, plain, id, icon)) in [
-                    ("gui.friends.open", "Friends", 5, "friends/friends"),
-                    ("options.language", "Language...", 6, "icon/language"),
-                    (
-                        "options.accessibility",
-                        "Accessibility Settings...",
-                        7,
-                        "icon/accessibility",
-                    ),
                 ]
-                .into_iter()
-                .enumerate()
-                {
-                    let mut button = b(
-                        cx - 34.0 + i as f32 * 24.0,
-                        y + 72.0,
-                        20.0,
-                        &lang::get_or(key, plain),
-                        true,
-                        id,
-                    );
-                    button.icon = Some((icon, 15.0));
-                    buttons.push(button);
-                }
-                buttons
             }
             Mode::Select { selected, .. } => vec![
                 b(
@@ -930,12 +903,18 @@ impl Title {
                     256.0,
                     64.0,
                 );
-                batch.sprite_region(
+                // Horizon's edition line uses Minecraft's own bitmap font,
+                // so the subtitle reads "RUST VERSION" rather than borrowing
+                // the vanilla "JAVA EDITION" artwork.
+                let edition = "RUST VERSION";
+                let edition_width = HudBatch::text_width(atlas, edition);
+                batch.text(
                     atlas,
-                    crate::title_edition::SPRITE,
-                    [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
-                    128.0,
-                    16.0,
+                    edition,
+                    ((w - edition_width) / 2.0).floor(),
+                    69.0,
+                    rgba(255, 255, 255, 255),
+                    true,
                 );
                 if !hide_splash && let Some(splash) = self.splash.as_deref() {
                     let tw = HudBatch::text_width(atlas, splash);
@@ -1854,7 +1833,7 @@ mod classic_tests {
     use super::*;
 
     #[test]
-    fn classic_main_menu_icons_route_language_and_accessibility() {
+    fn classic_main_menu_uses_the_1_16_5_button_layout() {
         let mut title = Title::new(
             PathBuf::new(),
             Path::new("/nonexistent/horizon-test-resources"),
@@ -1863,44 +1842,30 @@ mod classic_tests {
             let buttons = title.buttons(w, h);
             let cx = (w / 2.0).floor();
             let y = (h / 4.0).floor() + 48.0;
-            for (id, x, enabled, icon) in [
-                (5, cx - 34.0, true, "friends/friends"),
-                (6, cx - 10.0, true, "icon/language"),
-                (7, cx + 14.0, true, "icon/accessibility"),
-            ] {
-                let b = buttons.iter().find(|b| b.id == id).unwrap();
-                assert_eq!(
-                    (b.x, b.y, b.w, b.enabled, b.icon),
-                    (x, y + 72.0, 20.0, enabled, Some((icon, 15.0)))
-                );
-                assert_eq!(
-                    title.click(x + 10.0, y + 82.0, (w, h)),
-                    match id {
-                        6 => (Action::Language, true),
-                        7 => (Action::Accessibility, true),
-                        _ => (Action::None, true),
-                    }
-                );
-                if id == 5 {
-                    assert!(matches!(
-                        title.mode,
-                        Mode::Multiplayer(crate::multiplayer::Screen::Friend { .. })
-                    ));
-                    title.mode = Mode::Main;
-                }
+
+            for (id, expected_y) in [(1, y), (4, y + 24.0), (0, y + 48.0)] {
+                let button = buttons.iter().find(|button| button.id == id).unwrap();
+                assert_eq!(button.y, expected_y);
+                assert_eq!(button.w, 200.0);
+                assert_eq!(button.icon, None);
             }
-            for id in [2, 3] {
-                assert_eq!(buttons.iter().find(|b| b.id == id).unwrap().y, y + 96.0);
-            }
-            // The four-pixel gaps around icons must not activate a button.
+
+            let options = buttons.iter().find(|button| button.id == 3).unwrap();
+            let quit = buttons.iter().find(|button| button.id == 2).unwrap();
             assert_eq!(
-                title.click(cx + 12.0, y + 82.0, (w, h)),
-                (Action::None, false)
+                (options.x, options.y, options.w),
+                (cx - 100.0, y + 72.0, 98.0)
+            );
+            assert_eq!((quit.x, quit.y, quit.w), (cx + 2.0, y + 72.0, 98.0));
+            assert_eq!(
+                title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
+                Action::Options
             );
             assert_eq!(
-                title.click(cx + 24.0, y + 92.0, (w, h)),
-                (Action::None, false)
+                title.click(quit.x + 10.0, quit.y + 10.0, (w, h)).0,
+                Action::Quit
             );
+            assert!(!buttons.iter().any(|button| matches!(button.id, 5..=7)));
         }
     }
 
@@ -1976,22 +1941,20 @@ mod classic_tests {
         assert_eq!(batch.vertices[0].pos, [cx - 128.0, 30.0]);
         assert_eq!(batch.vertices[2].pos, [cx + 128.0, 74.0]);
         assert_eq!(batch.vertices[2].uv, [1.0, 44.0 / 64.0]);
-        assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
-        assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
-        assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
+        // Horizon renders its edition label as bitmap-font text rather than
+        // the vanilla edition sprite. Keep checking the label's placement
+        // without requiring the unused 128x16 sprite geometry.
+        assert_eq!(batch.vertices[6].pos[1], 69.0);
+        assert!(batch.vertices[6].pos[0] > cx - 128.0);
+        assert!(batch.vertices[6].pos[0] < cx + 128.0);
+        // The 1.16.5 title screen has no Friends, Language or
+        // Accessibility icon buttons; these sprites must not be drawn.
         for i in 0..3 {
-            let quad = batch
-                .vertices
-                .as_chunks::<6>()
-                .0
-                .iter()
-                .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
-                .unwrap();
-            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
-            let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
-            assert_eq!(quad[0].pos, [x, y]);
-            assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);
-            assert!(quad.iter().all(|v| v.color == u32::MAX));
+            let u = 0.25 + i as f32 * 0.125;
+            assert!(
+                !batch.vertices.iter().any(|vertex| vertex.uv == [u, 0.0]),
+                "unexpected newer-version menu icon at u={u}"
+            );
         }
         assert!(
             batch.vertices[12..]

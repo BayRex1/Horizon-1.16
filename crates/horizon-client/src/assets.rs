@@ -100,16 +100,37 @@ pub struct RenderAssets {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+/// Rejects a resource bundle from another Minecraft data version before its registry is read.
+fn validate_resource_data_version(found: Option<i64>) -> io::Result<()> {
+    if found == Some(i64::from(DATA_VERSION)) {
+        return Ok(());
+    }
+    let found = found
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| "missing or invalid".to_owned());
+    Err(invalid(&format!(
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). Prepare resources from the matching Minecraft version; a 26.3 bundle cannot be used for 1.16.5.",
+        horizon_core::version::VERSION_ID
+    )))
+}
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
+        log::info!("Horizon: Assets::load: reading resource manifest");
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
             root.join("horizon-resources.json"),
         )?))?;
-        if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
-            return Err(invalid("resources do not match Horizon's pinned data version").into());
-        }
+        log::info!("Horizon: Assets::load: validating data version");
+
+        validate_resource_data_version(manifest["data_version"].as_i64())?;
+        log::info!("Horizon: Assets::load: parsing block registry facts");
         let (registry, flags) =
             BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
+        log::info!(
+            "Horizon: Assets::load: parsed block registry ({} states)",
+            registry.len()
+        );
+        log::info!("Horizon: Assets::load: reading block tags");
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -124,6 +145,7 @@ impl Assets {
                     .ok_or_else(|| invalid("invalid block tag text"))?,
             )?;
         }
+        log::info!("Horizon: Assets::load: resolving block tags");
         let built =
             definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
         if !built.missing.is_empty() {
@@ -175,10 +197,12 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
         }
+        log::info!("Horizon: Assets::load: preparing block-state storage");
         // Chunks hold every state of this registry: content mods can take it
         // past vanilla's 16-bit global palette.
         crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+        log::info!("Horizon: Assets::load: complete");
         Ok(Self {
             registry,
             properties,
@@ -195,13 +219,17 @@ impl Assets {
 }
 impl RenderAssets {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        log::info!("Horizon: RenderAssets::load: starting sprite and model preparation");
         let registry = assets.registry;
         let mut sprites = crate::sprites::Sprites::default();
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
+        log::info!("Horizon: RenderAssets::load: parsing model library");
         let parsed = crate::model_library::ParsedModels::load(root);
+        log::info!("Horizon: RenderAssets::load: baking block models");
         let models = crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?;
+        log::info!("Horizon: RenderAssets::load: block models baked");
         let model_library = parsed.into_item_library();
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
@@ -217,7 +245,12 @@ impl RenderAssets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
+        log::info!(
+            "Horizon: RenderAssets::load: finalizing {} sprite layers",
+            sprites.count()
+        );
         sprites.finish();
+        log::info!("Horizon: RenderAssets::load: complete");
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
@@ -232,5 +265,29 @@ impl RenderAssets {
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
         })
+    }
+}
+
+#[cfg(test)]
+mod resource_version_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_the_compiled_data_version() {
+        assert!(validate_resource_data_version(Some(i64::from(DATA_VERSION))).is_ok());
+        assert!(validate_resource_data_version(Some(2586)).is_err());
+        assert!(validate_resource_data_version(None).is_err());
+    }
+
+    #[test]
+    fn mismatch_error_identifies_both_versions() {
+        let error = validate_resource_data_version(Some(2586)).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("2586"), "{message}");
+        assert!(message.contains(&DATA_VERSION.to_string()), "{message}");
+        assert!(
+            message.contains(horizon_core::version::VERSION_ID),
+            "{message}"
+        );
     }
 }

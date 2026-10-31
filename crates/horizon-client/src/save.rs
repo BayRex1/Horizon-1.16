@@ -180,6 +180,22 @@ impl SessionLock {
         Ok(Self(file))
     }
 }
+/// Recognize an untouched Java 1.16.5 world before the modern layout migration
+/// moves its root-level region files out of the importer's source directory.
+pub fn is_legacy_1_16_5_world(world: &Path) -> bool {
+    if !world.join("region").is_dir() {
+        return false;
+    }
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    matches!(
+        root.get("Data")
+            .and_then(|data| number(data.get("DataVersion"))),
+        Some(2586)
+    )
+}
+
 /// Bring a world last saved by an older game version to the current format, as
 /// 26.3 does when it opens one: the file fixes and level.dat first
 /// (`FileFixerUpper`), then the DataFixers upgrades of every chunk, entity chunk,
@@ -235,6 +251,132 @@ pub fn migrate_legacy(world: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Import Java 1.16.5 root-level region files into Horizon's current
+/// overworld save layout. The source files are read-only and remain untouched.
+/// Existing destination region files always win; this never overwrites them.
+pub fn import_legacy_1_16_5(
+    world_root: &Path,
+    save: &SaveDir,
+    assets: &crate::assets::Assets,
+    biomes: &Biomes,
+) -> Result<usize> {
+    let source_regions = world_root.join("region");
+    if !source_regions.is_dir() || save.root.join("region").exists() {
+        return Ok(0);
+    }
+
+    let mut region_paths = fs::read_dir(&source_regions)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "mca")
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("r.") && n.ends_with(".mca"))
+        })
+        .collect::<Vec<_>>();
+    region_paths.sort();
+
+    // Resolve the old numeric biome registry once, rather than reparsing the
+    // version-pinned JSON for every chunk.
+    let legacy_biome_names: HashMap<u32, String> = horizon_world::legacy_1_16_5::biomes()?
+        .into_iter()
+        .map(|biome| (biome.id, biome.name))
+        .collect();
+
+    let mut chunks = Vec::new();
+    for path in region_paths {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(coords) = name.strip_prefix("r.").and_then(|n| n.strip_suffix(".mca")) else {
+            continue;
+        };
+        let Some((rx, rz)) = coords.split_once('.') else {
+            continue;
+        };
+        let (Ok(rx), Ok(rz)) = (rx.parse::<i32>(), rz.parse::<i32>()) else {
+            continue;
+        };
+        let mut region = RegionFile::open(&path)?;
+        for dz in 0..32 {
+            for dx in 0..32 {
+                let pos = ChunkPos::new(rx * 32 + dx, rz * 32 + dz);
+                let Some(record) = region.read(pos)? else {
+                    continue;
+                };
+                let root = record.nbt(Limits::default())?;
+                if !matches!(root.tag.get("DataVersion"), Some(Tag::Int(2586))) {
+                    continue;
+                }
+                let adapted = horizon_world::legacy_1_16_5::to_client_runtime_chunk(&root)?;
+                if let Some(mut chunk) = decode_with(&adapted, assets.registry, biomes, None) {
+                    // Java 1.16.5 stores a 16x16 horizontal biome grid for the
+                    // entire column. Sample its centre in each 4x4 cell and
+                    // expand it vertically into Horizon's 3D quart-biome grid.
+                    if let Some(Tag::Compound(level)) = root.tag.get("Level")
+                        && let Some(Tag::IntArray(old_biomes)) =
+                            level.get(&JavaString::from("Biomes"))
+                        && old_biomes.len() == 256
+                    {
+                        for qz in 0..4 {
+                            for qx in 0..4 {
+                                let sample_x = qx * 4 + 2;
+                                let sample_z = qz * 4 + 2;
+                                let old_id = old_biomes[sample_z * 16 + sample_x] as u32;
+                                let name = legacy_biome_names
+                                    .get(&old_id)
+                                    .map(String::as_str)
+                                    .unwrap_or("plains");
+                                let current_name = match name {
+                                    "mountains" => "windswept_hills",
+                                    "gravelly_mountains" => "windswept_gravelly_hills",
+                                    "modified_gravelly_mountains" => "modified_gravelly_hills",
+                                    "giant_tree_taiga" => "old_growth_pine_taiga",
+                                    "giant_spruce_taiga" => "old_growth_spruce_taiga",
+                                    "tall_birch_forest" | "tall_birch_hills" => {
+                                        "old_growth_birch_forest"
+                                    }
+                                    "shattered_savanna" | "shattered_savanna_plateau" => {
+                                        "windswept_savanna"
+                                    }
+                                    "snowy_tundra" => "snowy_plains",
+                                    "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
+                                    "stone_shore" => "stony_shore",
+                                    "snowy_mountains" => "snowy_slopes",
+                                    "wooded_badlands_plateau"
+                                    | "modified_wooded_badlands_plateau" => "wooded_badlands",
+                                    "modified_badlands_plateau" => "badlands",
+                                    other => other,
+                                };
+                                let biome_id = biomes.id(&format!("minecraft:{current_name}"));
+                                for qy in 16..80 {
+                                    chunk.set_biome_cell(qx as i32, qy, qz as i32, biome_id);
+                                }
+                            }
+                        }
+                    }
+                    chunks.push(Arc::new(chunk));
+                }
+            }
+        }
+    }
+
+    if chunks.is_empty() {
+        return Ok(0);
+    }
+    save.tables
+        .get_or_init(|| Arc::new(SaveTables::new(assets)));
+    save.save(&chunks, assets.registry, biomes)?;
+    log::info!(
+        "Horizon: imported {} Java 1.16.5 chunks from {}",
+        chunks.len(),
+        source_regions.display()
+    );
+    Ok(chunks.len())
 }
 
 /// Registry lookups shared by chunk encoding and decoding.

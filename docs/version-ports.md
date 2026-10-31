@@ -433,3 +433,49 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | Candidate harness run (`tools/port_harness.py`, `harnesses`): horizon-prepare with sounds, every harness, pass / oracle / fail, newly failing against a baseline, in the report | done |
 | `publish` (`tools/port_publish.py`): dry run by default, issues, tracking issue, Kira card | done (never run with `--yes`) |
 | Daily launchd agent (`tools/ci/version-port-daily.sh`, `tools/ci/dev.horizon.version-port.plist`) | written, not installed: needs Ludovic's approval |
+
+
+## Horizon target: Minecraft Java 1.16.5 (client-first port)
+
+The active port branch is `port/minecraft-1.16.5`. Its target is the official Java Edition 1.16.5 client, not 26.3.
+The user's launcher copy has been checked against Mojang's version metadata: client SHA-1
+`37fd3c903861eeff3bc24b71eed48f828b5269c8`, asset-index id `1.16`, asset-index SHA-1
+`f3c4aa96e12951cd2781b3e1c0e8ab82bf719cf2`. Expected game facts are protocol 754, DataVersion 2586,
+resource-pack format 6, data-pack format 6, and Java 8.
+
+### Scope order
+
+1. **Client resource import first.** Read the user's installed 1.16.5 version JSON, client jar, asset index and
+   content-addressed asset objects. Verify the client and index hashes, then verify each imported asset by the
+   SHA-1 and size in the index. Keep the imported data under `.local/`; never commit game assets or jars.
+2. **Client-only preparation.** Do not require or download a server jar for the initial client milestone. Separate
+   client resources (textures, models, blockstates, language files, fonts, sounds, panorama and client registries)
+   from server-generated reports and server-side parity exporters. Missing server-derived data must be explicit,
+   not silently represented as complete.
+3. **Version facts and protocol.** Generate version constants from the verified 1.16.5 client jar, then port the
+   protocol-754 packet tables and handlers. The 1.16.5 version JSON contains client/server mappings, so the current
+   unobfuscated-only import path cannot be reused unchanged: mapping-aware class analysis is a prerequisite for
+   Java-oracle exporters, not a reason to add a Java runtime dependency to the shipped Horizon client.
+4. **World and gameplay compatibility.** Validate chunk palettes, registries, biome/world-generation data,
+   entity metadata, block/item IDs and 1.16.5 save DataVersion 2586 against vanilla fixtures. Existing modules
+   named `legacy_1_16_5` are starting points, not proof of complete compatibility.
+5. **Server support later.** Server jar import, dedicated-server launch, server-side packet handling and server
+   parity are explicitly out of scope for the first client milestone. Keep interfaces extensible so this can be
+   added later without blocking the client.
+
+### Current verified inputs and blockers
+
+| Input / fact | Verified value |
+| --- | --- |
+| Client jar SHA-1 | `37fd3c903861eeff3bc24b71eed48f828b5269c8` |
+| Asset index | `1.16` |
+| Asset-index SHA-1 | `f3c4aa96e12951cd2781b3e1c0e8ab82bf719cf2` |
+| Protocol / DataVersion | `754 / 2586` |
+| Resource / data pack formats | `6 / 6` |
+| Java major | `8` |
+| Known pipeline blocker | `horizon-prepare` currently requires a server jar and rejects version JSONs with client/server mappings |
+| Existing protocol table | Generated for protocol `777` (26.3), not usable for 754 |
+
+Do not change the global version pin to 1.16.5 until the client-only importer, generated version facts, and CI
+fixtures agree. A version-constant-only change would make the build claim support that the protocol, registries,
+resource pipeline and world systems do not yet provide.

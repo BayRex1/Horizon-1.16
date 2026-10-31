@@ -9,7 +9,7 @@ use winit::{event::KeyEvent, keyboard::ModifiersState};
 
 #[derive(Default)]
 pub(super) struct StartupMenu {
-    title: Option<Title>,
+    pub(super) title: Option<Title>,
     options: OptionsUi,
     options_open: bool,
     /// The credits from Credits & Attribution, and their last frame.
@@ -24,6 +24,8 @@ pub(super) struct StartupMenu {
     selection: AppendSelection,
     pub pending: Option<PendingWorldEntry>,
     pub reload_packs: bool,
+    /// Full gameplay resources may fail after the menu UI has loaded.
+    resource_error: Option<String>,
     pub perf: horizon_client::telemetry::Session,
 }
 
@@ -78,6 +80,15 @@ impl StartupMenu {
             title.last_server = settings.file.string("lastServer");
             self.title = Some(title);
         }
+    }
+
+    /// Keep the already-loaded title UI usable when the full game resources
+    /// are missing. The normal pack error panel explains why world entry is
+    /// unavailable without closing the window.
+    pub(super) fn show_resource_error(&mut self, message: String) {
+        self.pending = None;
+        self.perf.cancel_world_opening();
+        self.resource_error = Some(message);
     }
 
     pub(super) fn handoff(&mut self, game: &mut Game<'_>) {
@@ -220,37 +231,64 @@ pub(super) fn spawn_loader(
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
         .spawn(move || {
-            let mut pack_error = None;
-            let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
-                .unwrap_or_else(|error| {
-                    pack_error = Some(error.to_string());
-                    vanilla_root.clone()
-                });
-            let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
-            let result = load_resources(
-                root,
-                &vanilla_root,
-                &settings,
-                started,
-                true,
-                &progress,
-                &mut |gui, root| {
-                    let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
-                },
-            )
-            .map(|mut loaded| {
-                loaded.pack_error = loaded.pack_error.or(pack_error);
-                loaded
-            })
-            .map_err(|error| error.to_string());
-            let _ = sender.send(LoaderMsg::Done(result));
+            log::info!("Horizon: resource-loader thread started");
+            // A panic in the worker previously disconnected the channel after
+            // the UI bundle had been published, hiding the actual failure
+            // behind "resource loader stopped before finishing: worker handle was already unavailable".
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut pack_error = None;
+                let root = packs::startup_root(&vanilla_root, &settings.resource_packs, &[])
+                    .unwrap_or_else(|error| {
+                        pack_error = Some(error.to_string());
+                        vanilla_root.clone()
+                    });
+                let root = mods::content_root(&root, &settings.mods.enabled, &dev_mods);
+                log::info!("Horizon: resource-loader root resolved: {}", root.display());
+                log::info!("Horizon: resource-loader calling load_resources");
+                load_resources(
+                    root,
+                    &vanilla_root,
+                    &settings,
+                    started,
+                    true,
+                    &progress,
+                    &mut |gui, root| {
+                        let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
+                    },
+                )
+                .map(|mut loaded| {
+                    log::info!("Horizon: resource-loader load_resources returned successfully");
+                    loaded.pack_error = loaded.pack_error.or(pack_error);
+                    loaded
+                })
+                .map_err(|error| error.to_string())
+            }))
+            .unwrap_or_else(|panic| {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic payload");
+                Err(format!("resource loader panicked: {message}"))
+            });
+            match &result {
+                Ok(_) => log::info!("Horizon: resource-loader finished with success"),
+                Err(error) => log::error!("Horizon: resource-loader finished with error: {error}"),
+            }
+            if sender.send(LoaderMsg::Done(result)).is_err() {
+                log::error!(
+                    "Horizon: resource-loader could not publish Done: receiver disconnected"
+                );
+            } else {
+                log::info!("Horizon: resource-loader published Done");
+            }
         })?;
     Ok((receiver, handle))
 }
 
 impl Loading {
     pub(super) fn poll_menu_resources(&mut self) -> Result<()> {
-        if self.loaded.is_none() {
+        if self.loaded.is_none() && !self.resource_failed {
             loop {
                 match self.receiver.try_recv() {
                     Ok(LoaderMsg::Ui(gui, root)) => self.set_ui(gui, root),
@@ -260,10 +298,23 @@ impl Loading {
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        if let Some(handle) = self.handle.take() {
-                            let _ = handle.join();
-                        }
-                        return Err("resource loader stopped before finishing".into());
+                        let detail = match self.handle.take() {
+                            Some(handle) => match handle.join() {
+                                Ok(()) => "worker exited without sending its completion message"
+                                    .to_owned(),
+                                Err(panic) => panic
+                                    .downcast_ref::<&str>()
+                                    .copied()
+                                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                                    .unwrap_or("worker panicked with a non-string payload")
+                                    .to_owned(),
+                            },
+                            None => "worker handle was already unavailable".to_owned(),
+                        };
+                        log::error!("Horizon: resource loader channel disconnected: {detail}");
+                        return Err(
+                            format!("resource loader stopped before finishing: {detail}").into(),
+                        );
                     }
                 }
             }
@@ -417,6 +468,17 @@ impl Loading {
     }
 
     fn menu_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+        if let Some(error) = self.menu.resource_error.clone()
+            && matches!(
+                &action,
+                Action::Play { .. } | Action::Create { .. } | Action::Connect { .. }
+            )
+        {
+            if let Some(title) = &mut self.menu.title {
+                title.failed(format!("Game resources are unavailable: {error}"));
+            }
+            return;
+        }
         match action {
             Action::Quit => event_loop.exit(),
             Action::Options => self.open_menu_options(Page::Main),
@@ -709,10 +771,34 @@ mod tests {
             receiver,
             loaded: None,
             handle: None,
+            resource_failed: false,
             shown: false,
             menu: StartupMenu::default(),
             error: None,
         }
+    }
+
+    #[test]
+    fn resource_failure_keeps_menu_open_and_disables_world_entry() {
+        let mut menu = StartupMenu {
+            pending: Some(PendingWorldEntry::Local {
+                folder: "New World".into(),
+                name: None,
+                seed: Some(0),
+                creative: false,
+                create: None,
+            }),
+            ..Default::default()
+        };
+
+        menu.show_resource_error("missing resource manifest".into());
+
+        assert!(menu.pending.is_none());
+        assert!(!menu.options_open);
+        assert_eq!(
+            menu.resource_error.as_deref(),
+            Some("missing resource manifest")
+        );
     }
 
     #[test]
@@ -792,7 +878,7 @@ mod tests {
         let mut loading = loading(receiver);
         assert_eq!(
             loading.poll_menu_resources().unwrap_err().to_string(),
-            "resource loader stopped before finishing"
+            "resource loader stopped before finishing: worker handle was already unavailable"
         );
     }
 }

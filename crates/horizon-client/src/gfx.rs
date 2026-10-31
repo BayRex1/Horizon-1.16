@@ -895,6 +895,10 @@ async fn open_device(
         std::env::var_os("WGPU_BACKEND").is_some(),
     );
     let mut failures = Vec::new();
+    // Keep a working software adapter as a last resort, but don't settle for
+    // it before checking later APIs: an older Intel driver may expose a
+    // hardware OpenGL device even when DX12 only offers Microsoft's WARP CPU.
+    let mut software_fallback: Option<Opened> = None;
     for (attempt, backends) in order.iter().copied().enumerate() {
         let name = backends_name(backends);
         if attempt > 0 {
@@ -926,7 +930,6 @@ async fn open_device(
                 continue;
             }
         };
-        describe_adapter(&adapter);
         let info = adapter.get_info();
         let limits = adapter.limits();
         if let Err(e) = check_layers(&limits, layers) {
@@ -976,16 +979,32 @@ async fn open_device(
         };
         match opened {
             Ok((device, queue)) => {
-                return Ok(Opened {
+                let candidate = Opened {
                     instance,
                     surface,
                     adapter,
                     device,
                     queue,
-                });
+                };
+                if info.device_type == wgpu::DeviceType::Cpu && attempt + 1 < order.len() {
+                    log::warn!(
+                        "Horizon renderer: {name} only offered a software CPU adapter; checking the next graphics API"
+                    );
+                    software_fallback.get_or_insert(candidate);
+                    continue;
+                }
+                describe_adapter(&candidate.adapter);
+                return Ok(candidate);
             }
             Err(e) => failures.push(format!("{name} device: {e}")),
         }
+    }
+    if let Some(fallback) = software_fallback {
+        log::warn!(
+            "Horizon renderer: no hardware adapter was available; using the software fallback"
+        );
+        describe_adapter(&fallback.adapter);
+        return Ok(fallback);
     }
     Err(format!("{NO_GPU_DRIVER} ({})", failures.join("; ")).into())
 }

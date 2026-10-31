@@ -60,8 +60,13 @@ impl WorldRequest {
         } = self;
         let name = name.as_deref();
         let create = create.as_ref();
-        horizon_client::save::upgrade_older_world(&save_root)?;
-        horizon_client::save::migrate_legacy(&save_root)?;
+        // Java 1.16.5 worlds have DataVersion 2586, below the modern
+        // upgrader's supported range. Preserve their root-level region files
+        // until make_streaming imports them into Horizon's current save layout.
+        if !horizon_client::save::is_legacy_1_16_5_world(&save_root) {
+            horizon_client::save::upgrade_older_world(&save_root)?;
+            horizon_client::save::migrate_legacy(&save_root)?;
+        }
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         let rand_sequences =
@@ -292,6 +297,14 @@ pub(super) fn make_streaming(
         world_root,
         dim.id(),
     )));
+    if dim == Dim::Overworld {
+        horizon_client::save::import_legacy_1_16_5(
+            world_root,
+            &save,
+            pack.assets.as_ref(),
+            res.biomes().as_ref(),
+        )?;
+    }
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))

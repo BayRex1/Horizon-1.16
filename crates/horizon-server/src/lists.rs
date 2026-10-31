@@ -168,6 +168,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
+        // Keep this test independent of Mojang profile-service availability.
+        config::update(&dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
         let s = |v: &[&str]| v.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
         run(&dir, "op", &s(&["Alex"])).unwrap();
         run(&dir, "whitelist", &s(&["add", "Steve"])).unwrap();

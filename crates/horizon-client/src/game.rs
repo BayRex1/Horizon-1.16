@@ -330,16 +330,31 @@ impl Options {
         })
     }
     fn read() -> Result<Option<Self>> {
-        let sibling = std::env::current_exe()?
+        let executable_dir = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
-            .join("resources");
+            .to_path_buf();
+        let packaged = executable_dir.join("resources");
+        let versioned = executable_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        let working_dir = std::env::current_dir().unwrap_or_default();
+        let working_versioned = working_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        // A launcher-installed client lives inside its version directory, so
+        // its prepared resources are beside the executable, not necessarily
+        // under the process working directory (which on Windows is the shared
+        // game home). Prefer an actually prepared bundle and keep every
+        // fallback absolute to avoid silently resolving against System32.
+        let resources = [packaged, versioned.clone(), working_versioned]
+            .into_iter()
+            .find(|path| path.join("horizon-resources.json").is_file())
+            .unwrap_or(versioned);
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
-                sibling
-            } else {
-                std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
-            },
+            resources,
             distance: 12,
             distance_override: None,
             seed: 0,
@@ -13012,17 +13027,32 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        let title_idle = self.title.is_some()
+            && self.player.is_none()
+            && self.pending_entry.is_none()
+            && self.pending_save.is_none();
         if let Some(w) = &self.window {
             if self.options.offscreen {
                 // Offscreen frames don't wait for the window to be drawn: an
                 // occluded window (a locked macOS session) gets no redraws.
                 let id = w.id();
                 self.window_event(event_loop, id, WindowEvent::RedrawRequested);
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else if title_idle {
+                // No world simulation is active on the title screen. Do not
+                // spin the entire event loop just to animate a menu; input and
+                // window events still wake it immediately.
+                w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(66),
+                ));
             } else {
                 w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
@@ -13731,6 +13761,16 @@ fn synchronous_startup(options: &Options) -> bool {
         || std::env::var_os("HORIZON_NET_REPORT").is_some()
 }
 
+/// Preserve the panic payload when a resource sub-worker fails.
+fn worker_panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+        .to_owned()
+}
+
 /// The synchronous launch loads both phases; an ordinary launch returns the
 /// core bundle while the rest worker keeps loading.
 fn load_resources(
@@ -13742,6 +13782,7 @@ fn load_resources(
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
 ) -> Result<Loaded> {
+    log::info!("Horizon: resource loader stage 0: resolving resource root");
     let requested_root = root.clone();
     let threads = settings.horizon.worker_threads();
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
@@ -13775,6 +13816,7 @@ fn load_resources(
         }
         ui_ready = true;
     }
+    log::info!("Horizon: resource loader stage 1: loading asset registry and render resources");
     progress.set(0);
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
@@ -13816,6 +13858,7 @@ fn load_resources(
     }
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(1);
+    log::info!("Horizon: resource loader stage 2: reading block behaviour data");
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
@@ -13828,20 +13871,39 @@ fn load_resources(
     };
     let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
     let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
+    log::info!(
+        "Horizon: resource loader stage 3: loading block facts, biomes and environment ({} workers)",
+        threads
+    );
     let (facts, biomes, environment) = if threads > 1 {
         std::thread::scope(|scope| {
             let facts = scope.spawn(load_facts);
             let biomes = scope.spawn(load_biomes);
             let environment = scope.spawn(load_environment);
-            (
-                facts.join().unwrap(),
-                biomes.join().unwrap(),
-                environment.join().unwrap(),
-            )
+            let facts = facts.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "block facts worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            let biomes = biomes.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "biome worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            let environment = environment.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "environment worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            (facts, biomes, environment)
         })
     } else {
         (load_facts(), load_biomes(), load_environment())
     };
+    log::info!("Horizon: resource loader stage 4: validating worker results");
     let (facts, gameplay_projection) =
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
@@ -13850,6 +13912,7 @@ fn load_resources(
     progress.set(2);
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(3);
+    log::info!("Horizon: resource loader stage 5: loading light and pack tables");
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
@@ -13861,6 +13924,7 @@ fn load_resources(
             &settings.language,
         ));
     }
+    log::info!("Horizon: resource loader stage 6: loading collision and motion data");
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load_with_facts(&root, &registry_owner, &facts)?;
@@ -13890,6 +13954,7 @@ fn load_resources(
     }
     // Finish fallible CPU preparation before starting the tail, so an error
     // cannot detach a tail worker that races the next pack-loader generation.
+    log::info!("Horizon: resource loader stage 7: preparing game and renderer CPU resources");
     let prepared_at = Instant::now();
     let game_cpu = menu.then(|| GameCpuResources::load(&root)).transpose()?;
     let renderer_cpu = menu.then(|| prepare_renderer_textures(&pack));
@@ -14398,6 +14463,9 @@ struct Loading {
     receiver: Receiver<LoaderMsg>,
     loaded: Option<std::result::Result<Loaded, String>>,
     handle: Option<JoinHandle<()>>,
+    /// The resource worker failed after the menu bundle was published. Keep
+    /// the window alive in menu-only mode instead of exiting the application.
+    resource_failed: bool,
     shown: bool,
     menu: startup_menu::StartupMenu,
     error: Option<Box<dyn std::error::Error>>,
@@ -14508,12 +14576,25 @@ impl Loading {
         }
         if let Some(w) = &self.window {
             if self.options.as_ref().is_some_and(|o| o.offscreen) {
+                // Offscreen harnesses intentionally run as fast as possible:
+                // their frame count and timeout are part of the test contract.
                 self.draw();
+                event_loop.set_control_flow(ControlFlow::Poll);
             } else {
+                // The title/loading screen has no simulation to advance. Polling
+                // continuously redraws it hundreds of times per second and can
+                // saturate a CPU, especially with a software graphics adapter.
+                // The software adapter on older Windows systems is expensive.
+                // The title screen has no simulation; 15 FPS is enough for its
+                // subtle splash/panorama animation and leaves the CPU idle longer.
                 w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(66),
+                ));
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
     fn draw(&mut self) {
         let Some(size) = self
@@ -14684,9 +14765,27 @@ impl ApplicationHandler for App {
             Step::Done => event_loop.exit(),
             Step::Failed(e) => {
                 if let App::Loading(loading) = self {
-                    loading.error = Some(e);
+                    if loading.gui.is_some() && loading.menu.title.is_some() {
+                        let message = e.to_string();
+                        log::error!(
+                            "Horizon: continuing with the title menu; world resources are unavailable: {message}"
+                        );
+                        // The title screen only needs the menu bundle, which was
+                        // already published. Keep it visible and show the normal
+                        // resource error panel instead of terminating the client.
+                        loading.menu.show_resource_error(message);
+                        loading.resource_failed = true;
+                        loading.loaded = None;
+                        if let Some(handle) = loading.handle.take() {
+                            let _ = handle.join();
+                        }
+                    } else {
+                        loading.error = Some(e);
+                        event_loop.exit();
+                    }
+                } else {
+                    event_loop.exit();
                 }
-                event_loop.exit();
             }
         }
     }
@@ -14725,6 +14824,7 @@ fn run_loading(
         receiver,
         loaded: None,
         handle: Some(loader),
+        resource_failed: false,
         shown: false,
         menu,
         error: None,
@@ -14748,7 +14848,25 @@ fn run_loading(
     Ok(())
 }
 
+/// Make direct launches use the same writable game home as the launcher.
+/// Windows can start a program with System32 as its working directory; relative
+/// saves/options/profile paths must never be resolved there.
+#[cfg(windows)]
+fn prepare_game_home() -> Result<()> {
+    let app_data = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
+    let home = std::path::PathBuf::from(app_data).join("horizon");
+    std::fs::create_dir_all(&home)?;
+    std::env::set_current_dir(home)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn prepare_game_home() -> Result<()> {
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
+    prepare_game_home()?;
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };

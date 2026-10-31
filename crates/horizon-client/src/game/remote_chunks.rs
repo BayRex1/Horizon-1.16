@@ -157,6 +157,38 @@ impl ChunkFormat {
 
 type Decoded = (Box<C>, Result<Chunk, String>);
 
+/// Convert one legacy 1.16.5 section's biome slice into the resident
+/// section's quart-cell order. Protocol 754 stores biomes as
+/// `(quart_x * 4 + quart_z) * 64 + quart_y`; resident sections use
+/// `(quart_y << 4) | (quart_z << 2) | quart_x`.
+fn legacy_biome_cells(
+    chunk: &horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
+    legacy_y: usize,
+    biome_map: &[u32],
+) -> std::result::Result<[u32; 64], String> {
+    let mut cells = [0u32; 64];
+    if !chunk.full_chunk || chunk.biomes.len() != 1024 || legacy_y >= 16 {
+        return Ok(cells);
+    }
+    for quart_y in 0..4 {
+        for quart_z in 0..4 {
+            for quart_x in 0..4 {
+                let source_index = (quart_x * 4 + quart_z) * 64 + legacy_y * 4 + quart_y;
+                let target_index = (quart_y << 4) | (quart_z << 2) | quart_x;
+                let legacy_biome = chunk.biomes[source_index];
+                cells[target_index] = if legacy_biome >= 0 {
+                    *biome_map.get(legacy_biome as usize).ok_or_else(|| {
+                        format!("missing protocol-754 biome mapping for ID {legacy_biome}")
+                    })?
+                } else {
+                    return Err(format!("invalid protocol-754 biome ID {legacy_biome}"));
+                };
+            }
+        }
+    }
+    Ok(cells)
+}
+
 /// One thread that decodes chunk packets in the order they arrived; its
 /// results come back in that order, one per `submit`.
 pub(super) struct ChunkDecoder {
@@ -216,6 +248,98 @@ pub(super) enum Next {
 }
 
 impl Game<'_> {
+    /// Route one decoded protocol-754 Play event into the resident world.
+    ///
+    /// The network loop can hand events here without knowing about renderer
+    /// internals. Position, disconnect and keep-alive events are handled by
+    /// the protocol layer; only chunk payloads enter the world-storage path.
+    #[allow(dead_code)]
+    pub(super) fn remote_legacy_play_event(
+        &mut self,
+        event: horizon_protocol::legacy_1_16_5::PlayEvent,
+        block_state_map: &[u32],
+        biome_map: &[u32],
+    ) -> std::result::Result<(), String> {
+        if let horizon_protocol::legacy_1_16_5::PlayEvent::ChunkReceived { column } = event {
+            self.remote_legacy_chunk(column, block_state_map, biome_map)?;
+        }
+        Ok(())
+    }
+
+    /// Install a decoded protocol-754 chunk into resident world storage.
+    ///
+    /// This is the renderer bridge for the legacy decoder. The 1.16.5 block
+    /// state IDs are version-specific, so callers must only enable this path
+    /// after the 1.16.5 registry has been mapped to the client's render IDs.
+    /// Until that registry mapping exists, accepting arbitrary legacy IDs
+    /// would render unrelated modern blocks.
+    // The protocol-754 packet dispatch is not wired into the live game loop yet.
+    // Keep this bridge available for that integration without failing workspace clippy.
+    #[allow(dead_code)]
+    pub(super) fn remote_legacy_chunk(
+        &mut self,
+        chunk: horizon_protocol::legacy_1_16_5::LegacyChunkColumn,
+        block_state_map: &[u32],
+        biome_map: &[u32],
+    ) -> std::result::Result<(), String> {
+        if !self.remote_chunk_in_range(chunk.x, chunk.z) {
+            return Ok(());
+        }
+
+        // Fail closed instead of silently turning unknown legacy blocks into
+        // air. A partial ID map would otherwise create a plausible but corrupt
+        // looking world and hide registry incompatibilities.
+        for source in chunk.sections.iter().flatten() {
+            for index in 0..4096 {
+                let legacy_id = source.block_state(index).unwrap_or(0);
+                if legacy_id < 0 || block_state_map.get(legacy_id as usize).is_none() {
+                    return Err(format!(
+                        "missing protocol-754 block-state mapping for ID {legacy_id}"
+                    ));
+                }
+            }
+        }
+        if chunk.full_chunk && chunk.biomes.len() == 1024 {
+            for &legacy_biome in &chunk.biomes {
+                if legacy_biome < 0 || biome_map.get(legacy_biome as usize).is_none() {
+                    return Err(format!(
+                        "missing protocol-754 biome mapping for ID {legacy_biome}"
+                    ));
+                }
+            }
+        }
+
+        let mut column = Chunk::empty(chunk.x, chunk.z);
+        // Protocol 754 starts at Y=0; resident storage still starts at Y=-64.
+        const LEGACY_SECTION_OFFSET: usize = ((0 - MIN_Y) / 16) as usize;
+        for (legacy_y, source) in chunk.sections.iter().enumerate() {
+            let Some(source) = source else { continue };
+            let target_y = LEGACY_SECTION_OFFSET + legacy_y;
+            if target_y >= column.sections.len() {
+                continue;
+            }
+            let mut values = [0u32; 4096];
+            for (index, value) in values.iter_mut().enumerate() {
+                let legacy_id = source.block_state(index).unwrap_or(0);
+                *value = block_state_map[legacy_id as usize];
+            }
+            let biome_cells = legacy_biome_cells(&chunk, legacy_y, biome_map)?;
+            let mut section = Section {
+                blocks: PalettedContainer::from_values(block_strategy(), &values),
+                biomes: PalettedContainer::from_values(BIOME_STRATEGY, &biome_cells),
+                light: Light::Uniform(0xF0),
+            };
+            section.compact();
+            column.sections[target_y] = Arc::new(section);
+        }
+
+        self.streaming.insert_remote(&mut self.world, column);
+        self.world
+            .block_entities
+            .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (chunk.x, chunk.z));
+        Ok(())
+    }
+
     /// `handleLevelChunkWithLight`: the column replaces any loaded one, and
     /// its block entities load their update tags. `decoded` is the column the
     /// decoder made with `format`; another format since means decode again.
@@ -318,6 +442,44 @@ mod tests {
             },
             light: none,
         }))
+    }
+
+    #[test]
+    fn legacy_biomes_are_transposed_into_resident_quart_order() {
+        use horizon_protocol::legacy_1_16_5::LegacyChunkColumn;
+        let mut column = LegacyChunkColumn {
+            x: 0,
+            z: 0,
+            full_chunk: true,
+            section_mask: 0xffff,
+            heightmaps: horizon_world::nbt::Tag::Compound(Default::default()),
+            biomes: vec![0; 1024],
+            sections: (0..16).map(|_| None).collect(),
+            block_entities: Vec::new(),
+        };
+        // Unique IDs reveal transposition mistakes and the Y-section offset.
+        for quart_x in 0..4 {
+            for quart_z in 0..4 {
+                for quart_y in 0..64 {
+                    let source = (quart_x * 4 + quart_z) * 64 + quart_y;
+                    column.biomes[source] = quart_y as i32 + 1;
+                }
+            }
+        }
+        let map: Vec<u32> = (0..32).map(|v| v * 3).collect();
+        let cells = legacy_biome_cells(&column, 5, &map).unwrap();
+        for quart_y in 0..4 {
+            for quart_z in 0..4 {
+                for quart_x in 0..4 {
+                    let target = (quart_y << 4) | (quart_z << 2) | quart_x;
+                    assert_eq!(cells[target], map[5 * 4 + quart_y + 1]);
+                }
+            }
+        }
+        assert_eq!(legacy_biome_cells(&column, 16, &map).unwrap(), [0; 64]);
+        assert!(legacy_biome_cells(&column, 5, &[0]).is_err());
+        column.full_chunk = false;
+        assert_eq!(legacy_biome_cells(&column, 5, &map).unwrap(), [0; 64]);
     }
 
     /// Columns come back one per packet, in the order the packets went in,
