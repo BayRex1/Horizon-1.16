@@ -468,16 +468,16 @@ impl Loading {
     }
 
     fn menu_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
-        if let Some(error) = self.menu.resource_error.clone() {
-            if matches!(
+        if let Some(error) = self.menu.resource_error.clone()
+            && matches!(
                 &action,
                 Action::Play { .. } | Action::Create { .. } | Action::Connect { .. }
-            ) {
-                if let Some(title) = &mut self.menu.title {
-                    title.failed(format!("Game resources are unavailable: {error}"));
-                }
-                return;
+            )
+        {
+            if let Some(title) = &mut self.menu.title {
+                title.failed(format!("Game resources are unavailable: {error}"));
             }
+            return;
         }
         match action {
             Action::Quit => event_loop.exit(),
@@ -780,14 +780,16 @@ mod tests {
 
     #[test]
     fn resource_failure_keeps_menu_open_and_disables_world_entry() {
-        let mut menu = StartupMenu::default();
-        menu.pending = Some(PendingWorldEntry::Local {
-            folder: "New World".into(),
-            name: None,
-            seed: Some(0),
-            creative: false,
-            create: None,
-        });
+        let mut menu = StartupMenu {
+            pending: Some(PendingWorldEntry::Local {
+                folder: "New World".into(),
+                name: None,
+                seed: Some(0),
+                creative: false,
+                create: None,
+            }),
+            ..Default::default()
+        };
 
         menu.show_resource_error("missing resource manifest".into());
 
