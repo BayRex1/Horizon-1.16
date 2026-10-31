@@ -351,8 +351,8 @@ impl Options {
         // fallback absolute to avoid silently resolving against System32.
         let resources = [packaged, versioned.clone(), working_versioned]
             .into_iter()
-        .find(|path| path.join("horizon-resources.json").is_file())
-        .unwrap_or(versioned);
+            .find(|path| path.join("horizon-resources.json").is_file())
+            .unwrap_or(versioned);
         let mut o = Self {
             resources,
             distance: 12,
