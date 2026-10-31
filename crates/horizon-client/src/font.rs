@@ -677,10 +677,11 @@ impl Font {
         // The missing 1.16.5 resource bundle must not turn every menu label
         // into a tofu box. Use a bundled Unicode-capable font only when the
         // requested font has no resource providers at all.
-        if providers.is_empty() && id == DEFAULT {
-            if let Some(font) = bundled_fallback() {
-                providers.push(Provider::TrueType(Filter::default(), Box::new(font)));
-            }
+        if providers.is_empty()
+            && id == DEFAULT
+            && let Some(font) = bundled_fallback()
+        {
+            providers.push(Provider::TrueType(Filter::default(), Box::new(font)));
         }
         FontSet {
             providers,
