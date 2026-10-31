@@ -1000,7 +1000,9 @@ async fn open_device(
         }
     }
     if let Some(fallback) = software_fallback {
-        log::warn!("Horizon renderer: no hardware adapter was available; using the software fallback");
+        log::warn!(
+            "Horizon renderer: no hardware adapter was available; using the software fallback"
+        );
         describe_adapter(&fallback.adapter);
         return Ok(fallback);
     }
