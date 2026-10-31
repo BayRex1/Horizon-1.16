@@ -344,14 +344,24 @@ impl Options {
             .join(".local")
             .join("horizon-client")
             .join(horizon_core::VANILLA_VERSION);
-        // A launcher-installed client lives inside its version directory, so
-        // its prepared resources are beside the executable, not necessarily
-        // under the process working directory (which on Windows is the shared
-        // game home). Prefer an actually prepared bundle and keep every
-        // fallback absolute to avoid silently resolving against System32.
-        let resources = [packaged, versioned.clone(), working_versioned]
-            .into_iter()
-            .find(|path| path.join("horizon-resources.json").is_file())
+        // On Windows, use the shared Minecraft resource home requested by
+        // players. Its assets/ and versions/ directories live side by side.
+        // APPDATA is the roaming profile directory, e.g.
+        // %APPDATA%\\.minecraft\\horizon-resources.
+        let roaming_resources = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|appdata| appdata.join(".minecraft").join("horizon-resources"));
+        // Prefer the roaming resource directory when it contains assets,
+        // even when it has no Horizon-specific manifest (official Minecraft
+        // installations do not create one). Keep the existing prepared-bundle
+        // fallbacks for development and non-Windows installations.
+        let resources = roaming_resources
+            .filter(|path| path.join("assets").is_dir())
+            .or_else(|| {
+                [packaged, versioned.clone(), working_versioned]
+                    .into_iter()
+                    .find(|path| path.join("horizon-resources.json").is_file())
+            })
             .unwrap_or(versioned);
         let mut o = Self {
             resources,
