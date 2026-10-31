@@ -112,6 +112,100 @@ impl LegacyImprovedNoise1_16_5 {
         lerp(fade_z, lerp(fade_y, x00, x10), lerp(fade_y, x01, x11))
     }
 
+    /// Samples with the legacy vertical quantization used by 1.16.5 Perlin noise.
+    ///
+    /// The y coordinate used by the gradient is shifted by whole multiples of
+    /// y_scale, while the interpolation fade remains based on the unshifted
+    /// local y coordinate. A zero y_scale disables this adjustment.
+    pub fn sample_with_y_scale(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        y_scale: f64,
+        min_y: f64,
+    ) -> f64 {
+        let x = x + self.x_offset;
+        let y = y + self.y_offset;
+        let z = z + self.z_offset;
+
+        let floor_x = x.floor();
+        let floor_y = y.floor();
+        let floor_z = z.floor();
+        let ix = floor_x as i32 & 255;
+        let iy = floor_y as i32 & 255;
+        let iz = floor_z as i32 & 255;
+
+        let local_x = x - floor_x;
+        let local_y = y - floor_y;
+        let local_z = z - floor_z;
+        let y_offset = if y_scale != 0.0 {
+            (min_y.min(local_y) / y_scale).floor() * y_scale
+        } else {
+            0.0
+        };
+        let gradient_y = local_y - y_offset;
+
+        let fade_x = fade(local_x);
+        let fade_y = fade(local_y);
+        let fade_z = fade(local_z);
+
+        let a = self.permutation[ix as usize] as usize + iy as usize;
+        let aa = self.permutation[a] as usize + iz as usize;
+        let ab = self.permutation[a + 1] as usize + iz as usize;
+        let b = self.permutation[ix as usize + 1] as usize + iy as usize;
+        let ba = self.permutation[b] as usize + iz as usize;
+        let bb = self.permutation[b + 1] as usize + iz as usize;
+
+        let x00 = lerp(
+            fade_x,
+            grad(self.permutation[aa], local_x, gradient_y, local_z),
+            grad(self.permutation[ba], local_x - 1.0, gradient_y, local_z),
+        );
+        let x10 = lerp(
+            fade_x,
+            grad(self.permutation[ab], local_x, gradient_y - 1.0, local_z),
+            grad(
+                self.permutation[bb],
+                local_x - 1.0,
+                gradient_y - 1.0,
+                local_z,
+            ),
+        );
+        let x01 = lerp(
+            fade_x,
+            grad(
+                self.permutation[aa + 1],
+                local_x,
+                gradient_y,
+                local_z - 1.0,
+            ),
+            grad(
+                self.permutation[ba + 1],
+                local_x - 1.0,
+                gradient_y,
+                local_z - 1.0,
+            ),
+        );
+        let x11 = lerp(
+            fade_x,
+            grad(
+                self.permutation[ab + 1],
+                local_x,
+                gradient_y - 1.0,
+                local_z - 1.0,
+            ),
+            grad(
+                self.permutation[bb + 1],
+                local_x - 1.0,
+                gradient_y - 1.0,
+                local_z - 1.0,
+            ),
+        );
+
+        lerp(fade_z, lerp(fade_y, x00, x10), lerp(fade_y, x01, x11))
+    }
+
     /// Returns the three constructor offsets, useful for parity diagnostics.
     pub fn offsets(&self) -> [f64; 3] {
         [self.x_offset, self.y_offset, self.z_offset]
