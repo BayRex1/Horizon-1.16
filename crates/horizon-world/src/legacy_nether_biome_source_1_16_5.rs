@@ -193,7 +193,10 @@ mod tests {
         let second = LegacyNetherBiomeSource1_16_5::from_seed(-123456789).unwrap();
         for (x, z) in [(-128, 64), (0, 0), (31, -47), (2048, -1024)] {
             assert_eq!(first.sample_quart(x, z), second.sample_quart(x, z));
-            assert_eq!(first.biome_at_quart(x, z), second.biome_at_quart(x, z));
+            assert_eq!(
+                first.biome_at_quart(x, z).unwrap(),
+                second.biome_at_quart(x, z).unwrap()
+            );
         }
     }
 
