@@ -330,16 +330,35 @@ impl Options {
         })
     }
     fn read() -> Result<Option<Self>> {
-        let sibling = std::env::current_exe()?
+        let executable_dir = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
-            .join("resources");
+            .to_path_buf();
+        let packaged = executable_dir.join("resources");
+        let versioned = executable_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        let working_dir = std::env::current_dir().unwrap_or_default();
+        let working_versioned = working_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        // A launcher-installed client lives inside its version directory, so
+        // its prepared resources are beside the executable, not necessarily
+        // under the process working directory (which on Windows is the shared
+        // game home). Prefer an actually prepared bundle and keep every
+        // fallback absolute to avoid silently resolving against System32.
+        let resources = [
+            packaged,
+            versioned.clone(),
+            working_versioned,
+        ]
+        .into_iter()
+        .find(|path| path.join("horizon-resources.json").is_file())
+        .unwrap_or(versioned);
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
-                sibling
-            } else {
-                std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
-            },
+            resources,
             distance: 12,
             distance_override: None,
             seed: 0,
