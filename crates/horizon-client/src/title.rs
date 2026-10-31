@@ -1947,19 +1947,14 @@ mod classic_tests {
         assert_eq!(batch.vertices[6].pos[1], 69.0);
         assert!(batch.vertices[6].pos[0] > cx - 128.0);
         assert!(batch.vertices[6].pos[0] < cx + 128.0);
+        // The 1.16.5 title screen has no Friends, Language or
+        // Accessibility icon buttons; these sprites must not be drawn.
         for i in 0..3 {
-            let quad = batch
-                .vertices
-                .as_chunks::<6>()
-                .0
-                .iter()
-                .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
-                .unwrap();
-            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
-            let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
-            assert_eq!(quad[0].pos, [x, y]);
-            assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);
-            assert!(quad.iter().all(|v| v.color == u32::MAX));
+            let u = 0.25 + i as f32 * 0.125;
+            assert!(
+                !batch.vertices.iter().any(|vertex| vertex.uv == [u, 0.0]),
+                "unexpected newer-version menu icon at u={u}"
+            );
         }
         assert!(
             batch.vertices[12..]
