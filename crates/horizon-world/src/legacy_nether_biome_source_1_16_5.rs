@@ -117,9 +117,7 @@ impl LegacyNetherBiomeSource1_16_5 {
         biome_x: i32,
         biome_z: i32,
     ) -> Result<Option<u32>, serde_json::Error> {
-        Ok(self
-            .biome_at_quart(biome_x, biome_z)?
-            .map(|biome| biome.id))
+        Ok(self.biome_at_quart(biome_x, biome_z)?.map(|biome| biome.id))
     }
 
     /// Samples climate noise and resolves the nearest built-in Nether biome.
@@ -216,10 +214,7 @@ mod tests {
                 | "warped_forest"
                 | "basalt_deltas"
         ));
-        assert_eq!(
-            source.biome_at_quart(12, -8).unwrap().unwrap().id,
-            id
-        );
+        assert_eq!(source.biome_at_quart(12, -8).unwrap().unwrap().id, id);
     }
 
     #[test]
