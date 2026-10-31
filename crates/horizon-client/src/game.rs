@@ -322,7 +322,7 @@ struct Options {
 /// expected by the renderer, font loader and title screen. The cache is kept
 /// beside the downloaded assets and is rebuilt only when the asset index changes.
 fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf> {
-    use std::io::{Error, ErrorKind};
+    use std::io::{Error, ErrorKind, Read};
     let version_json = root.join("versions/1.16.5/1.16.5.json");
     let version: serde_json::Value = serde_json::from_slice(&std::fs::read(&version_json)?)
         .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -335,7 +335,9 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
     let objects = index.get("objects").and_then(serde_json::Value::as_object)
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
-    let marker = root.join("assets").join(format!(".horizon-materialized-{index_id}"));
+    // Bump the marker: older builds only expanded the asset index and skipped
+    // resources shipped inside the version's client JAR.
+    let marker = root.join("assets").join(format!(".horizon-materialized-{index_id}-jar-v2"));
     if marker.is_file() {
         return Ok(root.to_path_buf());
     }
@@ -356,7 +358,48 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
             Err(error) => log::warn!("Horizon: could not materialize asset {name}: {error}"),
         }
     }
-    std::fs::write(&marker, format!("index={index_id}\nfiles={copied}\n"))?;
+
+    // Minecraft's client JAR contains important built-in resources that are
+    // not represented by assets/indexes (notably the title logo and fonts).
+    let client_jar = root.join("versions/1.16.5/1.16.5.jar");
+    if client_jar.is_file() {
+        let file = std::fs::File::open(&client_jar)?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let mut jar_copied = 0usize;
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            let name = entry.name().replace('\\\\', "/");
+            let Some(relative) = name.strip_prefix("assets/minecraft/") else { continue };
+            let relative_path = std::path::Path::new(relative);
+            if relative_path.as_os_str().is_empty()
+                || relative_path.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
+                || entry.is_dir()
+            {
+                continue;
+            }
+            let destination = root.join("assets/minecraft").join(relative_path);
+            if destination.is_file() { continue; }
+            if let Some(parent) = destination.parent() { std::fs::create_dir_all(parent)?; }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            std::fs::write(&destination, bytes)?;
+            jar_copied += 1;
+        }
+        log::info!("Horizon: materialized {jar_copied} additional resources from Minecraft 1.16.5 client JAR");
+    } else {
+        log::warn!("Horizon: Minecraft 1.16.5 client JAR not found at {}; built-in logo/font resources may be missing", client_jar.display());
+    }
+
+    for path in [
+        "assets/minecraft/textures/gui/title/minecraft.png",
+        "assets/minecraft/font/default.json",
+        "assets/minecraft/textures/font/ascii.png",
+    ] {
+        log::info!("Horizon: resource check {path}: {}", root.join(path).is_file());
+    }
+    std::fs::write(&marker, format!("index={index_id}\nasset_files={copied}\n"))?;
     log::info!("Horizon: materialized {copied} Minecraft assets from index {index_id}");
     Ok(root.to_path_buf())
 }
