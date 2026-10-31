@@ -322,7 +322,7 @@ mod tests {
         std::fs::create_dir_all(&font).unwrap();
         std::fs::write(
             font.join("default.json"),
-            br#"{"providers":[{"type":"space","advances":{" ":"6","a":6}}]}"#,
+            br#"{"providers":[{"type":"space","advances":{" ":6,"a":6}}]}"#,
         )
         .unwrap();
         std::fs::write(texts.join("end.txt"), end).unwrap();
