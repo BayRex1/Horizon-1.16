@@ -306,8 +306,10 @@ impl WinScreen {
 mod tests {
     use super::*;
 
-    /// A resource root with only the credits texts: every glyph is the
-    /// missing one, 6 pixels wide.
+    /// A resource root with deterministic test font metrics: all missing
+    /// glyphs are 6 pixels wide, and the poem's 'a' and spaces are explicitly
+    /// assigned that same advance so the bundled fallback font cannot affect
+    /// line-wrapping tests.
     fn screen(poem: bool, end: &str, credits: &str, post: &str) -> WinScreen {
         let root = std::env::temp_dir().join(format!(
             "horizon-win-screen-{}-{poem}-{}",
@@ -315,7 +317,14 @@ mod tests {
             end.len()
         ));
         let texts = root.join("assets/minecraft/texts");
+        let font = root.join("assets/minecraft/font");
         std::fs::create_dir_all(&texts).unwrap();
+        std::fs::create_dir_all(&font).unwrap();
+        std::fs::write(
+            font.join("default.json"),
+            br#"{"providers":[{"type":"space","advances":{" ":"6","a":6}}]}"#,
+        )
+        .unwrap();
         std::fs::write(texts.join("end.txt"), end).unwrap();
         std::fs::write(texts.join("credits.json"), credits).unwrap();
         std::fs::write(texts.join("postcredits.txt"), post).unwrap();
