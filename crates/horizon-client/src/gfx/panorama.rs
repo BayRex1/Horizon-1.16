@@ -45,6 +45,7 @@ impl Faces {
         }
         Ok(Self { size, pixels })
     }
+}
 
 /// Find a panorama face in an unpacked resource pack or Minecraft's
 /// content-addressed asset store (assets/indexes + assets/objects).
