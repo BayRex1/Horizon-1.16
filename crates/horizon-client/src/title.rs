@@ -930,12 +930,18 @@ impl Title {
                     256.0,
                     64.0,
                 );
-                batch.sprite_region(
+                // Horizon's edition line uses Minecraft's own bitmap font,
+                // so the subtitle reads "RUST VERSION" rather than borrowing
+                // the vanilla "JAVA EDITION" artwork.
+                let edition = "RUST VERSION";
+                let edition_width = HudBatch::text_width(atlas, edition);
+                batch.text(
                     atlas,
-                    crate::title_edition::SPRITE,
-                    [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
-                    128.0,
-                    16.0,
+                    edition,
+                    ((w - edition_width) / 2.0).floor(),
+                    69.0,
+                    rgba(255, 255, 255, 255),
+                    true,
                 );
                 if !hide_splash && let Some(splash) = self.splash.as_deref() {
                     let tw = HudBatch::text_width(atlas, splash);
