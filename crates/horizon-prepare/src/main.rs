@@ -180,7 +180,7 @@ fn main() -> ExitCode {
             horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log)
                 .map(|_| ())
         }
-        _ => horizon_prepare::prepare(&options, &log),
+        _ => horizon_prepare::prepare(&options, &log).map(|_| ()),
     };
     match result {
         Ok(_) => ExitCode::SUCCESS,
