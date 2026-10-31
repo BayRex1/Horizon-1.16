@@ -83,7 +83,6 @@ pub fn apply_play_event(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
