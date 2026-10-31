@@ -22,7 +22,9 @@ impl LegacyNoiseParameters1_16_5 {
         }
         // Ensure the last represented octave can be addressed without overflow.
         if !amplitudes.is_empty()
-            && first_octave.checked_add((amplitudes.len() - 1) as i32).is_none()
+            && first_octave
+                .checked_add((amplitudes.len() - 1) as i32)
+                .is_none()
         {
             return None;
         }
@@ -59,9 +61,7 @@ impl LegacyNoiseParameters1_16_5 {
             .iter()
             .copied()
             .enumerate()
-            .map(move |(offset, amplitude)| {
-                (self.first_octave + offset as i32, amplitude)
-            })
+            .map(move |(offset, amplitude)| (self.first_octave + offset as i32, amplitude))
     }
 }
 
@@ -71,8 +71,7 @@ mod tests {
 
     #[test]
     fn preserves_ordered_amplitudes_and_zero_slots() {
-        let parameters =
-            LegacyNoiseParameters1_16_5::new(-2, vec![1.0, 0.0, 0.5]).unwrap();
+        let parameters = LegacyNoiseParameters1_16_5::new(-2, vec![1.0, 0.0, 0.5]).unwrap();
         assert_eq!(
             parameters.octave_amplitudes().collect::<Vec<_>>(),
             vec![(-2, 1.0), (-1, 0.0), (0, 0.5)]
