@@ -6,6 +6,20 @@
 
 use crate::legacy_improved_noise_1_16_5::LegacyImprovedNoise1_16_5;
 
+/// Period used by the 1.16.5 octave sampler to keep coordinates precise.
+pub const LEGACY_NOISE_COORDINATE_PERIOD_1_16_5: f64 = 33_554_432.0;
+
+/// Wraps a coordinate into the octave sampler's precision interval.
+///
+/// The 1.16.5 API exposes this operation as
+/// `OctavePerlinNoiseSampler.maintainPrecision(double)`. Keeping it separate
+/// lets parity tests pin the arithmetic before it is applied to seeded octave
+/// construction.
+pub fn maintain_precision_1_16_5(value: f64) -> f64 {
+    let period = LEGACY_NOISE_COORDINATE_PERIOD_1_16_5;
+    value - (value / period + 0.5).floor() * period
+}
+
 /// One independently configured octave in a noise stack.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LegacyNoiseOctave1_16_5 {
