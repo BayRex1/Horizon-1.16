@@ -14433,6 +14433,9 @@ struct Loading {
     receiver: Receiver<LoaderMsg>,
     loaded: Option<std::result::Result<Loaded, String>>,
     handle: Option<JoinHandle<()>>,
+    /// The resource worker failed after the menu bundle was published. Keep
+    /// the window alive in menu-only mode instead of exiting the application.
+    resource_failed: bool,
     shown: bool,
     menu: startup_menu::StartupMenu,
     error: Option<Box<dyn std::error::Error>>,
@@ -14719,9 +14722,27 @@ impl ApplicationHandler for App {
             Step::Done => event_loop.exit(),
             Step::Failed(e) => {
                 if let App::Loading(loading) = self {
-                    loading.error = Some(e);
+                    if loading.gui.is_some() && loading.menu.title.is_some() {
+                        let message = e.to_string();
+                        log::error!(
+                            "Horizon: continuing with the title menu; world resources are unavailable: {message}"
+                        );
+                        // The title screen only needs the menu bundle, which was
+                        // already published. Keep it visible and show the normal
+                        // resource error panel instead of terminating the client.
+                        loading.menu.show_resource_error(message);
+                        loading.resource_failed = true;
+                        loading.loaded = None;
+                        if let Some(handle) = loading.handle.take() {
+                            let _ = handle.join();
+                        }
+                    } else {
+                        loading.error = Some(e);
+                        event_loop.exit();
+                    }
+                } else {
+                    event_loop.exit();
                 }
-                event_loop.exit();
             }
         }
     }
@@ -14760,6 +14781,7 @@ fn run_loading(
         receiver,
         loaded: None,
         handle: Some(loader),
+        resource_failed: false,
         shown: false,
         menu,
         error: None,
