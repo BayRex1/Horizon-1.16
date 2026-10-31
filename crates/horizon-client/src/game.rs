@@ -13031,17 +13031,32 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        let title_idle = self.title.is_some()
+            && self.player.is_none()
+            && self.pending_entry.is_none()
+            && self.pending_save.is_none();
         if let Some(w) = &self.window {
             if self.options.offscreen {
                 // Offscreen frames don't wait for the window to be drawn: an
                 // occluded window (a locked macOS session) gets no redraws.
                 let id = w.id();
                 self.window_event(event_loop, id, WindowEvent::RedrawRequested);
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else if title_idle {
+                // No world simulation is active on the title screen. Do not
+                // spin the entire event loop just to animate a menu; input and
+                // window events still wake it immediately.
+                w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(66),
+                ));
             } else {
                 w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
