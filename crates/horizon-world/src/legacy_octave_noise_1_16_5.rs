@@ -54,6 +54,17 @@ impl LegacyNoiseOctave1_16_5 {
             .sample(x * self.frequency, y * self.frequency, z * self.frequency)
             * self.amplitude
     }
+
+    /// Samples after wrapping scaled coordinates into the legacy precision
+    /// interval. Kept explicit until pinned 1.16.5 fixtures verify where each
+    /// caller applies precision maintenance in the complete octave pipeline.
+    pub fn sample_with_maintained_precision(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.sampler.sample(
+            maintain_precision_1_16_5(x * self.frequency),
+            maintain_precision_1_16_5(y * self.frequency),
+            maintain_precision_1_16_5(z * self.frequency),
+        ) * self.amplitude
+    }
 }
 
 /// A sum of explicitly configured legacy improved-noise octaves.
@@ -85,6 +96,15 @@ impl LegacyOctaveStack1_16_5 {
         self.octaves
             .iter()
             .map(|octave| octave.sample(x, y, z))
+            .sum()
+    }
+
+    /// Samples every configured layer with legacy coordinate precision
+    /// maintenance, without changing the raw-coordinate sampling path.
+    pub fn sample_with_maintained_precision(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.octaves
+            .iter()
+            .map(|octave| octave.sample_with_maintained_precision(x, y, z))
             .sum()
     }
 }
@@ -121,5 +141,32 @@ mod tests {
             LegacyOctaveStack1_16_5::default().sample(1.0, 2.0, 3.0),
             0.0
         );
+    }
+
+    #[test]
+    fn maintained_precision_matches_raw_sampling_for_small_coordinates() {
+        let octave = LegacyNoiseOctave1_16_5::new(sampler(19), 0.5, 0.75).unwrap();
+        let stack = LegacyOctaveStack1_16_5::new(vec![octave]);
+        let point = [12.5, -31.25, 64.0];
+        assert_eq!(
+            stack.sample_with_maintained_precision(point[0], point[1], point[2]),
+            stack.sample(point[0], point[1], point[2])
+        );
+    }
+
+    #[test]
+    fn maintained_precision_wraps_large_scaled_coordinates() {
+        let octave = LegacyNoiseOctave1_16_5::new(sampler(23), 2.0, 1.0).unwrap();
+        let stack = LegacyOctaveStack1_16_5::new(vec![octave]);
+        let period = LEGACY_NOISE_COORDINATE_PERIOD_1_16_5;
+        let point = [17.25, -9.5, 3.0];
+        let shifted = [
+            point[0] + period / 2.0,
+            point[1] - period / 2.0,
+            point[2] + period,
+        ];
+        let expected = stack.sample_with_maintained_precision(point[0], point[1], point[2]);
+        let actual = stack.sample_with_maintained_precision(shifted[0], shifted[1], shifted[2]);
+        assert!((actual - expected).abs() < 1.0e-8);
     }
 }
