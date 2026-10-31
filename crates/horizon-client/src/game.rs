@@ -14546,12 +14546,23 @@ impl Loading {
         }
         if let Some(w) = &self.window {
             if self.options.as_ref().is_some_and(|o| o.offscreen) {
+                // Offscreen harnesses intentionally run as fast as possible:
+                // their frame count and timeout are part of the test contract.
                 self.draw();
+                event_loop.set_control_flow(ControlFlow::Poll);
             } else {
+                // The title/loading screen has no simulation to advance. Polling
+                // continuously redraws it hundreds of times per second and can
+                // saturate a CPU, especially with a software graphics adapter.
+                // Keep the menu responsive while limiting its idle redraw rate.
                 w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(33),
+                ));
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
     fn draw(&mut self) {
         let Some(size) = self
