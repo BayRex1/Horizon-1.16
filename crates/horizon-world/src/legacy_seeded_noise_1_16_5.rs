@@ -10,9 +10,7 @@
 //!   two-octave (-7, length 2) temperature/humidity samplers, Java LCG skips,
 //!   337/331 second-domain scale, and 10/9 normalization.
 
-use crate::legacy_1_16_5::{
-    LegacyBiome, LegacyNetherNoiseSample, vanilla_nether_biome_from_noise,
-};
+use crate::legacy_1_16_5::{LegacyBiome, LegacyNetherNoiseSample, vanilla_nether_biome_from_noise};
 use crate::legacy_improved_noise_1_16_5::LegacyImprovedNoise1_16_5;
 use crate::legacy_java_random_1_16_5::JavaRandom48;
 use crate::legacy_noise_parameters_1_16_5::LegacyNoiseParameters1_16_5;
@@ -45,16 +43,8 @@ impl LegacyPerlinNoiseSampler1_16_5 {
         self.sample_with_y_scale(x, y, z, 0.0, 0.0)
     }
 
-    pub fn sample_with_y_scale(
-        &self,
-        x: f64,
-        y: f64,
-        z: f64,
-        y_scale: f64,
-        min_y: f64,
-    ) -> f64 {
-        self.improved
-            .sample_with_y_scale(x, y, z, y_scale, min_y)
+    pub fn sample_with_y_scale(&self, x: f64, y: f64, z: f64, y_scale: f64, min_y: f64) -> f64 {
+        self.improved.sample_with_y_scale(x, y, z, y_scale, min_y)
     }
 }
 
@@ -261,8 +251,7 @@ impl LegacyNetherNoise1_16_5 {
     pub fn from_seed(world_seed: i64) -> Result<Self, &'static str> {
         let parameters = LegacyNoiseParameters1_16_5::new(-7, vec![1.0, 1.0])
             .ok_or("invalid built-in Nether noise parameters")?;
-        let temperature =
-            LegacyDoublePerlinNoiseSampler1_16_5::from_seed(world_seed, &parameters)?;
+        let temperature = LegacyDoublePerlinNoiseSampler1_16_5::from_seed(world_seed, &parameters)?;
         let humidity = LegacyDoublePerlinNoiseSampler1_16_5::from_seed(
             world_seed.wrapping_add(1),
             &parameters,
@@ -330,11 +319,9 @@ mod tests {
 
     #[test]
     fn zero_amplitude_slot_consumes_exactly_one_missing_octave() {
-        let parameters =
-            LegacyNoiseParameters1_16_5::new(-2, vec![1.0, 0.0, 1.0]).unwrap();
+        let parameters = LegacyNoiseParameters1_16_5::new(-2, vec![1.0, 0.0, 1.0]).unwrap();
         let mut actual = JavaRandom48::new(77);
-        let sampler =
-            LegacyOctavePerlinNoiseSampler1_16_5::new(&mut actual, &parameters).unwrap();
+        let sampler = LegacyOctavePerlinNoiseSampler1_16_5::new(&mut actual, &parameters).unwrap();
         assert_eq!(sampler.layer_count(), 3);
 
         let mut expected = JavaRandom48::new(77);
