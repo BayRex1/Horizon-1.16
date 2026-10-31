@@ -156,7 +156,9 @@ fn main() -> ExitCode {
                 horizon_prepare::client_only::verify_1_16_5(dir, &options.root, &log).map(|_| ())
             }),
         Some("compile-exporters") => horizon_prepare::compile_exporters(&options, &log)
-            .inspect(|dir| log(&dir.display().to_string())),
+            .map(|dir| {
+                log(&dir.display().to_string());
+            }),
         Some("sounds") => {
             horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
         }
