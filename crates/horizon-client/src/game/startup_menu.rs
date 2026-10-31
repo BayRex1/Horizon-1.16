@@ -9,7 +9,7 @@ use winit::{event::KeyEvent, keyboard::ModifiersState};
 
 #[derive(Default)]
 pub(super) struct StartupMenu {
-    title: Option<Title>,
+    pub(super) title: Option<Title>,
     options: OptionsUi,
     options_open: bool,
     /// The credits from Credits & Attribution, and their last frame.
