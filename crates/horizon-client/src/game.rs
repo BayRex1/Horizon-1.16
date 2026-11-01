@@ -493,9 +493,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
             // full six cube faces and overlay come from the version's asset
             // index above; never overwrite those full-resolution files with
             // the placeholders extracted from the JAR.
-            if relative_path
-                .starts_with("textures/gui/title/background")
-            {
+            if relative_path.starts_with("textures/gui/title/background") {
                 continue;
             }
             let destination = root.join("assets/minecraft").join(relative_path);
