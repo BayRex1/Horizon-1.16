@@ -679,14 +679,16 @@ impl Title {
         };
         match &self.mode {
             Mode::Main => {
-                let cx = (w / 2.0).floor();
-                let x = cx - 100.0;
+                // Minecraft 1.16.5 offsets the menu column 24 GUI pixels
+                // to the right to leave room for the panorama's title art.
+                let cx = (w / 2.0).floor() + 24.0;
+                let x = cx - 130.0;
                 let y = (h / 4.0).floor() + 48.0;
                 vec![
                     b(
                         x,
                         y,
-                        200.0,
+                        260.0,
                         &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
                         1,
@@ -694,31 +696,23 @@ impl Title {
                     b(
                         x,
                         y + 24.0,
-                        200.0,
+                        260.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
                         true,
                         4,
                     ),
                     b(
-                        x,
+                        cx - 100.0,
                         y + 48.0,
-                        200.0,
-                        &lang::get_or("menu.realms", "Minecraft Realms"),
-                        true,
-                        5,
-                    ),
-                    b(
-                        x,
-                        y + 72.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
                     ),
                     b(
-                        cx + 2.0,
-                        y + 72.0,
-                        98.0,
+                        cx + 35.0,
+                        y + 48.0,
+                        125.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
