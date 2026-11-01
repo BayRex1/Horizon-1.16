@@ -1213,9 +1213,9 @@ impl Title {
                     let source_y = if !b.enabled {
                         86.0
                     } else if hover {
-                        46.0
-                    } else {
                         66.0
+                    } else {
+                        46.0
                     };
                     let mut widget = r;
                     widget.v0 = r.v0 + (r.v1 - r.v0) * (source_y / 256.0);
