@@ -534,10 +534,10 @@ impl Options {
             .find(|path| path.join("horizon-resources.json").is_file());
         let resources = prepared
             .or_else(|| {
-                roaming_resources.filter(|path| {
+                roaming_resources.as_ref().filter(|path| {
                     path.join("horizon-resources.json").is_file()
                         && path.join("assets").is_dir()
-                })
+                }).cloned()
             })
             .unwrap_or(versioned);
         // The official launcher stores assets by SHA-1 under assets/objects.
