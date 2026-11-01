@@ -126,6 +126,10 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     let resource_manifest = Value::Object(vec![
         ("schema".into(), Value::Int(crate::SCHEMA.to_string())),
         ("minecraft".into(), Value::str("1.16.5")),
+        ("data_version".into(), Value::Int("2586".into())),
+        ("resource_pack_format".into(), Value::Int("6".into())),
+        ("data_pack_format".into(), Value::Int("6".into())),
+        ("bundle_kind".into(), Value::str("client-assets-only")),
         ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
         (
             "version_json_sha1".into(),
