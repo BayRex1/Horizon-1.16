@@ -5,7 +5,6 @@ use crate::{digest, read_json, write_json, Log};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const VERSION_JSON_SHA1: &str = "fba9f7833e858a1257d810d21a3a9e3c967f9077";
 const CLIENT_JAR_SHA1: &str = "37fd3c903861eeff3bc24b71eed48f828b5269c8";
 const ASSET_INDEX_SHA1: &str = "f3c4aa96e12951cd2781b3e1c0e8ab82bf719cf2";
 
@@ -31,11 +30,17 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     let client_jar = version_dir.join("1.16.5.jar");
     let index = resources.join("assets/indexes/1.16.json");
 
-    require_sha1(
-        &version_json,
-        VERSION_JSON_SHA1,
-        "Minecraft 1.16.5 version JSON",
-    )?;
+    if !version_json.is_file() {
+        return Err(format!(
+            "Missing Minecraft 1.16.5 version JSON: {}",
+            version_json.display()
+        ));
+    }
+    // Launchers and local installations may rewrite JSON formatting or metadata
+    // while retaining the official client and asset pins. Validate its semantic
+    // version fields below, and record the actual file hash instead of requiring
+    // byte-for-byte equality with Mojang's original manifest.
+    let version_json_sha1 = digest(&version_json, "sha1")?;
     require_sha1(&client_jar, CLIENT_JAR_SHA1, "Minecraft 1.16.5 client JAR")?;
     require_sha1(&index, ASSET_INDEX_SHA1, "Minecraft 1.16 asset index")?;
 
@@ -97,7 +102,7 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         ("data_version".into(), Value::Int("2586".into())),
         ("java_major".into(), Value::Int("8".into())),
         ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
-        ("version_json_sha1".into(), Value::str(VERSION_JSON_SHA1)),
+        ("version_json_sha1".into(), Value::str(version_json_sha1.clone())),
         ("asset_index_id".into(), Value::str("1.16")),
         ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
         (
@@ -119,7 +124,7 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         ("schema".into(), Value::Int(crate::SCHEMA.to_string())),
         ("minecraft".into(), Value::str("1.16.5")),
         ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
-        ("version_json_sha1".into(), Value::str(VERSION_JSON_SHA1)),
+        ("version_json_sha1".into(), Value::str(version_json_sha1.clone())),
         ("asset_index_id".into(), Value::str("1.16")),
         ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
         (
