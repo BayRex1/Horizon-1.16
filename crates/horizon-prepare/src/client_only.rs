@@ -102,7 +102,10 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         ("data_version".into(), Value::Int("2586".into())),
         ("java_major".into(), Value::Int("8".into())),
         ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
-        ("version_json_sha1".into(), Value::str(version_json_sha1.clone())),
+        (
+            "version_json_sha1".into(),
+            Value::str(version_json_sha1.clone()),
+        ),
         ("asset_index_id".into(), Value::str("1.16")),
         ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
         (
@@ -124,7 +127,10 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         ("schema".into(), Value::Int(crate::SCHEMA.to_string())),
         ("minecraft".into(), Value::str("1.16.5")),
         ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
-        ("version_json_sha1".into(), Value::str(version_json_sha1.clone())),
+        (
+            "version_json_sha1".into(),
+            Value::str(version_json_sha1.clone()),
+        ),
         ("asset_index_id".into(), Value::str("1.16")),
         ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
         (
