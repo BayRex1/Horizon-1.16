@@ -679,38 +679,46 @@ impl Title {
         };
         match &self.mode {
             Mode::Main => {
-                let cx = (w / 2.0).floor() + 24.0;
+                let cx = (w / 2.0).floor();
+                let x = cx - 100.0;
                 let y = (h / 4.0).floor() + 48.0;
                 vec![
                     b(
-                        cx - 100.0,
+                        x,
                         y,
-                        260.0,
+                        200.0,
                         &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
                         1,
                     ),
                     b(
-                        cx - 100.0,
+                        x,
                         y + 24.0,
-                        260.0,
+                        200.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
                         true,
                         4,
                     ),
-                    // Minecraft 1.16.5 has no Realms button on this screen.
                     b(
-                        cx - 100.0,
+                        x,
                         y + 48.0,
+                        200.0,
+                        &lang::get_or("menu.realms", "Minecraft Realms"),
+                        true,
+                        5,
+                    ),
+                    b(
+                        x,
+                        y + 72.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
                     ),
                     b(
-                        cx + 35.0,
-                        y + 48.0,
-                        125.0,
+                        cx + 2.0,
+                        y + 72.0,
+                        98.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
@@ -896,10 +904,8 @@ impl Title {
                     256.0,
                     64.0,
                 );
-                // Horizon's edition line uses Minecraft's own bitmap font,
-                // so the subtitle reads "RUST VERSION" rather than borrowing
-                // the vanilla "JAVA EDITION" artwork.
-                let edition = "RUST EDITION";
+                // Keep the original Java Edition branding used by the 1.16.5 title screen.
+                let edition = "JAVA EDITION";
                 let edition_width = HudBatch::text_width(atlas, edition);
                 batch.text(
                     atlas,
