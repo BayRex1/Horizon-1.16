@@ -519,7 +519,9 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         );
     }
     if client_jar.is_file()
-        && required_jar_resources.iter().all(|path| root.join(path).is_file())
+        && required_jar_resources
+            .iter()
+            .all(|path| root.join(path).is_file())
     {
         std::fs::write(
             &marker,
