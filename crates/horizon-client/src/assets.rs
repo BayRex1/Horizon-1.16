@@ -110,7 +110,7 @@ fn validate_resource_data_version(found: Option<i64>) -> io::Result<()> {
         .map(|version| version.to_string())
         .unwrap_or_else(|| "missing or invalid".to_owned());
     Err(invalid(&format!(
-        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). Prepare resources from the matching Minecraft version; a 26.3 bundle cannot be used for 1.16.5.",
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). The verified 1.16.5 client assets are not a complete game-data bundle for this build; the 1.16.5 registry and world-data port must be connected before these resources can be used for singleplayer.",
         horizon_core::version::VERSION_ID
     )))
 }
