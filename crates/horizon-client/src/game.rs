@@ -344,7 +344,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
     // resources shipped inside the version's client JAR.
     let marker = root
         .join("assets")
-        .join(format!(".horizon-materialized-{index_id}-jar-v4"));
+        .join(format!(".horizon-materialized-{index_id}-jar-v5"));
     if marker.is_file() {
         return Ok(root.to_path_buf());
     }
