@@ -425,7 +425,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
     ];
     let marker = root
         .join("assets")
-        .join(format!(".horizon-materialized-{index_id}-jar-v6"));
+        .join(format!(".horizon-materialized-{index_id}-jar-v7"));
     if client_jar.is_file()
         && required_jar_resources
             .iter()
@@ -486,6 +486,15 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
                     .components()
                     .any(|c| !matches!(c, std::path::Component::Normal(_)))
                 || entry.is_dir()
+            {
+                continue;
+            }
+            // The JAR carries 1x1 placeholders for the title panorama. The
+            // full six cube faces and overlay come from the version's asset
+            // index above; never overwrite those full-resolution files with
+            // the placeholders extracted from the JAR.
+            if relative_path
+                .starts_with("textures/gui/title/background")
             {
                 continue;
             }
