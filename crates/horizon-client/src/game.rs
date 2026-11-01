@@ -344,7 +344,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
     // resources shipped inside the version's client JAR.
     let marker = root
         .join("assets")
-        .join(format!(".horizon-materialized-{index_id}-jar-v3"));
+        .join(format!(".horizon-materialized-{index_id}-jar-v4"));
     if marker.is_file() {
         return Ok(root.to_path_buf());
     }
@@ -369,9 +369,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
             continue;
         }
         let destination = root.join("assets").join(relative);
-        if destination.is_file() {
-            continue;
-        }
+        // This is the 1.16.5 asset index, so replace stale files left by 26.3.
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
