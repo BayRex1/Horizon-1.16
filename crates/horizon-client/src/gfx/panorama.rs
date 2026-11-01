@@ -424,6 +424,15 @@ mod tests {
     }
 
     #[test]
+    fn resource_pack_panorama_falls_back_to_vanilla_root() {
+        let vanilla = Fixture::new(2);
+        let pack = vanilla.0.join("pack-without-panorama");
+        let faces = Faces::load_over(&pack, &vanilla.0);
+        assert_eq!(faces.size, 2);
+        assert_eq!(faces.pixels.len(), 6 * 2 * 2 * 4);
+    }
+
+    #[test]
     fn cube_shader_validates() {
         let module = naga::front::wgsl::parse_str(include_str!("panorama.wgsl")).unwrap();
         naga::valid::Validator::new(
