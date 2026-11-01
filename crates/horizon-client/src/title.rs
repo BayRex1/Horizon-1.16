@@ -702,7 +702,7 @@ impl Title {
                     b(
                         cx - 100.0,
                         y + 48.0,
-                        125.0,
+                        98.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
