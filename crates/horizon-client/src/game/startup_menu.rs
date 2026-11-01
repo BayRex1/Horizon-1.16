@@ -602,10 +602,8 @@ impl Loading {
                             self.menu.cursor.1,
                             (batch.width, batch.height),
                         );
-                        if sound {
-                            if let Some(audio) = self.audio.as_mut() {
-                                audio.play_button_click();
-                            }
+                        if sound && let Some(audio) = self.audio.as_mut() {
+                            audio.play_button_click();
                         }
                         title.press_field(
                             &gui.atlas,
@@ -779,6 +777,9 @@ mod tests {
             resource_failed: false,
             shown: false,
             menu: StartupMenu::default(),
+            audio: None,
+            music: horizon_client::music::MusicManager::default(),
+            audio_tick_at: Instant::now(),
             error: None,
         }
     }
