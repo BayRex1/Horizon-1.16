@@ -18,7 +18,23 @@ pub struct Faces {
 
 impl Faces {
     pub fn load(root: &Path) -> Self {
-        Self::try_load(root).unwrap_or_else(|error| {
+        Self::load_over(root, root)
+    }
+
+    /// Load the panorama from the active resource pack, falling back to the
+    /// game's vanilla resources when the pack does not override all six faces.
+    pub fn load_over(root: &Path, defaults: &Path) -> Self {
+        let loaded = Self::try_load(root).or_else(|pack_error| {
+            if root == defaults {
+                Err(pack_error)
+            } else {
+                Self::try_load(defaults).map_err(|default_error| {
+                    format!("pack panorama unavailable ({pack_error}); vanilla panorama unavailable ({default_error})")
+                        .into()
+                })
+            }
+        });
+        loaded.unwrap_or_else(|error| {
             log::warn!("Horizon: title panorama unavailable ({error})");
             Self {
                 size: 1,
