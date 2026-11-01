@@ -328,14 +328,14 @@ pub fn button(
     if !atlas.sprites.contains_key(sprite)
         && let Some(widgets) = atlas.sprites.get("gui/widgets").copied()
     {
-        // Use the 1.16.5 button shades in the requested order: grey at rest,
-        // black on hover/press. Disabled keeps its vanilla strip.
+        // Keep the same shade order as the classic title menu: grey at rest,
+        // black on hover/press. Disabled uses the vanilla disabled strip.
         let v = if !active {
-            46.0
-        } else if hover {
-            66.0
-        } else {
             86.0
+        } else if hover {
+            46.0
+        } else {
+            66.0
         };
         let left = (w / 2.0).floor();
         let right = w - left;
