@@ -698,17 +698,10 @@ impl Title {
                         true,
                         4,
                     ),
+                    // Minecraft 1.16.5 has no Realms button on this screen.
                     b(
                         cx - 100.0,
                         y + 48.0,
-                        200.0,
-                        &lang::get_or("menu.online", "Minecraft Realms"),
-                        false,
-                        0,
-                    ),
-                    b(
-                        cx - 100.0,
-                        y + 72.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
@@ -716,7 +709,7 @@ impl Title {
                     ),
                     b(
                         cx + 2.0,
-                        y + 72.0,
+                        y + 48.0,
                         98.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
@@ -906,7 +899,7 @@ impl Title {
                 // Horizon's edition line uses Minecraft's own bitmap font,
                 // so the subtitle reads "RUST VERSION" rather than borrowing
                 // the vanilla "JAVA EDITION" artwork.
-                let edition = "RUST VERSION";
+                let edition = "RUST EDITION";
                 let edition_width = HudBatch::text_width(atlas, edition);
                 batch.text(
                     atlas,
@@ -1216,22 +1209,42 @@ impl Title {
                 && cursor.0 < b.x + b.w
                 && cursor.1 >= b.y
                 && cursor.1 < b.y + 20.0;
-            let sprite = if !b.enabled {
-                "gui/sprites/widget/button_disabled"
-            } else if hover {
-                "gui/sprites/widget/button_highlighted"
+            if matches!(&self.mode, Mode::Main) {
+                // Classic 1.16.5 widget: a thin grey frame around a dark,
+                // translucent rectangular button. The old menu must not use
+                // the newer sprite-sheet widget skin.
+                let frame = if !b.enabled {
+                    rgba(80, 80, 80, 255)
+                } else if hover {
+                    rgba(210, 210, 210, 255)
+                } else {
+                    rgba(160, 160, 160, 255)
+                };
+                let face = if hover {
+                    rgba(90, 90, 90, 210)
+                } else {
+                    rgba(20, 20, 20, 190)
+                };
+                batch.fill(atlas, b.x, b.y, b.w, 20.0, frame);
+                batch.fill(atlas, b.x + 1.0, b.y + 1.0, b.w - 2.0, 18.0, face);
             } else {
-                "gui/sprites/widget/button"
-            };
-            // Nine-slice approximation: left and right halves of the 200-wide sprite.
-            if let Some(r) = atlas.sprites.get(sprite).copied() {
-                let half = b.w / 2.0;
-                let mut left = r;
-                left.u1 = r.u0 + (r.u1 - r.u0) * (half / r.w as f32);
-                batch.rect_uv(b.x, b.y, half, 20.0, left, u32::MAX);
-                let mut right = r;
-                right.u0 = r.u1 - (r.u1 - r.u0) * (half / r.w as f32);
-                batch.rect_uv(b.x + half, b.y, half, 20.0, right, u32::MAX);
+                let sprite = if !b.enabled {
+                    "gui/sprites/widget/button_disabled"
+                } else if hover {
+                    "gui/sprites/widget/button_highlighted"
+                } else {
+                    "gui/sprites/widget/button"
+                };
+                // Nine-slice approximation: left and right halves of the 200-wide sprite.
+                if let Some(r) = atlas.sprites.get(sprite).copied() {
+                    let half = b.w / 2.0;
+                    let mut left = r;
+                    left.u1 = r.u0 + (r.u1 - r.u0) * (half / r.w as f32);
+                    batch.rect_uv(b.x, b.y, half, 20.0, left, u32::MAX);
+                    let mut right = r;
+                    right.u0 = r.u1 - (r.u1 - r.u0) * (half / r.w as f32);
+                    batch.rect_uv(b.x + half, b.y, half, 20.0, right, u32::MAX);
+                }
             }
             let color = if b.enabled {
                 u32::MAX
