@@ -328,15 +328,14 @@ pub fn button(
     if !atlas.sprites.contains_key(sprite)
         && let Some(widgets) = atlas.sprites.get("gui/widgets").copied()
     {
-        // Minecraft 1.16.5 stores all three button states in widgets.png:
-        // disabled at V=46, normal at V=66, hovered at V=86. Preserve the
-        // outer edges when rendering the narrower 98px buttons.
+        // Use the 1.16.5 button shades in the requested order: grey at rest,
+        // black on hover/press. Disabled keeps its vanilla strip.
         let v = if !active {
             46.0
         } else if hover {
-            86.0
-        } else {
             66.0
+        } else {
+            86.0
         };
         let left = (w / 2.0).floor();
         let right = w - left;
