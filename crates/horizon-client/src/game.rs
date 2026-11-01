@@ -337,7 +337,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
     // Bump the marker: older builds only expanded the asset index and skipped
     // resources shipped inside the version's client JAR.
-    let marker = root.join("assets").join(format!(".horizon-materialized-{index_id}-jar-v2"));
+    let marker = root.join("assets").join(format!(".horizon-materialized-{index_id}-jar-v3"));
     if marker.is_file() {
         return Ok(root.to_path_buf());
     }
