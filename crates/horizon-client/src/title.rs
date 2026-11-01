@@ -1210,23 +1210,31 @@ impl Title {
                 && cursor.1 >= b.y
                 && cursor.1 < b.y + 20.0;
             if matches!(&self.mode, Mode::Main) {
-                // Classic 1.16.5 widget: a thin grey frame around a dark,
-                // translucent rectangular button. The old menu must not use
-                // the newer sprite-sheet widget skin.
-                let frame = if !b.enabled {
-                    rgba(80, 80, 80, 255)
-                } else if hover {
-                    rgba(210, 210, 210, 255)
+                // Minecraft 1.16.5's actual gui/widgets.png button strip:
+                // normal at y=46, hovered at y=66, disabled at y=86.
+                if let Some(r) = atlas.sprites.get("gui/widgets").copied() {
+                    let source_y = if !b.enabled { 86.0 } else if hover { 66.0 } else { 46.0 };
+                    let mut widget = r;
+                    widget.v0 = r.v0 + (r.v1 - r.v0) * (source_y / 256.0);
+                    widget.v1 = r.v0 + (r.v1 - r.v0) * ((source_y + 20.0) / 256.0);
+                    batch.rect_uv(b.x, b.y, b.w, 20.0, widget, u32::MAX);
                 } else {
-                    rgba(160, 160, 160, 255)
-                };
-                let face = if hover {
-                    rgba(90, 90, 90, 210)
-                } else {
-                    rgba(20, 20, 20, 190)
-                };
-                batch.fill(atlas, b.x, b.y, b.w, 20.0, frame);
-                batch.fill(atlas, b.x + 1.0, b.y + 1.0, b.w - 2.0, 18.0, face);
+                    // Fallback only if the legacy widget texture is unavailable.
+                    let frame = if !b.enabled {
+                        rgba(80, 80, 80, 255)
+                    } else if hover {
+                        rgba(210, 210, 210, 255)
+                    } else {
+                        rgba(160, 160, 160, 255)
+                    };
+                    let face = if hover {
+                        rgba(90, 90, 90, 210)
+                    } else {
+                        rgba(20, 20, 20, 190)
+                    };
+                    batch.fill(atlas, b.x, b.y, b.w, 20.0, frame);
+                    batch.fill(atlas, b.x + 1.0, b.y + 1.0, b.w - 2.0, 18.0, face);
+                }
             } else {
                 let sprite = if !b.enabled {
                     "gui/sprites/widget/button_disabled"
