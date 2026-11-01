@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+//! Build retry marker: restart CI after a stalled Windows compilation.
 mod advancements;
 mod advancements_screen;
 mod agent;
