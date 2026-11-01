@@ -14582,6 +14582,8 @@ struct Loading {
     resource_failed: bool,
     shown: bool,
     menu: startup_menu::StartupMenu,
+    /// Audio is available on the title screen before the full game starts.
+    audio: Option<Audio>,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -14652,6 +14654,7 @@ impl Loading {
             "Horizon: loading the title artwork after {} ms",
             self.started.elapsed().as_millis()
         );
+        self.audio = Some(Audio::new(&root));
         self.menu.set_root(root, &self.settings);
         self.gui = Some(gui);
         horizon_client::ui_theme::reset_atlas();
@@ -14937,6 +14940,7 @@ fn run_loading(
         resource_failed: false,
         shown: false,
         menu,
+        audio: None,
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
