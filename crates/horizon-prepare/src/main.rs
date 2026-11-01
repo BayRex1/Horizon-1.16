@@ -150,12 +150,11 @@ fn main() -> ExitCode {
     }
     let is_client_verification =
         assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5");
-    let Some(root) = root
-        .or_else(default_root)
-        .or_else(|| is_client_verification.then(|| {
-            resources_dir.clone().or_else(default_resources_dir)
-        }).flatten())
-    else {
+    let Some(root) = root.or_else(default_root).or_else(|| {
+        is_client_verification
+            .then(|| resources_dir.clone().or_else(default_resources_dir))
+            .flatten()
+    }) else {
         eprintln!(
             "horizon-prepare: error: no research-lock.json beside this program or above the current folder; pass --root"
         );
@@ -170,7 +169,10 @@ fn main() -> ExitCode {
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
         Some("verify-1.16.5") => resources_dir
             .or_else(default_resources_dir)
-            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())
+            .ok_or_else(|| {
+                "could not determine the shared Minecraft resource folder; pass --resources-dir PATH"
+                    .to_string()
+            })
             .and_then(|dir| {
                 horizon_prepare::client_only::verify_1_16_5(&dir, &options.root, &log).map(|_| ())
             }),
