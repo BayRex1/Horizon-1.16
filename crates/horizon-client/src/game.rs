@@ -529,7 +529,9 @@ impl Options {
         // exists, just as the earlier Horizon builds did. The version-local
         // folders are only fallbacks for installations without that directory.
         let resources = roaming_resources
+            .as_ref()
             .filter(|path| path.is_dir())
+            .cloned()
             .or_else(|| {
                 [packaged, versioned.clone(), working_versioned]
                     .into_iter()
