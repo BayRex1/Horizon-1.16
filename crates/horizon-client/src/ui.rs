@@ -325,7 +325,44 @@ pub fn button(
     } else {
         "gui/sprites/widget/button"
     };
-    nine_slice(batch, atlas, sprite, x, y, w, h, u32::MAX);
+    if !atlas.sprites.contains_key(sprite)
+        && let Some(widgets) = atlas.sprites.get("gui/widgets").copied()
+    {
+        // Minecraft 1.16.5 stores all three button states in widgets.png:
+        // disabled at V=46, normal at V=66, hovered at V=86. Preserve the
+        // outer edges when rendering the narrower 98px buttons.
+        let v = if !active {
+            46.0
+        } else if hover {
+            86.0
+        } else {
+            66.0
+        };
+        let left = (w / 2.0).floor();
+        let right = w - left;
+        batch.rect_uv(
+            x,
+            y,
+            left,
+            h,
+            sub(widgets, [256.0, 256.0], [0.0, v, left, h]),
+            u32::MAX,
+        );
+        batch.rect_uv(
+            x + left,
+            y,
+            right,
+            h,
+            sub(
+                widgets,
+                [256.0, 256.0],
+                [200.0 - right, v, right, h],
+            ),
+            u32::MAX,
+        );
+    } else {
+        nine_slice(batch, atlas, sprite, x, y, w, h, u32::MAX);
+    }
     let color = if active {
         rgba(255, 255, 255, 255)
     } else {
@@ -413,6 +450,20 @@ pub fn menu_background(
     };
     if atlas.sprites.contains_key(sprite) {
         tiled(batch, atlas, sprite, x, y, w, h, 32.0, u32::MAX);
+    } else if !in_world && atlas.sprites.contains_key("gui/options_background") {
+        // Java 1.16.5 uses options_background.png for the classic tiled dirt
+        // backdrop; the separate menu_background sprite belongs to newer UI.
+        tiled(
+            batch,
+            atlas,
+            "gui/options_background",
+            x,
+            y,
+            w,
+            h,
+            32.0,
+            u32::MAX,
+        );
     } else {
         batch.fill(atlas, x, y, w, h, rgba(0, 0, 0, 160));
     }
