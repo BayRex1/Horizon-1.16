@@ -685,7 +685,7 @@ impl Title {
                     b(
                         cx - 100.0,
                         y,
-                        200.0,
+                        260.0,
                         &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
                         1,
@@ -693,7 +693,7 @@ impl Title {
                     b(
                         cx - 100.0,
                         y + 24.0,
-                        200.0,
+                        260.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
                         true,
                         4,
@@ -1873,7 +1873,7 @@ mod classic_tests {
             for (id, expected_y) in [(1, y), (4, y + 24.0)] {
                 let button = buttons.iter().find(|button| button.id == id).unwrap();
                 assert_eq!(button.y, expected_y);
-                assert_eq!(button.w, 200.0);
+                assert_eq!(button.w, 260.0);
                 assert_eq!(button.icon, None);
             }
             assert!(!buttons.iter().any(|button| button.id == 0));
