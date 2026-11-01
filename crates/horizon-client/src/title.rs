@@ -679,8 +679,8 @@ impl Title {
         };
         match &self.mode {
             Mode::Main => {
-                // Minecraft 1.16.5 offsets the menu column 24 GUI pixels
-                // to the right to leave room for the panorama's title art.
+                // Keep the classic menu's left edge fixed and extend the two
+                // primary buttons to the right, as requested for this layout.
                 let cx = (w / 2.0).floor() + 24.0;
                 let x = cx - 130.0;
                 let y = (h / 4.0).floor() + 48.0;
@@ -688,7 +688,7 @@ impl Title {
                     b(
                         x,
                         y,
-                        260.0,
+                        300.0,
                         &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
                         1,
@@ -696,7 +696,7 @@ impl Title {
                     b(
                         x,
                         y + 24.0,
-                        260.0,
+                        300.0,
                         &lang::get_or("menu.multiplayer", "Multiplayer"),
                         true,
                         4,
@@ -1875,7 +1875,7 @@ mod classic_tests {
             for (id, expected_y) in [(1, y), (4, y + 24.0)] {
                 let button = buttons.iter().find(|button| button.id == id).unwrap();
                 assert_eq!(button.y, expected_y);
-                assert_eq!(button.w, 260.0);
+                assert_eq!(button.w, 300.0);
                 assert_eq!(button.icon, None);
             }
             assert!(!buttons.iter().any(|button| button.id == 0));
