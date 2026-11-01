@@ -319,6 +319,55 @@ struct Options {
     /// What this Game executes; independent of its current server connection.
     execution_role: execution_role::ExecutionRole,
 }
+/// Import the official launcher's indexed 1.16.5 assets into a prepared Horizon
+/// resource bundle. The dev ZIP ships the generated Horizon manifest, while the
+/// player's Minecraft installation owns the vanilla asset index and object store.
+fn import_official_asset_store(root: &std::path::Path, minecraft_dirs: &[std::path::PathBuf]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let version_rel = std::path::Path::new("versions/1.16.5/1.16.5.json");
+    let source = minecraft_dirs.iter().find(|dir| {
+        dir.join(version_rel).is_file()
+            && dir.join("assets/indexes").is_dir()
+            && dir.join("assets/objects").is_dir()
+    });
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let version_json = source.join(version_rel);
+    let version: serde_json::Value = serde_json::from_slice(&std::fs::read(&version_json)?)
+        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let index_id = version.get("assetIndex").and_then(|v| v.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "version JSON has no assetIndex.id"))?;
+    let index_rel = std::path::PathBuf::from("assets/indexes").join(format!("{index_id}.json"));
+    let index_bytes = std::fs::read(source.join(&index_rel))?;
+    let index: serde_json::Value = serde_json::from_slice(&index_bytes)
+        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let objects = index.get("objects").and_then(serde_json::Value::as_object)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
+    std::fs::create_dir_all(root.join("assets/indexes"))?;
+    std::fs::copy(source.join(&index_rel), root.join(&index_rel))?;
+    for entry in objects.values() {
+        let Some(hash) = entry.get("hash").and_then(serde_json::Value::as_str) else { continue; };
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) { continue; }
+        let rel = std::path::PathBuf::from("assets/objects").join(&hash[..2]).join(hash);
+        let from = source.join(&rel);
+        let to = root.join(&rel);
+        if from.is_file() && !to.is_file() {
+            if let Some(parent) = to.parent() { std::fs::create_dir_all(parent)?; }
+            std::fs::copy(from, to)?;
+        }
+    }
+    std::fs::create_dir_all(root.join("versions/1.16.5"))?;
+    std::fs::copy(&version_json, root.join(version_rel))?;
+    let jar_rel = std::path::Path::new("versions/1.16.5/1.16.5.jar");
+    if source.join(jar_rel).is_file() && !root.join(jar_rel).is_file() {
+        std::fs::copy(source.join(jar_rel), root.join(jar_rel))?;
+    }
+    log::info!("Horizon: imported the Minecraft 1.16.5 asset index and {} object files into the prepared resource bundle", objects.len());
+    Ok(())
+}
+
 /// Expand the official Minecraft object store into the ordinary resource tree
 /// expected by the renderer, font loader and title screen. The cache is kept
 /// beside the downloaded assets and is rebuilt only when the asset index changes.
@@ -493,6 +542,19 @@ impl Options {
             .unwrap_or(versioned);
         // The official launcher stores assets by SHA-1 under assets/objects.
         // Expose a cached ordinary resource tree to existing game loaders.
+        // A dev ZIP contains Horizon's generated manifest but deliberately does
+        // not bundle Minecraft's copyrighted client assets. Merge the player's
+        // own official asset store into that prepared root before loading it.
+        let minecraft_dirs: Vec<PathBuf> = roaming_resources
+            .as_ref()
+            .into_iter()
+            .flat_map(|path| [path.clone(), path.parent().unwrap_or(path).to_path_buf()])
+            .collect();
+        if resources.join("horizon-resources.json").is_file() {
+            if let Err(error) = import_official_asset_store(&resources, &minecraft_dirs) {
+                log::warn!("Horizon: could not import the official Minecraft asset store: {error}");
+            }
+        }
         let resources = if resources.join("assets/indexes").is_dir()
             && resources.join("assets/objects").is_dir()
         {
