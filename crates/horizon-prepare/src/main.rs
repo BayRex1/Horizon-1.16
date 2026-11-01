@@ -17,7 +17,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare compile-exporters [--root PATH]
-       horizon-prepare verify-1.16.5 --resources-dir PATH [--root PATH]
+       horizon-prepare verify-1.16.5 [--resources-dir PATH] [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
        horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
@@ -29,7 +29,7 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
                         (default: HORIZON_SERVER_JAR, or the copy imported before)
   --minecraft-dir PATH  The official launcher's game directory with your installed copy
                         (default: HORIZON_MINECRAFT_DIR, or the launcher's own)
-  --root PATH           The Horizon folder to prepare (default: the folder this program is
+  --resources-dir PATH  Resource folder to verify (default: %APPDATA%\\.minecraft\\horizon-resources on Windows)\n  --root PATH           The Horizon folder to prepare (default: the folder this program is
                         in, else the nearest folder above the current one with research-lock.json)
 
 Needs Minecraft played once from the official launcher, and Java of the version
@@ -61,6 +61,18 @@ fn default_root() -> Option<PathBuf> {
     cwd.ancestors()
         .find(|d| d.join("research-lock.json").is_file())
         .map(Path::to_path_buf)
+}
+
+fn default_resources_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|appdata| appdata.join(".minecraft").join("horizon-resources"))
+    } else {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".minecraft").join("horizon-resources"))
+    }
 }
 
 fn main() -> ExitCode {
@@ -150,10 +162,10 @@ fn main() -> ExitCode {
     };
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
         Some("verify-1.16.5") => resources_dir
-            .as_deref()
-            .ok_or_else(|| "--resources-dir PATH is required".to_string())
+            .or_else(default_resources_dir)
+            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())
             .and_then(|dir| {
-                horizon_prepare::client_only::verify_1_16_5(dir, &options.root, &log).map(|_| ())
+                horizon_prepare::client_only::verify_1_16_5(&dir, &options.root, &log).map(|_| ())
             }),
         Some("compile-exporters") => {
             horizon_prepare::compile_exporters(&options, &log).map(|dir| {
