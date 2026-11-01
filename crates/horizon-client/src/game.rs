@@ -407,12 +407,25 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         .get("objects")
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
-    // Bump the marker: older builds only expanded the asset index and skipped
-    // resources shipped inside the version's client JAR.
+    // The title logo, edition banner and bitmap font are shipped inside the
+    // version JAR, not in the launcher asset index. A marker is valid only
+    // after that JAR was available and all menu-critical files were extracted.
+    // This also repairs installations that were first started before the JAR
+    // had been copied into the prepared resource root.
+    let client_jar = root.join("versions/1.16.5/1.16.5.jar");
+    let required_jar_resources = [
+        "assets/minecraft/textures/gui/title/minecraft.png",
+        "assets/minecraft/textures/gui/title/edition.png",
+        "assets/minecraft/font/default.json",
+        "assets/minecraft/textures/font/ascii.png",
+    ];
     let marker = root
         .join("assets")
-        .join(format!(".horizon-materialized-{index_id}-jar-v5"));
-    if marker.is_file() {
+        .join(format!(".horizon-materialized-{index_id}-jar-v6"));
+    if client_jar.is_file()
+        && required_jar_resources.iter().all(|path| root.join(path).is_file())
+        && marker.is_file()
+    {
         return Ok(root.to_path_buf());
     }
     std::fs::create_dir_all(root.join("assets"))?;
@@ -448,7 +461,6 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
 
     // Minecraft's client JAR contains important built-in resources that are
     // not represented by assets/indexes (notably the title logo and fonts).
-    let client_jar = root.join("versions/1.16.5/1.16.5.jar");
     if client_jar.is_file() {
         let file = std::fs::File::open(&client_jar)?;
         let mut archive =
@@ -504,7 +516,16 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
             root.join(path).is_file()
         );
     }
-    std::fs::write(&marker, format!("index={index_id}\nasset_files={copied}\n"))?;
+    if client_jar.is_file()
+        && required_jar_resources.iter().all(|path| root.join(path).is_file())
+    {
+        std::fs::write(&marker, format!("index={index_id}\nasset_files={copied}\njar=1.16.5\n"))?;
+    } else {
+        log::warn!(
+            "Horizon: menu resources are incomplete; the 1.16.5 client JAR must be present at {}",
+            client_jar.display()
+        );
+    }
     log::info!("Horizon: materialized {copied} Minecraft assets from index {index_id}");
     Ok(root.to_path_buf())
 }
