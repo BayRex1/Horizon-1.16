@@ -111,6 +111,23 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     ]);
     let report_path = report_dir.join("source-verified.json");
     write_json(&report_path, &report)?;
+
+    // The runtime uses this manifest as the readiness marker for the shared
+    // resource root. This client-only path records only vanilla files it has
+    // actually verified; it does not claim the legacy exporter pipeline ran.
+    let resource_manifest = Value::Object(vec![
+        ("schema".into(), Value::Int(crate::SCHEMA.to_string())),
+        ("minecraft".into(), Value::str("1.16.5")),
+        ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
+        ("version_json_sha1".into(), Value::str(VERSION_JSON_SHA1)),
+        ("asset_index_id".into(), Value::str("1.16")),
+        ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
+        ("verified_asset_objects".into(), Value::Int(checked.to_string())),
+        ("source".into(), Value::str("horizon-prepare verify-1.16.5")),
+    ]);
+    let resource_manifest_path = resources.join("horizon-resources.json");
+    write_json(&resource_manifest_path, &resource_manifest)?;
+    log(&format!("Created verified resource manifest: {}", resource_manifest_path.display()));
     log("Minecraft 1.16.5: client JAR and version metadata verified");
     log(&format!("Minecraft assets: {checked} objects verified"));
     log(&format!("Verification report: {}", report_path.display()));
