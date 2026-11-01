@@ -501,9 +501,11 @@ fn classic_navigation_buttons_sound_even_without_a_game_action() {
         (Action::None, false)
     );
     let main_buttons = f.title.buttons(480.0, 262.0);
-    assert!(!main_buttons
-        .iter()
-        .any(|button| button.label == "Minecraft Realms"));
+    assert!(
+        !main_buttons
+            .iter()
+            .any(|button| button.label == "Minecraft Realms")
+    );
     assert_eq!(
         main_buttons
             .iter()
