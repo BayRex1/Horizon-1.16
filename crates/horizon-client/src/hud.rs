@@ -400,14 +400,11 @@ impl HudAtlas {
         });
         type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
-            let relative = path
-                .strip_prefix(&textures)
-                .ok()
-                .or_else(|| {
-                    default_textures
-                        .as_ref()
-                        .and_then(|defaults| path.strip_prefix(defaults).ok())
-                })?;
+            let relative = path.strip_prefix(&textures).ok().or_else(|| {
+                default_textures
+                    .as_ref()
+                    .and_then(|defaults| path.strip_prefix(defaults).ok())
+            })?;
             let name = relative
                 .with_extension("")
                 .to_string_lossy()
