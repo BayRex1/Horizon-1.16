@@ -1856,20 +1856,21 @@ mod classic_tests {
             let cx = (w / 2.0).floor();
             let y = (h / 4.0).floor() + 48.0;
 
-            for (id, expected_y) in [(1, y), (4, y + 24.0), (0, y + 48.0)] {
+            for (id, expected_y) in [(1, y), (4, y + 24.0)] {
                 let button = buttons.iter().find(|button| button.id == id).unwrap();
                 assert_eq!(button.y, expected_y);
                 assert_eq!(button.w, 200.0);
                 assert_eq!(button.icon, None);
             }
+            assert!(!buttons.iter().any(|button| button.id == 0));
 
             let options = buttons.iter().find(|button| button.id == 3).unwrap();
             let quit = buttons.iter().find(|button| button.id == 2).unwrap();
             assert_eq!(
                 (options.x, options.y, options.w),
-                (cx - 100.0, y + 72.0, 98.0)
+                (cx - 100.0, y + 48.0, 98.0)
             );
-            assert_eq!((quit.x, quit.y, quit.w), (cx + 2.0, y + 72.0, 98.0));
+            assert_eq!((quit.x, quit.y, quit.w), (cx + 2.0, y + 48.0, 98.0));
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
                 Action::Options
