@@ -597,11 +597,16 @@ impl Loading {
                         title.release();
                         title.release_field();
                     } else {
-                        let (action, _) = title.click(
+                        let (action, sound) = title.click(
                             self.menu.cursor.0,
                             self.menu.cursor.1,
                             (batch.width, batch.height),
                         );
+                        if sound {
+                            if let Some(audio) = self.audio.as_mut() {
+                                audio.play_button_click();
+                            }
+                        }
                         title.press_field(
                             &gui.atlas,
                             self.menu.cursor,
