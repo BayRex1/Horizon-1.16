@@ -500,11 +500,15 @@ fn classic_navigation_buttons_sound_even_without_a_game_action() {
         f.title.click(0.0, 0.0, (480.0, 262.0)),
         (Action::None, false)
     );
-    assert!(
-        !f.title
-            .buttons(480.0, 262.0)
+    let main_buttons = f.title.buttons(480.0, 262.0);
+    assert!(main_buttons.iter().any(|button| button.label == "Minecraft Realms"));
+    assert_eq!(
+        main_buttons
             .iter()
-            .any(|button| button.label == "Minecraft Realms")
+            .filter(|button| matches!(button.id, 1 | 4 | 5))
+            .map(|button| (button.w, button.y))
+            .collect::<Vec<_>>(),
+        vec![(200.0, 113.0), (200.0, 137.0), (200.0, 161.0)]
     );
     assert_eq!(f.click_with_sound("Singleplayer"), (Action::None, true));
     assert_eq!(
