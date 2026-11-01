@@ -1886,7 +1886,7 @@ mod classic_tests {
                 (options.x, options.y, options.w),
                 (cx - 100.0, y + 48.0, 98.0)
             );
-            assert_eq!((quit.x, quit.y, quit.w), (cx + 35.0, y + 48.0, 125.0));
+            assert_eq!((quit.x, quit.y, quit.w), (cx + 1.0, y + 48.0, 125.0));
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
                 Action::Options
