@@ -904,16 +904,13 @@ impl Title {
                     256.0,
                     64.0,
                 );
-                // Keep the original Java Edition branding used by the 1.16.5 title screen.
-                let edition = "JAVA EDITION";
-                let edition_width = HudBatch::text_width(atlas, edition);
-                batch.text(
+                // Vanilla LogoRenderer draws the edition artwork from edition.png.
+                batch.sprite_region(
                     atlas,
-                    edition,
-                    ((w - edition_width) / 2.0).floor(),
-                    69.0,
-                    rgba(255, 255, 255, 255),
-                    true,
+                    "gui/title/edition",
+                    [(w / 2.0).floor() - 64.0, 69.0, 128.0, 16.0],
+                    128.0,
+                    16.0,
                 );
                 if !hide_splash && let Some(splash) = self.splash.as_deref() {
                     let tw = HudBatch::text_width(atlas, splash);
