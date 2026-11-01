@@ -283,7 +283,10 @@ pub(super) fn stage_pack(
     atlas.font.japanese = japanese;
     let gui = UiResources {
         atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(&root)),
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces::load_over(
+            &root,
+            vanilla_root,
+        )),
     };
     progress.set(2);
     let pack = PackResources::load(
