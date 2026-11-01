@@ -370,7 +370,7 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-            let name = entry.name().replace('\\\\', "/");
+            let name = entry.name().replace('\\', "/");
             let Some(relative) = name.strip_prefix("assets/minecraft/") else { continue };
             let relative_path = std::path::Path::new(relative);
             if relative_path.as_os_str().is_empty()
