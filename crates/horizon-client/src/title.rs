@@ -702,15 +702,15 @@ impl Title {
                     b(
                         cx - 100.0,
                         y + 48.0,
-                        98.0,
+                        125.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
                     ),
                     b(
-                        cx + 2.0,
+                        cx + 35.0,
                         y + 48.0,
-                        98.0,
+                        125.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
@@ -1280,10 +1280,15 @@ impl Title {
                 continue;
             }
             let tw = HudBatch::text_width(atlas, &b.label);
+            let label_shift = if matches!(&self.mode, Mode::Main) && matches!(b.id, 1 | 4) {
+                12.0
+            } else {
+                0.0
+            };
             batch.text(
                 atlas,
                 &b.label,
-                b.x + (b.w / 2.0).floor() - (tw.ceil() / 2.0).floor(),
+                b.x + (b.w / 2.0).floor() - (tw.ceil() / 2.0).floor() + label_shift,
                 b.y + 6.0,
                 color,
                 true,
@@ -1884,7 +1889,7 @@ mod classic_tests {
                 (options.x, options.y, options.w),
                 (cx - 100.0, y + 48.0, 98.0)
             );
-            assert_eq!((quit.x, quit.y, quit.w), (cx + 2.0, y + 48.0, 98.0));
+            assert_eq!((quit.x, quit.y, quit.w), (cx + 35.0, y + 48.0, 125.0));
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
                 Action::Options
