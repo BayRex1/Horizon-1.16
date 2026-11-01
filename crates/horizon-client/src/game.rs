@@ -548,7 +548,7 @@ impl Options {
         // folders are only fallbacks for installations without that directory.
         let resources = roaming_resources
             .as_ref()
-            .filter(|path| path.is_dir())
+            .filter(|path| path.is_dir() && path.join("horizon-resources.json").is_file())
             .cloned()
             .or_else(|| {
                 [packaged, versioned.clone(), working_versioned]
