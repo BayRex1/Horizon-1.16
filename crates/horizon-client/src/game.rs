@@ -14695,15 +14695,11 @@ impl Loading {
                 self.draw();
                 event_loop.set_control_flow(ControlFlow::Poll);
             } else {
-                // The title/loading screen has no simulation to advance. Polling
-                // continuously redraws it hundreds of times per second and can
-                // saturate a CPU, especially with a software graphics adapter.
-                // The software adapter on older Windows systems is expensive.
-                // The title screen has no simulation; 15 FPS is enough for its
-                // subtle splash/panorama animation and leaves the CPU idle longer.
+                // Keep the title screen responsive without an unbounded redraw loop.
+                // A 16 ms cadence targets approximately 60 FPS.
                 w.request_redraw();
                 event_loop.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + Duration::from_millis(66),
+                    Instant::now() + Duration::from_millis(16),
                 ));
             }
         } else {
