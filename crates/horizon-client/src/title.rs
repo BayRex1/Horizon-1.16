@@ -710,7 +710,7 @@ impl Title {
                         3,
                     ),
                     b(
-                        cx + 35.0,
+                        cx + 1.0,
                         y + 48.0,
                         125.0,
                         &lang::get_or("menu.quit", "Quit Game"),
@@ -1207,15 +1207,15 @@ impl Title {
                 && cursor.1 >= b.y
                 && cursor.1 < b.y + 20.0;
             if matches!(&self.mode, Mode::Main) {
-                // Minecraft 1.16.5's actual gui/widgets.png button strip:
-                // normal at y=46, hovered at y=66, disabled at y=86.
+                // Match the requested 1.16.5 button shades: grey at rest,
+                // black while hovered; disabled retains its vanilla strip.
                 if let Some(r) = atlas.sprites.get("gui/widgets").copied() {
                     let source_y = if !b.enabled {
                         86.0
                     } else if hover {
-                        66.0
-                    } else {
                         46.0
+                    } else {
+                        66.0
                     };
                     let mut widget = r;
                     widget.v0 = r.v0 + (r.v1 - r.v0) * (source_y / 256.0);
@@ -1278,7 +1278,7 @@ impl Title {
             }
             let tw = HudBatch::text_width(atlas, &b.label);
             let label_shift = if matches!(&self.mode, Mode::Main) && matches!(b.id, 1 | 4) {
-                12.0
+                -44.0
             } else {
                 0.0
             };
