@@ -122,7 +122,10 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
         ("version_json_sha1".into(), Value::str(VERSION_JSON_SHA1)),
         ("asset_index_id".into(), Value::str("1.16")),
         ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
-        ("verified_asset_objects".into(), Value::Int(checked.to_string())),
+        (
+            "verified_asset_objects".into(),
+            Value::Int(checked.to_string()),
+        ),
         ("source".into(), Value::str("horizon-prepare verify-1.16.5")),
     ]);
     let resource_manifest_path = resources.join("horizon-resources.json");
