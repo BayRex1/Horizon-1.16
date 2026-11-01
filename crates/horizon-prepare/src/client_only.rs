@@ -127,7 +127,10 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     ]);
     let resource_manifest_path = resources.join("horizon-resources.json");
     write_json(&resource_manifest_path, &resource_manifest)?;
-    log(&format!("Created verified resource manifest: {}", resource_manifest_path.display()));
+    log(&format!(
+        "Created verified resource manifest: {}",
+        resource_manifest_path.display()
+    ));
     log("Minecraft 1.16.5: client JAR and version metadata verified");
     log(&format!("Minecraft assets: {checked} objects verified"));
     log(&format!("Verification report: {}", report_path.display()));
