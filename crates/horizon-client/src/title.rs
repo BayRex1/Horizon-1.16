@@ -701,18 +701,20 @@ impl Title {
                         true,
                         4,
                     ),
+                    // The lower pair spans the same 300px as the primary
+                    // buttons, with a 5px gap between the two controls.
                     b(
-                        cx - 100.0,
+                        x,
                         y + 48.0,
-                        98.0,
+                        147.5,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
                     ),
                     b(
-                        cx + 1.0,
+                        x + 152.5,
                         y + 48.0,
-                        125.0,
+                        147.5,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
@@ -1281,9 +1283,9 @@ impl Title {
                 match b.id {
                     // Keep the two primary labels fixed while their buttons move left.
                     1 | 4 => -32.0,
-                    // Small independent label adjustments for the lower buttons.
-                    2 => -5.0,
-                    3 => 5.0,
+                    // Align the lower labels to the requested original positions.
+                    3 => -20.0,
+                    2 => -12.0,
                     _ => 0.0,
                 }
             } else {
@@ -1890,11 +1892,17 @@ mod classic_tests {
 
             let options = buttons.iter().find(|button| button.id == 3).unwrap();
             let quit = buttons.iter().find(|button| button.id == 2).unwrap();
+            let main_left = cx - 142.0;
             assert_eq!(
                 (options.x, options.y, options.w),
-                (cx - 100.0, y + 48.0, 98.0)
+                (main_left, y + 48.0, 147.5)
             );
-            assert_eq!((quit.x, quit.y, quit.w), (cx + 1.0, y + 48.0, 125.0));
+            assert_eq!(
+                (quit.x, quit.y, quit.w),
+                (main_left + 152.5, y + 48.0, 147.5)
+            );
+            assert_eq!(quit.x - (options.x + options.w), 5.0);
+            assert_eq!(quit.x + quit.w, main_left + 300.0);
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
                 Action::Options
