@@ -423,7 +423,9 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         .join("assets")
         .join(format!(".horizon-materialized-{index_id}-jar-v6"));
     if client_jar.is_file()
-        && required_jar_resources.iter().all(|path| root.join(path).is_file())
+        && required_jar_resources
+            .iter()
+            .all(|path| root.join(path).is_file())
         && marker.is_file()
     {
         return Ok(root.to_path_buf());
@@ -519,7 +521,10 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
     if client_jar.is_file()
         && required_jar_resources.iter().all(|path| root.join(path).is_file())
     {
-        std::fs::write(&marker, format!("index={index_id}\nasset_files={copied}\njar=1.16.5\n"))?;
+        std::fs::write(
+            &marker,
+            format!("index={index_id}\nasset_files={copied}\njar=1.16.5\n"),
+        )?;
     } else {
         log::warn!(
             "Horizon: menu resources are incomplete; the 1.16.5 client JAR must be present at {}",
@@ -1450,7 +1455,9 @@ impl UiResources {
     pub fn load(root: &std::path::Path, defaults: &std::path::Path) -> Result<Self> {
         Ok(Self {
             atlas: HudAtlas::build_over(root, defaults)?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load_over(root, defaults)),
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load_over(
+                root, defaults,
+            )),
         })
     }
 }
