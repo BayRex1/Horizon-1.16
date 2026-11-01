@@ -1213,7 +1213,13 @@ impl Title {
                 // Minecraft 1.16.5's actual gui/widgets.png button strip:
                 // normal at y=46, hovered at y=66, disabled at y=86.
                 if let Some(r) = atlas.sprites.get("gui/widgets").copied() {
-                    let source_y = if !b.enabled { 86.0 } else if hover { 66.0 } else { 46.0 };
+                    let source_y = if !b.enabled {
+                        86.0
+                    } else if hover {
+                        66.0
+                    } else {
+                        46.0
+                    };
                     let mut widget = r;
                     widget.v0 = r.v0 + (r.v1 - r.v0) * (source_y / 256.0);
                     widget.v1 = r.v0 + (r.v1 - r.v0) * ((source_y + 20.0) / 256.0);
