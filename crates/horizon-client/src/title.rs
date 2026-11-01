@@ -679,7 +679,7 @@ impl Title {
         };
         match &self.mode {
             Mode::Main => {
-                let cx = (w / 2.0).floor();
+                let cx = (w / 2.0).floor() + 24.0;
                 let y = (h / 4.0).floor() + 48.0;
                 vec![
                     b(
@@ -937,7 +937,7 @@ impl Title {
                     }
                 }
                 let version = "Horizon 1.16.5 (Rust)";
-                batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
+                batch.text(atlas, version, 2.0, h - 10.0, u32::MAX, true);
                 let notice = "Not affiliated with Mojang or Microsoft";
                 let tw = HudBatch::text_width(atlas, notice);
                 batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
@@ -1216,9 +1216,9 @@ impl Title {
                     let source_y = if !b.enabled {
                         86.0
                     } else if hover {
-                        66.0
-                    } else {
                         46.0
+                    } else {
+                        66.0
                     };
                     let mut widget = r;
                     widget.v0 = r.v0 + (r.v1 - r.v0) * (source_y / 256.0);
@@ -1229,14 +1229,14 @@ impl Title {
                     let frame = if !b.enabled {
                         rgba(80, 80, 80, 255)
                     } else if hover {
-                        rgba(210, 210, 210, 255)
-                    } else {
                         rgba(160, 160, 160, 255)
+                    } else {
+                        rgba(210, 210, 210, 255)
                     };
                     let face = if hover {
-                        rgba(90, 90, 90, 210)
-                    } else {
                         rgba(20, 20, 20, 190)
+                    } else {
+                        rgba(90, 90, 90, 210)
                     };
                     batch.fill(atlas, b.x, b.y, b.w, 20.0, frame);
                     batch.fill(atlas, b.x + 1.0, b.y + 1.0, b.w - 2.0, 18.0, face);
@@ -1867,7 +1867,7 @@ mod classic_tests {
         );
         for (w, h) in [(960.0, 523.0), (480.0, 320.0), (427.0, 240.0)] {
             let buttons = title.buttons(w, h);
-            let cx = (w / 2.0).floor();
+            let cx = (w / 2.0).floor() + 24.0;
             let y = (h / 4.0).floor() + 48.0;
 
             for (id, expected_y) in [(1, y), (4, y + 24.0)] {
