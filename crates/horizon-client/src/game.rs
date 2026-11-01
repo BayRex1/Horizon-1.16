@@ -329,7 +329,11 @@ fn import_official_asset_store(
     use std::io::{Error, ErrorKind};
     let version_rel = std::path::Path::new("versions/1.16.5/1.16.5.json");
     let source = minecraft_dirs.iter().find(|dir| {
-        dir.join(version_rel).is_file()
+        // The shared resource root may itself be the official asset store.
+        // Never copy a file onto itself; materialize_asset_objects will read
+        // the assets directly from that root.
+        *dir != root
+            && dir.join(version_rel).is_file()
             && dir.join("assets/indexes").is_dir()
             && dir.join("assets/objects").is_dir()
     });
