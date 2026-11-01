@@ -325,7 +325,14 @@ fn load_bitmap(
                 top,
                 right: cell_w as f32 * scale,
                 bottom: top + cell_h as f32 * scale,
-                advance: (0.5 + used as f32 * scale).floor() + 1.0,
+                // The vanilla ASCII bitmap sheet's space cell is fully transparent;
+                // measuring its visible pixels would collapse word spacing to 1 px.
+                // Minecraft's 1.16.5 bitmap font gives the space a 4 px advance.
+                advance: if *ch == ' ' {
+                    4.0
+                } else {
+                    (0.5 + used as f32 * scale).floor() + 1.0
+                },
                 offset: 1.0,
             };
             let glyph = match &sheet {
