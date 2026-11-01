@@ -380,7 +380,10 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
                 continue;
             }
             let destination = root.join("assets/minecraft").join(relative_path);
-            if destination.is_file() { continue; }
+            // The prepared root can still contain same-path resources from the
+            // newer bootstrap version (26.3). For Minecraft 1.16.5, the client
+            // JAR is authoritative: replace those files instead of silently
+            // keeping the newer logo/font textures.
             if let Some(parent) = destination.parent() { std::fs::create_dir_all(parent)?; }
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes)?;
