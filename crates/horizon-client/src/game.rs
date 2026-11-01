@@ -14582,8 +14582,10 @@ struct Loading {
     resource_failed: bool,
     shown: bool,
     menu: startup_menu::StartupMenu,
-    /// Audio is available on the title screen before the full game starts.
+    /// Audio and menu music are active before the full game starts.
     audio: Option<Audio>,
+    music: horizon_client::music::MusicManager,
+    audio_tick_at: Instant,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -14690,6 +14692,27 @@ impl Loading {
             self.error = Some(error);
             event_loop.exit();
             return;
+        }
+        if self.audio_tick_at.elapsed() >= Duration::from_millis(50) {
+            self.audio_tick_at = Instant::now();
+            if let Some(audio) = self.audio.as_mut() {
+                self.music.tick(
+                    Some(&horizon_client::music::Music::menu()),
+                    1.0,
+                    false,
+                    audio,
+                );
+                audio.tick(
+                    false,
+                    &horizon_client::sound_engine::TickContext {
+                        player_underwater: false,
+                        player_removed: true,
+                        vehicle: None,
+                        carts: Vec::new(),
+                        frozen: false,
+                    },
+                );
+            }
         }
         if let Some(w) = &self.window {
             if self.options.as_ref().is_some_and(|o| o.offscreen) {
@@ -14941,6 +14964,8 @@ fn run_loading(
         shown: false,
         menu,
         audio: None,
+        music: horizon_client::music::MusicManager::default(),
+        audio_tick_at: Instant::now(),
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
