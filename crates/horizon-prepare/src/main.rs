@@ -148,7 +148,14 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let Some(root) = root.or_else(default_root) else {
+    let is_client_verification =
+        assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5");
+    let Some(root) = root
+        .or_else(default_root)
+        .or_else(|| is_client_verification.then(|| {
+            resources_dir.clone().or_else(default_resources_dir)
+        }).flatten())
+    else {
         eprintln!(
             "horizon-prepare: error: no research-lock.json beside this program or above the current folder; pass --root"
         );
