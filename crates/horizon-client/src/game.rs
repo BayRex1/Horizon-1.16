@@ -475,16 +475,20 @@ impl Options {
         let roaming_resources = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .map(|appdata| appdata.join(".minecraft").join("horizon-resources"));
-        // Prefer the roaming resource directory when it contains assets,
-        // even when it has no Horizon-specific manifest (official Minecraft
-        // installations do not create one). Keep the existing prepared-bundle
-        // fallbacks for development and non-Windows installations.
-        let resources = roaming_resources
-            .filter(|path| path.join("assets").is_dir())
+        // Gameplay resources must come from a Horizon-prepared bundle:
+        // an official launcher directory has assets/ and versions/, but it
+        // does not contain horizon-resources.json (block registry, tags and
+        // exported models). Prefer the prepared bundle beside the executable
+        // or checkout; only use the roaming directory when it is prepared too.
+        let prepared = [packaged, versioned.clone(), working_versioned]
+            .into_iter()
+            .find(|path| path.join("horizon-resources.json").is_file());
+        let resources = prepared
             .or_else(|| {
-                [packaged, versioned.clone(), working_versioned]
-                    .into_iter()
-                    .find(|path| path.join("horizon-resources.json").is_file())
+                roaming_resources.filter(|path| {
+                    path.join("horizon-resources.json").is_file()
+                        && path.join("assets").is_dir()
+                })
             })
             .unwrap_or(versioned);
         // The official launcher stores assets by SHA-1 under assets/objects.
