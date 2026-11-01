@@ -353,11 +353,7 @@ pub fn button(
             y,
             right,
             h,
-            sub(
-                widgets,
-                [256.0, 256.0],
-                [200.0 - right, v, right, h],
-            ),
+            sub(widgets, [256.0, 256.0], [200.0 - right, v, right, h]),
             u32::MAX,
         );
     } else {
