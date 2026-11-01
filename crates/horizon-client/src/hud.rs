@@ -402,13 +402,12 @@ impl HudAtlas {
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
             let relative = path
                 .strip_prefix(&textures)
-                .or_else(|_| {
+                .ok()
+                .or_else(|| {
                     default_textures
                         .as_ref()
                         .and_then(|defaults| path.strip_prefix(defaults).ok())
-                        .ok_or(std::path::StripPrefixError::from(std::path::Path::new("invalid")))
-                })
-                .ok()?;
+                })?;
             let name = relative
                 .with_extension("")
                 .to_string_lossy()
