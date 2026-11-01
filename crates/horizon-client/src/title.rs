@@ -682,7 +682,7 @@ impl Title {
                 // Keep the classic menu's left edge fixed and extend the two
                 // primary buttons to the right, as requested for this layout.
                 let cx = (w / 2.0).floor() + 24.0;
-                let x = cx - 130.0;
+                let x = cx - 142.0;
                 let y = (h / 4.0).floor() + 48.0;
                 vec![
                     b(
@@ -702,7 +702,7 @@ impl Title {
                         4,
                     ),
                     b(
-                        cx - 100.0,
+                        cx - 95.0,
                         y + 48.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
@@ -1277,8 +1277,15 @@ impl Title {
                 continue;
             }
             let tw = HudBatch::text_width(atlas, &b.label);
-            let label_shift = if matches!(&self.mode, Mode::Main) && matches!(b.id, 1 | 4) {
-                -44.0
+            let label_shift = if matches!(&self.mode, Mode::Main) {
+                match b.id {
+                    // Keep the two primary labels fixed while their buttons move left.
+                    1 | 4 => -32.0,
+                    // Small independent label adjustments for the lower buttons.
+                    2 => -5.0,
+                    3 => 5.0,
+                    _ => 0.0,
+                }
             } else {
                 0.0
             };
@@ -1874,6 +1881,7 @@ mod classic_tests {
 
             for (id, expected_y) in [(1, y), (4, y + 24.0)] {
                 let button = buttons.iter().find(|button| button.id == id).unwrap();
+                assert_eq!(button.x, cx - 142.0);
                 assert_eq!(button.y, expected_y);
                 assert_eq!(button.w, 300.0);
                 assert_eq!(button.icon, None);
@@ -1884,7 +1892,7 @@ mod classic_tests {
             let quit = buttons.iter().find(|button| button.id == 2).unwrap();
             assert_eq!(
                 (options.x, options.y, options.w),
-                (cx - 100.0, y + 48.0, 98.0)
+                (cx - 95.0, y + 48.0, 98.0)
             );
             assert_eq!((quit.x, quit.y, quit.w), (cx + 1.0, y + 48.0, 125.0));
             assert_eq!(
