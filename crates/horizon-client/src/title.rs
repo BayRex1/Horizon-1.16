@@ -702,7 +702,7 @@ impl Title {
                         4,
                     ),
                     b(
-                        cx - 95.0,
+                        cx - 100.0,
                         y + 48.0,
                         98.0,
                         &lang::get_or("menu.options", "Options..."),
@@ -1892,7 +1892,7 @@ mod classic_tests {
             let quit = buttons.iter().find(|button| button.id == 2).unwrap();
             assert_eq!(
                 (options.x, options.y, options.w),
-                (cx - 95.0, y + 48.0, 98.0)
+                (cx - 100.0, y + 48.0, 98.0)
             );
             assert_eq!((quit.x, quit.y, quit.w), (cx + 1.0, y + 48.0, 125.0));
             assert_eq!(
