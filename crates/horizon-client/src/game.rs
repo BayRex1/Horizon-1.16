@@ -566,10 +566,10 @@ impl Options {
             .into_iter()
             .flat_map(|path| [path.clone(), path.parent().unwrap_or(path).to_path_buf()])
             .collect();
-        if resources.join("horizon-resources.json").is_file() {
-            if let Err(error) = import_official_asset_store(&resources, &minecraft_dirs) {
-                log::warn!("Horizon: could not import the official Minecraft asset store: {error}");
-            }
+        if resources.join("horizon-resources.json").is_file()
+            && let Err(error) = import_official_asset_store(&resources, &minecraft_dirs)
+        {
+            log::warn!("Horizon: could not import the official Minecraft asset store: {error}");
         }
         let resources = if resources.join("assets/indexes").is_dir()
             && resources.join("assets/objects").is_dir()
