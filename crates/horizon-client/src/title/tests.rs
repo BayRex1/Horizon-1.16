@@ -512,7 +512,7 @@ fn classic_navigation_buttons_sound_even_without_a_game_action() {
             .filter(|button| matches!(button.id, 1 | 4))
             .map(|button| (button.w, button.y))
             .collect::<Vec<_>>(),
-        vec![(260.0, 113.0), (260.0, 137.0)]
+        vec![(300.0, 113.0), (300.0, 137.0)]
     );
     assert_eq!(
         main_buttons
