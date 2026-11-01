@@ -304,6 +304,19 @@ pub fn centered_text(
         batch.text_styled(atlas, &shown, x + 1.0, y, color, true);
     }
 }
+/// Minecraft 1.16.5's legacy widgets.png button rows. The atlas is sampled
+/// with top-left UVs: the normal and highlighted rows are deliberately kept
+/// distinct so hover does not invert the visual state.
+fn legacy_button_row(active: bool, hover: bool) -> f32 {
+    if !active {
+        46.0
+    } else if hover {
+        66.0
+    } else {
+        86.0
+    }
+}
+
 /// Button (AbstractButton): nine-slice sprite plus the centred label.
 pub fn button(
     batch: &mut HudBatch,
@@ -328,16 +341,10 @@ pub fn button(
     if !atlas.sprites.contains_key(sprite)
         && let Some(widgets) = atlas.sprites.get("gui/widgets").copied()
     {
-        // Minecraft 1.16.5 stores all three button states in widgets.png:
-        // disabled at V=46, normal at V=66, hovered at V=86. Preserve the
-        // outer edges when rendering the narrower 98px buttons.
-        let v = if !active {
-            46.0
-        } else if hover {
-            86.0
-        } else {
-            66.0
-        };
+        // Minecraft 1.16.5's normal and highlighted rows were visually
+        // reversed in the old fallback mapping. Keep disabled at V=46 and
+        // map the normal/highlighted states to the correct sampled rows.
+        let v = legacy_button_row(active, hover);
         let left = (w / 2.0).floor();
         let right = w - left;
         batch.rect_uv(
@@ -1528,6 +1535,14 @@ mod tests {
         s.wheel(-2.0, 18.0, top, bottom, content);
         assert_eq!(s.amount, 36.0);
     }
+    #[test]
+    fn legacy_button_texture_uses_the_expected_visual_state_rows() {
+        assert_eq!(legacy_button_row(false, false), 46.0);
+        assert_eq!(legacy_button_row(true, false), 86.0);
+        assert_eq!(legacy_button_row(true, true), 66.0);
+        assert_eq!(legacy_button_row(false, true), 46.0);
+    }
+
     #[test]
     fn edit_box_clicks_place_the_cursor_and_select() {
         let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
