@@ -229,8 +229,8 @@ mod tests {
         assert_eq!(block(0, 0, 0), "bedrock");
         assert_eq!(block(0, 10, 0), "grass_block");
         assert_eq!(block(0, 9, 0), "dirt");
-        assert_eq!(block(0, 6, 0), "dirt");
-        assert_eq!(block(0, 5, 0), "stone");
+        assert_eq!(block(0, 7, 0), "dirt");
+        assert_eq!(block(0, 6, 0), "stone");
         assert_eq!(block(0, 11, 0), "water");
         assert_eq!(block(0, 63, 0), "water");
         assert_eq!(block(0, 64, 0), "air");
