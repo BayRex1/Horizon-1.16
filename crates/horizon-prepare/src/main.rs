@@ -17,7 +17,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare compile-exporters [--root PATH]
-       horizon-prepare verify-1.16.5 [--resources-dir PATH] [--root PATH]
+       horizon-prepare verify-1.16.5 [--resources-dir PATH] [--root PATH]\n       horizon-prepare prepare-1.16.5 [--resources-dir PATH] [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
        horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
@@ -35,7 +35,7 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
 Needs Minecraft played once from the official launcher, and Java of the version
 research-lock.json pins. Releases use a runtime; development or changed exporters need a JDK.
 compile-exporters builds and validates a release bundle from the already imported pinned jars.
-The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.\nIt writes a verification report only; it does not prepare runtime world data.
+The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.\nIt writes a verification report only; it does not prepare runtime world data.\n\nprepare-1.16.5 builds a minimal single-player prototype registry bundle from the\nbundled legacy block-state reference. It does not provide full worldgen parity.
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -129,7 +129,7 @@ fn main() -> ExitCode {
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
             "--resources-dir"
-                if assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5") =>
+                if matches!(assets.as_deref().and_then(|a| a.to_str()), Some("verify-1.16.5" | "prepare-1.16.5")) =>
             {
                 value("--resources-dir").map(|v| resources_dir = Some(v))
             }
@@ -176,7 +176,7 @@ fn main() -> ExitCode {
             .and_then(|dir| {
                 horizon_prepare::client_only::verify_1_16_5(&dir, &options.root, &log).map(|_| ())
             }),
-        Some("compile-exporters") => {
+        Some("prepare-1.16.5") => resources_dir\n            .or_else(default_resources_dir)\n            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())\n            .and_then(|dir| horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())),\n        Some("compile-exporters") => {
             horizon_prepare::compile_exporters(&options, &log).map(|dir| {
                 log(&dir.display().to_string());
             })
