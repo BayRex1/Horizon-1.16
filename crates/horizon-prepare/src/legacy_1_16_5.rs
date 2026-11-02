@@ -2,7 +2,11 @@
 //! This is intentionally separate from the pinned 26.3 Java exporter pipeline.
 use horizon_world::legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty};
 use serde_json::{json, Value};
-use std::{\n    collections::BTreeMap,\n    fs,\n    path::{Path, PathBuf},\n};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 fn property_values(property: &LegacyBlockProperty) -> Result<Vec<String>, String> {
     match property.kind.as_str() {
@@ -12,7 +16,10 @@ fn property_values(property: &LegacyBlockProperty) -> Result<Vec<String>, String
     }
 }
 
-fn state_properties(\n    block: &LegacyBlock,\n    mut offset: u32,\n) -> Result<BTreeMap<String, String>, String> {
+fn state_properties(
+    block: &LegacyBlock,
+    mut offset: u32,
+) -> Result<BTreeMap<String, String>, String> {
     let mut result = BTreeMap::new();
     for property in block.states.iter().rev() {
         let values = property_values(property)?;
@@ -45,7 +52,10 @@ fn facts_bundle() -> Result<(Value, usize), String> {
         let count = block.max_state_id - block.min_state_id + 1;
         let mut combinations = 1u32;
         for property in &block.states {
-            combinations = combinations.checked_mul(property_values(property)?.len() as u32)
+            let radix = u32::try_from(property_values(property)?.len())
+                .map_err(|e| e.to_string())?;
+            combinations = combinations
+                .checked_mul(radix)
                 .ok_or_else(|| format!("State count overflow for {}", block.name))?;
         }
         if combinations != count {
@@ -119,9 +129,16 @@ mod tests {
 
     #[test]
     fn legacy_state_order_matches_the_known_grass_block_default() {
-        let block = blocks()\n            .unwrap()\n            .into_iter()\n            .find(|block| block.name == "grass_block")\n            .unwrap();
+        let block = blocks()
+            .unwrap()
+            .into_iter()
+            .find(|block| block.name == "grass_block")
+            .unwrap();
         assert_eq!(block.default_state - block.min_state_id, 1);
-        assert_eq!(\n            state_properties(&block, 1).unwrap().get("snowy").map(String::as_str),\n            Some("false")\n        );
+        assert_eq!(
+            state_properties(&block, 1).unwrap().get("snowy").map(String::as_str),
+            Some("false")
+        );
     }
 
     #[test]
