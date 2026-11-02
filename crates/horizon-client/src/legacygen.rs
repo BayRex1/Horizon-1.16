@@ -24,6 +24,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct LegacyTerrainWorker {
     cached: Option<(i32, i32, LegacyTerrainDensityChunk1_16_5)>,
+    surface_heights: Option<(i32, i32, [i16; 256])>,
 }
 
 /// Minimal 1.16.5 base-terrain generator for the live chunk streaming API.
@@ -81,16 +82,20 @@ impl LegacyTerrain {
         &worker.cached.as_ref().expect("density cache populated").2
     }
 
-    fn surface(
-        &self,
-        density: &LegacyTerrainDensityChunk1_16_5,
-        x: usize,
-        z: usize,
-    ) -> Option<Surface> {
-        let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
-            .rev()
-            .find(|&y| density.is_solid(x, y, z) == Some(true))? as i32;
-        Some(Surface {
+    fn surface_heights(density: &LegacyTerrainDensityChunk1_16_5) -> [i16; 256] {
+        std::array::from_fn(|column| {
+            let x = column & 15;
+            let z = column >> 4;
+            (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+                .rev()
+                .find(|&y| density.is_solid(x, y, z) == Some(true))
+                .map_or(-1, |y| y as i16)
+        })
+    }
+
+    fn surface(&self, top: i16) -> Option<Surface> {
+        let top = i32::from(top);
+        (top >= 0).then_some(Surface {
             height: top + 1,
             state: horizon_world::registry::BlockStateId(self.grass),
             water: (top < 63).then_some((64, horizon_world::registry::BlockStateId(self.water))),
@@ -158,8 +163,23 @@ impl ChunkGenerator for LegacyTerrain {
         let chunk_z = z.div_euclid(16);
         let local_x = x.rem_euclid(16) as usize;
         let local_z = z.rem_euclid(16) as usize;
-        let density = self.density(worker, chunk_x, chunk_z);
-        self.surface(density, local_x, local_z)
+        let needs_surface_cache = worker
+            .surface_heights
+            .as_ref()
+            .is_none_or(|(x, z, _)| *x != chunk_x || *z != chunk_z);
+        if needs_surface_cache {
+            let heights = {
+                let density = self.density(worker, chunk_x, chunk_z);
+                Self::surface_heights(density)
+            };
+            worker.surface_heights = Some((chunk_x, chunk_z, heights));
+        }
+        let heights = &worker
+            .surface_heights
+            .as_ref()
+            .expect("surface cache populated")
+            .2;
+        self.surface(heights[local_z * 16 + local_x])
     }
 
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto {
@@ -218,6 +238,10 @@ mod tests {
             worker.cached.as_ref().map(|(x, z, _)| (*x, *z)),
             Some((-1, 1))
         );
+        assert_eq!(
+            worker.surface_heights.as_ref().map(|(x, z, _)| (*x, *z)),
+            Some((-1, 1))
+        );
 
         let density = terrain.density(&mut worker, -1, 1);
         let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
@@ -225,6 +249,10 @@ mod tests {
             .find(|&y| density.is_solid(15, y, 0) == Some(true))
             .unwrap() as i32;
         assert_eq!(surface.height, top + 1);
+        assert_eq!(
+            worker.surface_heights.as_ref().unwrap().2[15],
+            top as i16
+        );
         assert_eq!(surface.state.0, terrain.grass);
         assert_eq!(surface.biome, terrain.plains);
         assert_eq!(
