@@ -430,10 +430,7 @@ mod jar_resource_tests {
             Some(root.join("assets/minecraft/textures/gui/title/minecraft.png"))
         );
         assert_eq!(
-            minecraft_jar_resource_destination(
-                root,
-                "data/minecraft/worldgen/biome/plains.json"
-            ),
+            minecraft_jar_resource_destination(root, "data/minecraft/worldgen/biome/plains.json"),
             Some(root.join("data/minecraft/worldgen/biome/plains.json"))
         );
     }
@@ -446,8 +443,7 @@ mod jar_resource_tests {
                 .is_none()
         );
         assert!(
-            minecraft_jar_resource_destination(root, "data/minecraft/../../outside.json")
-                .is_none()
+            minecraft_jar_resource_destination(root, "data/minecraft/../../outside.json").is_none()
         );
     }
 }
