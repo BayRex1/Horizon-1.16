@@ -150,7 +150,7 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         data_count = safe_extract(archive, data_members, data_dir)
     block_tags = export_block_tags(server)
     (output / "block-tags.json").write_text(
-        json.dumps(block_tags, ensure_ascii=False, separators=(",", ":")) + "\\n",
+        json.dumps(block_tags, ensure_ascii=False, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
 
