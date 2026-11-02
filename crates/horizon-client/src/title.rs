@@ -1899,9 +1899,9 @@ mod classic_tests {
             );
             assert_eq!(
                 (quit.x, quit.y, quit.w),
-                (main_left + 152.5, y + 48.0, 147.5)
+                (main_left + 147.5, y + 48.0, 152.5)
             );
-            assert_eq!(quit.x - (options.x + options.w), 5.0);
+            assert_eq!(quit.x, options.x + options.w);
             assert_eq!(quit.x + quit.w, main_left + 300.0);
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
