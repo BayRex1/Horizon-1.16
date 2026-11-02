@@ -191,6 +191,41 @@ mod tests {
     }
 
     #[test]
+    fn generated_state_order_matches_vanilla_default_state_offsets() {
+        let blocks = blocks().unwrap();
+        let check = |name: &str, expected: &[(&str, &str)]| {
+            let block = blocks.iter().find(|block| block.name == name).unwrap();
+            let properties =
+                state_properties(block, block.default_state - block.min_state_id).unwrap();
+            for &(key, value) in expected {
+                assert_eq!(properties.get(key).map(String::as_str), Some(value), "{name}.{key}");
+            }
+        };
+        check("oak_log", &[("axis", "y")]);
+        check("water", &[("level", "0")]);
+        check("oak_slab", &[("type", "bottom"), ("waterlogged", "false")]);
+        check(
+            "oak_stairs",
+            &[
+                ("facing", "north"),
+                ("half", "bottom"),
+                ("shape", "straight"),
+                ("waterlogged", "false"),
+            ],
+        );
+        check(
+            "oak_door",
+            &[
+                ("facing", "north"),
+                ("half", "lower"),
+                ("hinge", "left"),
+                ("open", "false"),
+                ("powered", "false"),
+            ],
+        );
+    }
+
+    #[test]
     fn generated_facts_and_tags_load_through_the_runtime_codecs() {
         let (bundle, _) = facts_bundle().unwrap();
         let facts = serde_json::to_vec(&bundle["facts"]).unwrap();
