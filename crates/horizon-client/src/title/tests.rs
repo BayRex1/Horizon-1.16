@@ -520,7 +520,7 @@ fn classic_navigation_buttons_sound_even_without_a_game_action() {
             .filter(|button| matches!(button.id, 2 | 3))
             .map(|button| (button.w, button.y))
             .collect::<Vec<_>>(),
-        vec![(147.5, 161.0), (152.5, 161.0)]
+        vec![(110.0, 161.0), (186.0, 161.0)]
     );
     assert_eq!(f.click_with_sound("Singleplayer"), (Action::None, true));
     assert_eq!(
