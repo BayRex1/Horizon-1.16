@@ -1,9 +1,14 @@
 //! Builds the minimum runtime registry bundle for the 1.16.5 single-player prototype.
 //! This is intentionally separate from the pinned 26.3 Java exporter pipeline.
-use horizon_world::legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty};
+use horizon_world::{
+    DATA_VERSION,
+    legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty},
+    nbt::{JavaString, Limits, NamedTag, Tag, write_named},
+    registry::{BlockRegistry, BlockStateId},
+};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
 };
@@ -125,6 +130,80 @@ fn facts_bundle() -> Result<(Value, usize), String> {
     Ok((json!({"facts": facts, "tags": tags}), count))
 }
 
+/// Build a deliberately conservative collision/occlusion table for the first
+/// terrain prototype. Only registry states known to be empty or full cubes are
+/// cached; all partial/dynamic shapes remain uncached instead of being lied about.
+fn cached_shape_table(registry: &BlockRegistry) -> Result<NamedTag, String> {
+    let blocks = blocks().map_err(|e| e.to_string())?;
+    let bounds: HashMap<String, i32> = blocks
+        .into_iter()
+        .map(|block| {
+            let shape = match block.bounding_box.as_deref() {
+                Some("empty") => 0,
+                Some("block") => 1,
+                _ => -1,
+            };
+            (format!("minecraft:{}", block.name), shape)
+        })
+        .collect();
+    let states = (0..registry.len())
+        .map(|index| {
+            registry
+                .state(BlockStateId(index as u32))
+                .ok_or_else(|| "registry state disappeared while writing shape tables".to_owned())
+                .map(|state| state.to_nbt())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mapping = (0..registry.len())
+        .map(|index| {
+            let state = registry.state(BlockStateId(index as u32)).unwrap();
+            *bounds.get(&state.name).unwrap_or(&-1)
+        })
+        .collect::<Vec<_>>();
+    let empty = Tag::compound([
+        ("canonical", Tag::Byte(1)),
+        ("x", Tag::LongArray(vec![0])),
+        ("y", Tag::LongArray(vec![0])),
+        ("z", Tag::LongArray(vec![0])),
+        ("occupied", Tag::ByteArray(vec![])),
+        ("cube_axes", Tag::Byte(0)),
+        ("discrete_min", Tag::IntArray(vec![0, 0, 0])),
+        ("discrete_max", Tag::IntArray(vec![0, 0, 0])),
+        ("cube", Tag::Byte(0)),
+    ]);
+    let full = Tag::compound([
+        ("canonical", Tag::Byte(2)),
+        ("x", Tag::LongArray(vec![0, 1.0f64.to_bits() as i64])),
+        ("y", Tag::LongArray(vec![0, 1.0f64.to_bits() as i64])),
+        ("z", Tag::LongArray(vec![0, 1.0f64.to_bits() as i64])),
+        ("occupied", Tag::ByteArray(vec![1])),
+        ("cube_axes", Tag::Byte(7)),
+        ("discrete_min", Tag::IntArray(vec![0, 0, 0])),
+        ("discrete_max", Tag::IntArray(vec![1, 1, 1])),
+        ("cube", Tag::Byte(1)),
+    ]);
+    let nested = Tag::compound([
+        ("DataVersion", Tag::Int(DATA_VERSION)),
+        ("states", Tag::List(states.clone())),
+        ("shapes", Tag::List(vec![empty, full])),
+        ("cached_shapes", Tag::IntArray(mapping)),
+    ]);
+    Ok(NamedTag {
+        name: JavaString::default(),
+        tag: Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("states", Tag::List(states)),
+            ("collision", nested),
+        ]),
+    })
+}
+
+fn write_shape_table(path: &Path, registry: &BlockRegistry) -> Result<(), String> {
+    let table = cached_shape_table(registry)?;
+    let bytes = write_named(&table, Limits::tables()).map_err(|e| e.to_string())?;
+    fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Writes facts.json, block-tags.json and the explicit prototype readiness manifest.
 pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<PathBuf, String> {
     crate::client_only::verify_1_16_5(resources, root, log)?;
@@ -148,6 +227,13 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
     )
     .map_err(|e| format!("{}: {e}", tags_path.display()))?;
 
+    // The collision and light loaders require canonical empty/full shape
+    // identities. Partial shapes deliberately stay uncached for vanilla fallback.
+    let registry = BlockRegistry::from_facts_json(fs::File::open(&facts_path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    write_shape_table(&resources.join("cached-collision.nbt"), &registry)?;
+    write_shape_table(&resources.join("occlusion.nbt"), &registry)?;
+
     let manifest = json!({
         "minecraft": "1.16.5",
         "data_version": 2586,
@@ -157,7 +243,8 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         "status": "registry-only-not-playable",
         "limitations": [
             "gameplay-facts.json and block-behaviours.json are not yet exported",
-            "biome, environment, occlusion, model and light tables are not yet prepared",
+            "collision and occlusion tables cache only known empty/full block shapes; partial shapes are uncached",
+            "movement, biome, environment and model tables are not yet fully prepared",
             "this stage alone is not sufficient to load or create a world"
         ]
     });
@@ -170,7 +257,8 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
     log(&format!(
         "Prepared 1.16.5 prototype registry: {states} block states"
     ));
-    log("Registry stage only: the full 1.16.5 game resource bundle is not ready yet.");
+    log("Prepared conservative 1.16.5 collision and occlusion tables (empty/full shapes only).");
+    log("Gameplay facts, block behaviours, movement and model tables are still required.");
     log(&format!("Staged resources: {}", resources.display()));
     Ok(resources.to_path_buf())
 }
@@ -178,6 +266,25 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_shape_tables_round_trip_with_canonical_identities() {
+        use horizon_world::{
+            collision::CachedCollisionRegistry,
+            registry::BlockTableFile,
+        };
+        let (bundle, _) = facts_bundle().unwrap();
+        let registry = BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes())
+            .unwrap();
+        let named = cached_shape_table(&registry).unwrap();
+        let bytes = write_named(&named, Limits::tables()).unwrap();
+        let file = BlockTableFile::read(&bytes, &registry).unwrap();
+        let cached = CachedCollisionRegistry::from_table(file.table("collision").unwrap())
+            .unwrap();
+        assert!(cached.has_canonical_identities());
+        assert_eq!(cached.cached_state_count(), registry.len());
+        assert_eq!(cached.shape_count(), 2);
+    }
 
     #[test]
     fn legacy_state_order_matches_the_known_grass_block_default() {
