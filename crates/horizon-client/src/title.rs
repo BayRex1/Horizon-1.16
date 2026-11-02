@@ -701,20 +701,21 @@ impl Title {
                         true,
                         4,
                     ),
-                    // The lower pair spans exactly the same 300px as the
-                    // primary buttons; the two controls meet without a gap.
+                    // Keep Options anchored on the left, but give Quit a
+                    // wider button that starts much closer to it. The small
+                    // four-pixel gap keeps the controls visually distinct.
                     b(
                         x,
                         y + 48.0,
-                        147.5,
+                        110.0,
                         &lang::get_or("menu.options", "Options..."),
                         true,
                         3,
                     ),
                     b(
-                        x + 147.5,
+                        x + 114.0,
                         y + 48.0,
-                        152.5,
+                        186.0,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
@@ -1285,7 +1286,7 @@ impl Title {
                     1 | 4 => -32.0,
                     // Align the lower labels to the requested original positions.
                     3 => -20.0,
-                    2 => -20.0,
+                    2 => -32.0,
                     _ => 0.0,
                 }
             } else {
@@ -1895,13 +1896,13 @@ mod classic_tests {
             let main_left = cx - 142.0;
             assert_eq!(
                 (options.x, options.y, options.w),
-                (main_left, y + 48.0, 147.5)
+                (main_left, y + 48.0, 110.0)
             );
             assert_eq!(
                 (quit.x, quit.y, quit.w),
-                (main_left + 147.5, y + 48.0, 152.5)
+                (main_left + 114.0, y + 48.0, 186.0)
             );
-            assert_eq!(quit.x, options.x + options.w);
+            assert_eq!(quit.x - (options.x + options.w), 4.0);
             assert_eq!(quit.x + quit.w, main_left + 300.0);
             assert_eq!(
                 title.click(options.x + 10.0, options.y + 10.0, (w, h)).0,
