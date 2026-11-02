@@ -12,9 +12,9 @@ fn property_values(property: &LegacyBlockProperty) -> Result<Vec<String>, String
     match property.kind.as_str() {
         "bool" => Ok(vec!["true".into(), "false".into()]),
         "enum" if !property.values.is_empty() => Ok(property.values.clone()),
-        "int" if property.num_values > 0 => {
-            Ok((0..property.num_values).map(|value| value.to_string()).collect())
-        }
+        "int" if property.num_values > 0 => Ok((0..property.num_values)
+            .map(|value| value.to_string())
+            .collect()),
         other => Err(format!(
             "Unsupported 1.16.5 property type {other:?} for {}",
             property.name
@@ -65,8 +65,8 @@ fn facts_bundle() -> Result<(Value, usize), String> {
         let count = block.max_state_id - block.min_state_id + 1;
         let mut combinations = 1u32;
         for property in &block.states {
-            let radix = u32::try_from(property_values(property)?.len())
-                .map_err(|e| e.to_string())?;
+            let radix =
+                u32::try_from(property_values(property)?.len()).map_err(|e| e.to_string())?;
             combinations = combinations
                 .checked_mul(radix)
                 .ok_or_else(|| format!("State count overflow for {}", block.name))?;
@@ -133,8 +133,7 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
     // replacing its registry files, and write the new marker only after both succeed.
     let manifest_path = resources.join("horizon-resources.json");
     if manifest_path.is_file() {
-        fs::remove_file(&manifest_path)
-            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        fs::remove_file(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     }
     let facts_path = resources.join("facts.json");
     let tags_path = resources.join("block-tags.json");
@@ -205,7 +204,11 @@ mod tests {
             let properties =
                 state_properties(block, block.default_state - block.min_state_id).unwrap();
             for &(key, value) in expected {
-                assert_eq!(properties.get(key).map(String::as_str), Some(value), "{name}.{key}");
+                assert_eq!(
+                    properties.get(key).map(String::as_str),
+                    Some(value),
+                    "{name}.{key}"
+                );
             }
         };
         check("oak_log", &[("axis", "y")]);
@@ -236,8 +239,7 @@ mod tests {
     fn generated_facts_and_tags_load_through_the_runtime_codecs() {
         let (bundle, _) = facts_bundle().unwrap();
         let facts = serde_json::to_vec(&bundle["facts"]).unwrap();
-        let registry =
-            horizon_world::registry::BlockRegistry::from_facts_json(&facts[..]).unwrap();
+        let registry = horizon_world::registry::BlockRegistry::from_facts_json(&facts[..]).unwrap();
         let mut definitions = horizon_world::worldgen::tags::TagDefinitions::default();
         for (name, value) in bundle["tags"].as_object().unwrap() {
             definitions
