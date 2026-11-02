@@ -145,8 +145,51 @@ def export_block_tags(server: Path) -> dict[str, str]:
     return tags
 
 
+def run_blocks_datagen(server: Path, output: Path, java: str | None = None) -> Path:
+    """Run Mojang's own 1.16.5 data generator and return reports/blocks.json."""
+    executable = java or shutil.which("java")
+    if executable is None:
+        java_home = __import__("os").environ.get("JAVA_HOME")
+        if java_home:
+            candidate = Path(java_home) / "bin" / ("java.exe" if sys.platform == "win32" else "java")
+            if candidate.is_file():
+                executable = str(candidate)
+    if executable is None:
+        raise FileNotFoundError(
+            "Java 8 is required to generate the official 1.16.5 block registry report. "
+            "Install a Java 8 runtime or pass --java PATH_TO_JAVA."
+        )
+    datagen = output / "datagen"
+    datagen.mkdir(parents=True, exist_ok=True)
+    server = server.expanduser().resolve()
+    log = datagen / "datagen.log"
+    command = [
+        executable,
+        "-DbundlerMainClass=net.minecraft.data.Main",
+        "-jar",
+        str(server),
+        "--reports",
+        "--output",
+        "out",
+    ]
+    with log.open("w", encoding="utf-8") as stream:
+        subprocess.run(
+            command,
+            cwd=datagen,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+    report = datagen / "out" / "reports" / "blocks.json"
+    if not report.is_file():
+        raise FileNotFoundError(
+            f"Minecraft 1.16.5 DataGenerator finished without {report}; see {log}"
+        )
+    return report
+
+
 def stage(client: Path, server: Path, manifest_path: Path, output: Path,
-          blocks_report: Path | None = None) -> dict:
+          blocks_report: Path | None = None, java: str | None = None) -> dict:
     manifest = validate_manifest(manifest_path)
     verify_jar(client, CLIENT_SHA1, "client")
     verify_jar(server, SERVER_SHA1, "server")
@@ -175,22 +218,24 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         encoding="utf-8",
     )
 
-    registry = None
-    if blocks_report is not None:
-        report_path = blocks_report.expanduser().resolve()
-        if not report_path.is_file():
-            raise FileNotFoundError(f"Missing 1.16.5 DataGenerator blocks report: {report_path}")
-        exporter = Path(__file__).with_name("export_1_16_5_registry.py")
-        facts_path = output / "facts.json"
-        subprocess.run(
-            [sys.executable, str(exporter), str(report_path), "--out", str(facts_path)],
-            check=True,
-        )
-        registry = {
-            "source_report": str(report_path),
-            "facts_file": "facts.json",
-            "status": "block-state-identities-exported",
-        }
+    report_path = (
+        blocks_report.expanduser().resolve()
+        if blocks_report is not None
+        else run_blocks_datagen(server, output, java)
+    )
+    if not report_path.is_file():
+        raise FileNotFoundError(f"Missing 1.16.5 DataGenerator blocks report: {report_path}")
+    exporter = Path(__file__).with_name("export_1_16_5_registry.py")
+    facts_path = output / "facts.json"
+    subprocess.run(
+        [sys.executable, str(exporter), str(report_path), "--out", str(facts_path)],
+        check=True,
+    )
+    registry = {
+        "source_report": str(report_path),
+        "facts_file": "facts.json",
+        "status": "block-state-identities-exported",
+    }
 
     missing_work = [
         "1.16.5 biome registry and biome-source adapter",
@@ -238,7 +283,8 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path,
                         help="override versions/1.16.5/1.16.5.json")
     parser.add_argument("--blocks-report", type=Path,
-                        help="optional official 1.16.5 DataGenerator reports/blocks.json; exports facts.json")
+                        help="reuse an existing official 1.16.5 DataGenerator reports/blocks.json")
+    parser.add_argument("--java", help="Java 8 executable for the data generator (default: PATH or JAVA_HOME)")
     parser.add_argument("--out", type=Path, required=True,
                         help="new/empty directory for staged input data")
     args = parser.parse_args()
@@ -256,7 +302,7 @@ def main() -> int:
     try:
         if args.server_jar:
             server = args.server_jar.expanduser()
-            result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report)
+            result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report, args.java)
         else:
             # This is a developer-only preparation step; users testing a packaged build
             # do not need Python, the server jar, or a Minecraft server running.
