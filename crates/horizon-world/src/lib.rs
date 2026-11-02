@@ -81,6 +81,7 @@ pub mod legacy_nether_biome_source_1_16_5;
 pub mod legacy_noise_parameters_1_16_5;
 pub mod legacy_octave_noise_1_16_5;
 pub mod legacy_seeded_noise_1_16_5;
+pub mod legacy_terrain_interpolation_1_16_5;
 pub mod level;
 pub mod liquid_collision;
 pub mod live_attribute_updates;
