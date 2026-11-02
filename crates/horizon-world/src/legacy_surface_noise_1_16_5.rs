@@ -63,10 +63,8 @@ impl LegacySurfaceNoise1_16_5 {
     /// represent air. Surface replacement, caves, aquifers and biome shaping
     /// are separate generation stages and are intentionally not included.
     pub fn sample_density(&self, x: i32, y: i32, z: i32) -> f64 {
-        let xz_scale = LEGACY_TERRAIN_NOISE_SCALE_1_16_5
-            * LEGACY_TERRAIN_SCALE_CORRECTION_1_16_5;
-        let y_scale = LEGACY_TERRAIN_NOISE_SCALE_1_16_5
-            * LEGACY_TERRAIN_SCALE_CORRECTION_1_16_5;
+        let xz_scale = LEGACY_TERRAIN_NOISE_SCALE_1_16_5 * LEGACY_TERRAIN_SCALE_CORRECTION_1_16_5;
+        let y_scale = LEGACY_TERRAIN_NOISE_SCALE_1_16_5 * LEGACY_TERRAIN_SCALE_CORRECTION_1_16_5;
         let xz_step = xz_scale / LEGACY_TERRAIN_HORIZONTAL_FACTOR_1_16_5;
         let y_step = y_scale / LEGACY_TERRAIN_VERTICAL_FACTOR_1_16_5;
 
@@ -83,12 +81,10 @@ impl LegacySurfaceNoise1_16_5 {
             let y_amplitude = y_scale * persistence;
             let y_minimum = f64::from(y) * y_amplitude;
 
-            lower += self.lower[octave].sample_with_y_scale(
-                px, py, pz, y_amplitude, y_minimum,
-            ) * contribution;
-            upper += self.upper[octave].sample_with_y_scale(
-                px, py, pz, y_amplitude, y_minimum,
-            ) * contribution;
+            lower += self.lower[octave].sample_with_y_scale(px, py, pz, y_amplitude, y_minimum)
+                * contribution;
+            upper += self.upper[octave].sample_with_y_scale(px, py, pz, y_amplitude, y_minimum)
+                * contribution;
 
             if octave < SELECTOR_OCTAVES {
                 let sx = maintain_precision_1_16_5(f64::from(x) * xz_step * persistence);
