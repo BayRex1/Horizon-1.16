@@ -154,7 +154,13 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         "data_version": 2586,
         "bundle_kind": "prototype-1.16.5",
         "registry_states": states,
-        "registry_source": "bundled Minecraft 1.16.2 registry reference; 1.16.5 block-state layout"
+        "registry_source": "bundled Minecraft 1.16.2 registry reference; 1.16.5 block-state layout",
+        "status": "registry-only-not-playable",
+        "limitations": [
+            "gameplay-facts.json and block-behaviours.json are not yet exported",
+            "biome, environment, occlusion, model and light tables are not yet prepared",
+            "this stage alone is not sufficient to load or create a world"
+        ]
     });
     fs::write(
         &manifest_path,
@@ -165,7 +171,8 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
     log(&format!(
         "Prepared 1.16.5 prototype registry: {states} block states"
     ));
-    log(&format!("Runtime bundle: {}", resources.display()));
+    log("Registry stage only: the full 1.16.5 game resource bundle is not ready yet.");
+    log(&format!("Staged resources: {}", resources.display()));
     Ok(resources.to_path_buf())
 }
 
