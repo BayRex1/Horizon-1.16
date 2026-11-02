@@ -9,6 +9,31 @@ use horizon_protocol::legacy_1_16_5::LegacyChunkColumn;
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
 
+/// Minecraft 1.16.5 uses sixteen sections covering Y=0..255.
+pub const LEGACY_MIN_Y: i32 = 0;
+pub const LEGACY_SECTION_COUNT: usize = 16;
+pub const LEGACY_SECTION_HEIGHT: i32 = 16;
+
+/// Map a legacy section slot to the corresponding resident Horizon slot.
+/// The resident world starts at Y=-64, so legacy section zero is slot four.
+pub const fn resident_section_index(legacy_section: usize) -> Option<usize> {
+    if legacy_section >= LEGACY_SECTION_COUNT {
+        None
+    } else {
+        let y = LEGACY_MIN_Y + legacy_section as i32 * LEGACY_SECTION_HEIGHT;
+        Some(((y - crate::chunk::MIN_Y) / LEGACY_SECTION_HEIGHT) as usize)
+    }
+}
+
+/// Minimum block Y of a legacy section slot.
+pub const fn legacy_section_min_y(legacy_section: usize) -> Option<i32> {
+    if legacy_section >= LEGACY_SECTION_COUNT {
+        None
+    } else {
+        Some(LEGACY_MIN_Y + legacy_section as i32 * LEGACY_SECTION_HEIGHT)
+    }
+}
+
 /// Apply one decoded protocol-754 chunk to the resident client world.
 ///
 /// resolve_state translates a 1.16.5 registry state ID into the active
@@ -34,9 +59,9 @@ pub fn apply_chunk(
     world.air = air;
     for (section_y, section) in column.sections.iter().enumerate() {
         let Some(section) = section else { continue };
-        if section_y >= 16 {
-            return Err("1.16.5 chunk contains a section outside build height".into());
-        }
+        let section_base_y = legacy_section_min_y(section_y)
+            .ok_or("1.16.5 chunk contains a section outside build height")?;
+        debug_assert_eq!(resident_section_index(section_y), Some(section_y + 4));
         let mut resolved = Vec::with_capacity(4096);
         for index in 0..4096 {
             let legacy_id = section
@@ -49,7 +74,7 @@ pub fn apply_chunk(
         for (index, state) in resolved.into_iter().enumerate() {
             let x = column.x * 16 + (index & 15) as i32;
             let z = column.z * 16 + ((index >> 4) & 15) as i32;
-            let y = section_y as i32 * 16 + (index >> 8) as i32;
+            let y = section_base_y + (index >> 8) as i32;
             world.set(x, y, z, state)?;
         }
     }
@@ -88,6 +113,16 @@ mod tests {
     use super::*;
     use horizon_protocol::legacy_1_16_5::LegacyChunkSection;
 
+    #[test]
+    fn legacy_section_slots_map_to_resident_world_slots() {
+        assert_eq!(resident_section_index(0), Some(4));
+        assert_eq!(resident_section_index(1), Some(5));
+        assert_eq!(resident_section_index(15), Some(19));
+        assert_eq!(resident_section_index(16), None);
+        assert_eq!(legacy_section_min_y(0), Some(0));
+        assert_eq!(legacy_section_min_y(15), Some(240));
+        assert_eq!(legacy_section_min_y(16), None);
+    }
     #[test]
     fn applies_legacy_section_blocks_without_y_offset() {
         let mut world = World::new(BlockStateId(0), 0);
