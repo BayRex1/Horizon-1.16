@@ -3,9 +3,8 @@
 use horizon_world::{
     DATA_VERSION,
     legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty},
-    movement_properties::MovementProperties,
     nbt::{JavaString, Limits, NamedTag, Tag, write_named},
-    registry::{BlockRegistry, BlockStateId, BlockTableFile},
+    registry::{BlockRegistry, BlockStateId},
 };
 use serde_json::{json, Value};
 use std::{
@@ -315,7 +314,8 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         "limitations": [
             "gameplay-facts.json and block-behaviours.json are not yet exported",
             "collision and occlusion tables cache only known empty/full block shapes; partial shapes are uncached",
-            "movement, biome, environment and model tables are not yet fully prepared",
+            "movement coefficients are a conservative baseline; specialized movement tags and effects are incomplete",
+            "biome, environment and model tables are not yet fully prepared",
             "this stage alone is not sufficient to load or create a world"
         ]
     });
@@ -329,7 +329,8 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         "Prepared 1.16.5 prototype registry: {states} block states"
     ));
     log("Prepared conservative 1.16.5 collision and occlusion tables (empty/full shapes only).");
-    log("Gameplay facts, block behaviours, movement and model tables are still required.");
+    log("Prepared baseline movement coefficients; specialized player-motion dependencies remain incomplete.");
+    log("Gameplay facts, block behaviours and model tables are still required.");
     log(&format!("Staged resources: {}", resources.display()));
     Ok(resources.to_path_buf())
 }
@@ -340,7 +341,7 @@ mod tests {
 
     #[test]
     fn movement_table_round_trips_for_every_registry_block() {
-        use horizon_world::registry::BlockTableFile;
+        use horizon_world::{movement_properties::MovementProperties, registry::BlockTableFile};
         let (bundle, _) = facts_bundle().unwrap();
         let registry = BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes())
             .unwrap();
