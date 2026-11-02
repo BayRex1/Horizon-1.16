@@ -130,7 +130,10 @@ fn main() -> ExitCode {
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
             "--resources-dir"
-                if matches!(assets.as_deref().and_then(|a| a.to_str()), Some("verify-1.16.5" | "prepare-1.16.5")) =>
+                if matches!(
+                    assets.as_deref().and_then(|a| a.to_str()),
+                    Some("verify-1.16.5" | "prepare-1.16.5")
+                ) =>
             {
                 value("--resources-dir").map(|v| resources_dir = Some(v))
             }
@@ -181,8 +184,13 @@ fn main() -> ExitCode {
             }),
         Some("prepare-1.16.5") => resources_dir
             .or_else(default_resources_dir)
-            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())
-            .and_then(|dir| horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())),
+            .ok_or_else(|| {
+                "could not determine the shared Minecraft resource folder; pass --resources-dir PATH"
+                    .to_string()
+            })
+            .and_then(|dir| {
+                horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())
+            }),
         Some("compile-exporters") => {
             horizon_prepare::compile_exporters(&options, &log).map(|dir| {
                 log(&dir.display().to_string());
