@@ -98,6 +98,32 @@ def safe_extract(archive: zipfile.ZipFile, members: list[str], destination: Path
     return count
 
 
+def export_block_tags(server: Path) -> dict[str, str]:
+    """Export vanilla 1.16.5 block tags in the exact bundle shape Assets::load reads."""
+    prefix = "data/minecraft/tags/block/"
+    required = {
+        "minecraft:blocks_motion_in_heightmap",
+        "minecraft:blocks_motion_in_heightmap_no_leaves",
+        "minecraft:blocks_fluid_flow",
+    }
+    with zipfile.ZipFile(server) as archive:
+        names = sorted(
+            name for name in archive.namelist()
+            if name.startswith(prefix) and name.endswith(".json") and not name.endswith("/")
+        )
+        tags = {
+            f"minecraft:{name[len(prefix):-5]}": archive.read(name).decode("utf-8")
+            for name in names
+        }
+    missing = sorted(required - tags.keys())
+    if missing:
+        raise ValueError(
+            "The official 1.16.5 server jar is missing required block tags: "
+            + ", ".join(missing)
+        )
+    return tags
+
+
 def stage(client: Path, server: Path, manifest_path: Path, output: Path,
           blocks_report: Path | None = None) -> dict:
     manifest = validate_manifest(manifest_path)
@@ -122,6 +148,12 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
                 "the bundled-jar layout may have changed and must be handled explicitly."
             )
         data_count = safe_extract(archive, data_members, data_dir)
+    block_tags = export_block_tags(server)
+    (output / "block-tags.json").write_text(
+        json.dumps(block_tags, ensure_ascii=False, separators=(",", ":")) + "\\n",
+        encoding="utf-8",
+    )
+
     registry = None
     if blocks_report is not None:
         report_path = blocks_report.expanduser().resolve()
@@ -161,8 +193,10 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         "asset_index": manifest.get("assetIndex", {}).get("id"),
         "extracted_client_asset_files": asset_count,
         "extracted_server_data_files": data_count,
-        "status": ("inputs-and-block-registry-staged-not-playable-resource-bundle"
-                   if registry else "inputs-staged-not-playable-resource-bundle"),
+        "block_tags_file": "block-tags.json",
+        "block_tags_count": len(block_tags),
+        "status": ("inputs-registry-and-tags-staged-not-playable-resource-bundle"
+                   if registry else "inputs-and-tags-staged-not-playable-resource-bundle"),
         "block_registry": registry,
         "missing_work": missing_work,
     }
