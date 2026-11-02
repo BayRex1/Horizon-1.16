@@ -129,6 +129,13 @@ fn facts_bundle() -> Result<(Value, usize), String> {
 pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<PathBuf, String> {
     crate::client_only::verify_1_16_5(resources, root, log)?;
     let (bundle, states) = facts_bundle()?;
+    // The manifest is the readiness marker. Remove any old version's marker before
+    // replacing its registry files, and write the new marker only after both succeed.
+    let manifest_path = resources.join("horizon-resources.json");
+    if manifest_path.is_file() {
+        fs::remove_file(&manifest_path)
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    }
     let facts_path = resources.join("facts.json");
     let tags_path = resources.join("block-tags.json");
     fs::write(
@@ -149,7 +156,6 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         "registry_states": states,
         "registry_source": "bundled Minecraft 1.16.2 registry reference; 1.16.5 block-state layout"
     });
-    let manifest_path = resources.join("horizon-resources.json");
     fs::write(
         &manifest_path,
         serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
