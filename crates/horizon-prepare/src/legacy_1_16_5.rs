@@ -12,6 +12,9 @@ fn property_values(property: &LegacyBlockProperty) -> Result<Vec<String>, String
     match property.kind.as_str() {
         "bool" => Ok(vec!["true".into(), "false".into()]),
         "enum" if !property.values.is_empty() => Ok(property.values.clone()),
+        "int" if property.num_values > 0 => {
+            Ok((0..property.num_values).map(|value| value.to_string()).collect())
+        }
         other => Err(format!(
             "Unsupported 1.16.5 property type {other:?} for {}",
             property.name
