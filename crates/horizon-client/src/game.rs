@@ -390,14 +390,65 @@ fn import_official_asset_store(
     Ok(())
 }
 
+/// Resolve a safe resource path from the Minecraft 1.16.5 client JAR.
+/// Only the vanilla minecraft namespace is imported; other namespaces are
+/// owned by mods and must not be copied into the base game bundle.
+fn minecraft_jar_resource_destination(
+    root: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    let (tree, relative) = if let Some(relative) = name.strip_prefix("assets/minecraft/") {
+        ("assets", relative)
+    } else if let Some(relative) = name.strip_prefix("data/minecraft/") {
+        ("data", relative)
+    } else {
+        return None;
+    };
+    let relative = std::path::Path::new(relative);
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(root.join(tree).join("minecraft").join(relative))
+}
+
 #[cfg(test)]
 mod jar_resource_tests {
     use super::*;
 
     #[test]
-    fn materialization_marker_is_versioned_for_legacy_gameplay_data() {
-        let marker = format!(".horizon-materialized-{}-jar-v8", "1.16");
-        assert!(marker.ends_with("-jar-v8"));
+    fn jar_import_includes_assets_and_gameplay_data() {
+        let root = std::path::Path::new("prepared");
+        assert_eq!(
+            minecraft_jar_resource_destination(
+                root,
+                "assets/minecraft/textures/gui/title/minecraft.png"
+            ),
+            Some(root.join("assets/minecraft/textures/gui/title/minecraft.png"))
+        );
+        assert_eq!(
+            minecraft_jar_resource_destination(
+                root,
+                "data/minecraft/worldgen/biome/plains.json"
+            ),
+            Some(root.join("data/minecraft/worldgen/biome/plains.json"))
+        );
+    }
+
+    #[test]
+    fn jar_import_rejects_other_namespaces_and_traversal() {
+        let root = std::path::Path::new("prepared");
+        assert!(
+            minecraft_jar_resource_destination(root, "data/example/worldgen/biome/plains.json")
+                .is_none()
+        );
+        assert!(
+            minecraft_jar_resource_destination(root, "data/minecraft/../../outside.json")
+                .is_none()
+        );
     }
 }
 
@@ -490,33 +541,20 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
                 .by_index(i)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
             let name = entry.name().replace('\\', "/");
-            let (tree, relative) = if let Some(relative) = name.strip_prefix("assets/minecraft/") {
-                ("assets", relative)
-            } else if let Some(relative) = name.strip_prefix("data/minecraft/") {
-                ("data", relative)
-            } else {
-                continue;
-            };
-            let relative_path = std::path::Path::new(relative);
-            if relative_path.as_os_str().is_empty()
-                || relative_path
-                    .components()
-                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                || entry.is_dir()
-            {
+            if entry.is_dir() {
                 continue;
             }
             // The JAR carries 1x1 placeholders for the title panorama. The
             // full six cube faces and overlay come from the version's asset
-            // index above; never overwrite those full-resolution files with
-            // the placeholders extracted from the JAR.
-            if tree == "assets" && relative_path.starts_with("textures/gui/title/background") {
+            // index above; never overwrite those full-resolution files.
+            if name.starts_with("assets/minecraft/textures/gui/title/background") {
                 continue;
             }
-            // Minecraft 1.16.5 stores gameplay definitions (including biome
-            // JSON and dimension types) under data/minecraft in the client JAR.
-            // Those files are not part of the launcher asset index.
-            let destination = root.join(tree).join("minecraft").join(relative_path);
+            // The client JAR also contains the 1.16.5 biome and dimension JSON
+            // under data/minecraft; these are absent from the launcher asset index.
+            let Some(destination) = minecraft_jar_resource_destination(root, &name) else {
+                continue;
+            };
             // The prepared root can still contain same-path resources from the
             // newer bootstrap version (26.3). For Minecraft 1.16.5, the client
             // JAR is authoritative: replace those files instead of silently
