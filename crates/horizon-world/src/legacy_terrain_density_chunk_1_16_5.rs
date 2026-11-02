@@ -5,7 +5,10 @@
 //! interpolates it to block resolution. Biome shaping, surface replacement,
 //! caves, structures and block-state assignment are later stages.
 
-use crate::legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5;
+use crate::{
+    legacy_1_16_5::{LegacyBlockSection, LegacyBlockState},
+    legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5,
+};
 use crate::legacy_terrain_interpolation_1_16_5::{
     LEGACY_NOISE_CELL_HEIGHT_1_16_5, LEGACY_NOISE_CELL_WIDTH_1_16_5,
 };
@@ -127,6 +130,55 @@ impl LegacyTerrainDensityChunk1_16_5 {
     pub fn is_solid(&self, x: usize, y: usize, z: usize) -> Option<bool> {
         self.density(x, y, z).map(|density| density > 0.0)
     }
+
+    /// Materializes this density field into legacy 1.16.5 block sections.
+    ///
+    /// This is a deliberately basic first terrain stage: solid density becomes
+    /// stone, the upper three solid blocks become dirt, the exposed top becomes
+    /// grass, and water fills open space up to sea level. It is not the complete
+    /// vanilla surface-rule, bedrock-randomization, cave-carving or biome stage.
+    pub fn to_legacy_sections(&self, sea_level: i32) -> std::io::Result<Vec<LegacyBlockSection>> {
+        let air = LegacyBlockState::new("air");
+        let bedrock = LegacyBlockState::new("bedrock");
+        let stone = LegacyBlockState::new("stone");
+        let dirt = LegacyBlockState::new("dirt");
+        let grass = LegacyBlockState::new("grass_block");
+        let water = LegacyBlockState::new("water");
+        let mut sections: Vec<_> = (0..LEGACY_CHUNK_HEIGHT_1_16_5 / 16)
+            .map(|_| LegacyBlockSection::uniform(air.clone()))
+            .collect();
+
+        for z in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
+            for x in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
+                let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+                    .rev()
+                    .find(|&y| self.is_solid(x, y, z) == Some(true))
+                    .map(|y| y as i32)
+                    .unwrap_or(-1);
+
+                for y in 0..LEGACY_CHUNK_HEIGHT_1_16_5 {
+                    let world_y = y as i32;
+                    let state = if world_y == 0 {
+                        &bedrock
+                    } else if world_y <= top && self.is_solid(x, y, z) == Some(true) {
+                        if world_y == top {
+                            &grass
+                        } else if world_y >= top - 3 {
+                            &dirt
+                        } else {
+                            &stone
+                        }
+                    } else if world_y > top && world_y <= sea_level {
+                        &water
+                    } else {
+                        &air
+                    };
+                    sections[y / 16].set(x, y % 16, z, state.clone())?;
+                }
+            }
+        }
+        Ok(sections)
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +203,39 @@ mod tests {
         let first = LegacyTerrainDensityChunk1_16_5::generate(&noise, -2, 3);
         let second = LegacyTerrainDensityChunk1_16_5::generate(&noise, -2, 3);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn density_materializes_into_legacy_surface_layers_and_water() {
+        let mut chunk = LegacyTerrainDensityChunk1_16_5 {
+            x: 0,
+            z: 0,
+            densities: vec![-1.0; LEGACY_CHUNK_DENSITY_COUNT_1_16_5],
+        };
+        for y in 0..=10 {
+            for z in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
+                for x in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
+                    let index = (y * LEGACY_CHUNK_WIDTH_1_16_5 + z)
+                        * LEGACY_CHUNK_WIDTH_1_16_5
+                        + x;
+                    chunk.densities[index] = 1.0;
+                }
+            }
+        }
+
+        let sections = chunk.to_legacy_sections(63).unwrap();
+        let block = |x: usize, y: usize, z: usize| {
+            sections[y / 16].get(x, y % 16, z).unwrap().name.as_str()
+        };
+        assert_eq!(sections.len(), 16);
+        assert_eq!(block(0, 0, 0), "bedrock");
+        assert_eq!(block(0, 10, 0), "grass_block");
+        assert_eq!(block(0, 9, 0), "dirt");
+        assert_eq!(block(0, 6, 0), "dirt");
+        assert_eq!(block(0, 5, 0), "stone");
+        assert_eq!(block(0, 11, 0), "water");
+        assert_eq!(block(0, 63, 0), "water");
+        assert_eq!(block(0, 64, 0), "air");
     }
 
     #[test]
