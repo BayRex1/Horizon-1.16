@@ -125,6 +125,22 @@ mod tests {
     }
 
     #[test]
+    fn generated_facts_and_tags_load_through_the_runtime_codecs() {
+        let (bundle, _) = facts_bundle().unwrap();
+        let facts = serde_json::to_vec(&bundle["facts"]).unwrap();
+        let registry = horizon_world::registry::BlockRegistry::from_facts_json(&facts[..]).unwrap();
+        let mut definitions = horizon_world::worldgen::tags::TagDefinitions::default();
+        for (name, value) in bundle["tags"].as_object().unwrap() {
+            definitions.apply_json(name, "test", &value.to_string()).unwrap();
+        }
+        let built = definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned())).unwrap();
+        assert!(built.missing.is_empty(), "unresolved tags: {:?}", built.missing.keys());
+        for tag in ["minecraft:blocks_motion_in_heightmap", "minecraft:blocks_motion_in_heightmap_no_leaves", "minecraft:blocks_fluid_flow"] {
+            assert!(built.tags.contains_key(tag), "missing {tag}");
+        }
+    }
+
+    #[test]
     fn generated_registry_has_required_runtime_materials_and_tags() {
         let (bundle, count) = facts_bundle().unwrap();
         assert!(count > 16_000);
