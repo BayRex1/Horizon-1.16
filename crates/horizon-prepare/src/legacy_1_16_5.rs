@@ -159,17 +159,12 @@ fn movement_table(registry: &BlockRegistry) -> NamedTag {
     let states = (0..registry.len())
         .map(|index| registry.state(BlockStateId(index as u32)).unwrap().to_nbt())
         .collect::<Vec<_>>();
-    let nested = Tag::compound([
-        ("DataVersion", Tag::Int(DATA_VERSION)),
-        ("states", Tag::List(states.clone())),
-        ("blocks", Tag::Compound(blocks)),
-    ]);
     NamedTag {
         name: JavaString::default(),
         tag: Tag::compound([
             ("DataVersion", Tag::Int(DATA_VERSION)),
             ("states", Tag::List(states)),
-            ("movement", nested),
+            ("blocks", Tag::Compound(blocks)),
         ]),
     }
 }
@@ -290,18 +285,13 @@ fn cached_shape_table(registry: &BlockRegistry) -> Result<NamedTag, String> {
         ("discrete_max", Tag::IntArray(vec![1, 1, 1])),
         ("cube", Tag::Byte(1)),
     ]);
-    let nested = Tag::compound([
-        ("DataVersion", Tag::Int(DATA_VERSION)),
-        ("states", Tag::List(states.clone())),
-        ("shapes", Tag::List(vec![empty, full])),
-        ("cached_shapes", Tag::IntArray(mapping)),
-    ]);
     Ok(NamedTag {
         name: JavaString::default(),
         tag: Tag::compound([
             ("DataVersion", Tag::Int(DATA_VERSION)),
             ("states", Tag::List(states)),
-            ("collision", nested),
+            ("shapes", Tag::List(vec![empty, full])),
+            ("cached_shapes", Tag::IntArray(mapping)),
         ]),
     })
 }
