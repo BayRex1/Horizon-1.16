@@ -120,22 +120,7 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     let report_path = report_dir.join("source-verified.json");
     write_json(&report_path, &report)?;
 
-    // Remove only the false readiness marker written by older versions of
-    // this command. Never remove a manifest for another bundle or version.
-    let stale_manifest = resources.join("horizon-resources.json");
-    if stale_manifest.is_file() {
-        if let Ok(previous) = read_json(&stale_manifest) {
-            let was_client_only = previous.get("minecraft").and_then(Value::as_str)
-                == Some("1.16.5")
-                && previous.get("bundle_kind").and_then(Value::as_str)
-                    == Some("client-assets-only");
-            if was_client_only {
-                fs::remove_file(&stale_manifest)
-                    .map_err(|e| format!("{}: {e}", stale_manifest.display()))?;
-                log("Removed the obsolete client-assets-only readiness marker.");
-            }
-        }
-    }
+    remove_obsolete_client_only_manifest(resources, log)?;
 
     // Verification is deliberately not preparation. Do not write
     // horizon-resources.json into the shared resource root: the launcher treats
@@ -148,4 +133,63 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     log(&format!("Minecraft assets: {checked} objects verified"));
     log(&format!("Verification report: {}", report_path.display()));
     Ok(report_path)
+}
+
+/// Removes only the readiness marker that older client-only verification
+/// incorrectly wrote. Other versions and complete bundles are left untouched.
+fn remove_obsolete_client_only_manifest(resources: &Path, log: Log) -> Result<(), String> {
+    let manifest = resources.join("horizon-resources.json");
+    if !manifest.is_file() {
+        return Ok(());
+    }
+    let Ok(previous) = read_json(&manifest) else {
+        return Ok(());
+    };
+    let was_client_only = previous.get("minecraft").and_then(Value::as_str) == Some("1.16.5")
+        && previous.get("bundle_kind").and_then(Value::as_str) == Some("client-assets-only");
+    if was_client_only {
+        fs::remove_file(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+        log("Removed the obsolete client-assets-only readiness marker.");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temporary_resources(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-client-only-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn removes_only_the_obsolete_1165_client_only_marker() {
+        let resources = temporary_resources("stale");
+        let marker = resources.join("horizon-resources.json");
+        fs::write(
+            &marker,
+            r#"{"minecraft":"1.16.5","bundle_kind":"client-assets-only"}"#,
+        )
+        .unwrap();
+        remove_obsolete_client_only_manifest(&resources, &|_| {}).unwrap();
+        assert!(!marker.exists());
+        fs::remove_dir_all(resources).unwrap();
+    }
+
+    #[test]
+    fn preserves_other_resource_manifests() {
+        let resources = temporary_resources("other");
+        let marker = resources.join("horizon-resources.json");
+        let original = r#"{"minecraft":"26.3","bundle_kind":"full"}"#;
+        fs::write(&marker, original).unwrap();
+        remove_obsolete_client_only_manifest(&resources, &|_| {}).unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap(), original);
+        fs::remove_dir_all(resources).unwrap();
+    }
 }
