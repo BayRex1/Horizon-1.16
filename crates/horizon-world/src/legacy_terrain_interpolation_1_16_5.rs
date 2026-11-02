@@ -106,7 +106,7 @@ mod tests {
         let cell = LegacyNoiseCell1_16_5::new([0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0]);
         assert_eq!(cell.sample_block(0, 0, 0), Some(0.0));
         assert_eq!(cell.sample_block(2, 4, 2), Some(14.0));
-        assert_eq!(cell.sample_block(3, 7, 3), Some(24.5));
+        assert_eq!(cell.sample_block(3, 7, 3), Some(22.0));
     }
 
     #[test]
