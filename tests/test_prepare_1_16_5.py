@@ -35,7 +35,7 @@ class Prepare1165Tests(unittest.TestCase):
             def fake_run(command, cwd, stdout, stderr, check):
                 self.assertEqual(command[0], "java-test")
                 self.assertIn("-DbundlerMainClass=net.minecraft.data.Main", command)
-                self.assertEqual(command[-3:], ["--output", "out"][-3:])
+                self.assertEqual(command[-3:], ["--reports", "--output", "out"])
                 self.assertEqual(cwd, root / "out" / "datagen")
                 report = cwd / "out" / "reports" / "blocks.json"
                 report.parent.mkdir(parents=True)
