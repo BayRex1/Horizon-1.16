@@ -135,13 +135,32 @@ fn facts_bundle() -> Result<(Value, usize), String> {
 /// cached; all partial/dynamic shapes remain uncached instead of being lied about.
 fn cached_shape_table(registry: &BlockRegistry) -> Result<NamedTag, String> {
     let blocks = blocks().map_err(|e| e.to_string())?;
+    // minecraft-data's broad "block" bounding-box flag also covers partial
+    // shapes (fences, stairs, panes, etc.). Cache full cubes only for this
+    // explicit vanilla terrain whitelist; everything else stays on fallback.
+    const FULL_CUBES: &[&str] = &[
+        "stone", "granite", "polished_granite", "diorite", "polished_diorite",
+        "andesite", "polished_andesite", "grass_block", "dirt", "coarse_dirt",
+        "podzol", "cobblestone", "bedrock", "sand", "red_sand", "gravel",
+        "clay", "bricks", "stone_bricks", "cracked_stone_bricks",
+        "mossy_stone_bricks", "nether_bricks", "red_nether_bricks",
+        "netherrack", "end_stone", "obsidian", "crying_obsidian",
+        "sandstone", "red_sandstone", "quartz_block", "prismarine",
+        "dark_prismarine", "sea_lantern", "coal_block", "iron_block",
+        "gold_block", "diamond_block", "emerald_block", "lapis_block",
+        "copper_block", "raw_iron_block", "raw_gold_block", "raw_copper_block",
+        "oak_planks", "spruce_planks", "birch_planks", "jungle_planks",
+        "acacia_planks", "dark_oak_planks", "crimson_planks", "warped_planks",
+    ];
     let bounds: HashMap<String, i32> = blocks
         .into_iter()
         .map(|block| {
-            let shape = match block.bounding_box.as_deref() {
-                Some("empty") => 0,
-                Some("block") => 1,
-                _ => -1,
+            let shape = if FULL_CUBES.contains(&block.name.as_str()) {
+                1
+            } else if block.bounding_box.as_deref() == Some("empty") {
+                0
+            } else {
+                -1
             };
             (format!("minecraft:{}", block.name), shape)
         })
