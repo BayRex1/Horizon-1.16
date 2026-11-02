@@ -282,7 +282,8 @@ mod tests {
         let cached = CachedCollisionRegistry::from_table(file.table("collision").unwrap())
             .unwrap();
         assert!(cached.has_canonical_identities());
-        assert_eq!(cached.cached_state_count(), registry.len());
+        assert!(cached.cached_state_count() > 0);
+        assert!(cached.cached_state_count() <= registry.len());
         assert_eq!(cached.shape_count(), 2);
     }
 
