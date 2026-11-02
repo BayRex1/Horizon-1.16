@@ -16,6 +16,7 @@ pub mod exporters;
 mod files;
 mod inventory;
 pub mod java;
+pub mod legacy_1_16_5;
 pub mod pyjson;
 mod sounds;
 mod survival;
