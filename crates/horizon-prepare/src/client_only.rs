@@ -120,6 +120,23 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     let report_path = report_dir.join("source-verified.json");
     write_json(&report_path, &report)?;
 
+    // Remove only the false readiness marker written by older versions of
+    // this command. Never remove a manifest for another bundle or version.
+    let stale_manifest = resources.join("horizon-resources.json");
+    if stale_manifest.is_file() {
+        if let Ok(previous) = read_json(&stale_manifest) {
+            let was_client_only = previous.get("minecraft").and_then(Value::as_str)
+                == Some("1.16.5")
+                && previous.get("bundle_kind").and_then(Value::as_str)
+                    == Some("client-assets-only");
+            if was_client_only {
+                fs::remove_file(&stale_manifest)
+                    .map_err(|e| format!("{}: {e}", stale_manifest.display()))?;
+                log("Removed the obsolete client-assets-only readiness marker.");
+            }
+        }
+    }
+
     // Verification is deliberately not preparation. Do not write
     // horizon-resources.json into the shared resource root: the launcher treats
     // that file as a readiness marker, but this command has not generated the
