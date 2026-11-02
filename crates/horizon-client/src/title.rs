@@ -701,8 +701,8 @@ impl Title {
                         true,
                         4,
                     ),
-                    // The lower pair spans the same 300px as the primary
-                    // buttons, with a 5px gap between the two controls.
+                    // The lower pair spans exactly the same 300px as the
+                    // primary buttons; the two controls meet without a gap.
                     b(
                         x,
                         y + 48.0,
@@ -712,9 +712,9 @@ impl Title {
                         3,
                     ),
                     b(
-                        x + 152.5,
+                        x + 147.5,
                         y + 48.0,
-                        147.5,
+                        152.5,
                         &lang::get_or("menu.quit", "Quit Game"),
                         true,
                         2,
@@ -1285,7 +1285,7 @@ impl Title {
                     1 | 4 => -32.0,
                     // Align the lower labels to the requested original positions.
                     3 => -20.0,
-                    2 => -12.0,
+                    2 => -20.0,
                     _ => 0.0,
                 }
             } else {
