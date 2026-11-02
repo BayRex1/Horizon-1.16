@@ -4,7 +4,7 @@
 //! not claim vanilla parity: biome shaping, caves, structures, surface rules
 //! and decoration are separate follow-up stages.
 use crate::{
-    chunk::{BIOME_STRATEGY, Chunk, SECTIONS},
+    chunk::{block_strategy, BIOME_STRATEGY, Chunk, SECTIONS},
     lod::Surface,
     streaming::{ChunkGenerator, Proto},
 };
@@ -30,6 +30,7 @@ pub struct LegacyTerrainWorker {
 /// Minimal 1.16.5 base-terrain generator for the live chunk streaming API.
 pub struct LegacyTerrain {
     noise: LegacySurfaceNoise1_16_5,
+    air: u32,
     bedrock: u32,
     stone: u32,
     dirt: u32,
@@ -53,6 +54,7 @@ impl LegacyTerrain {
         };
         Ok(Self {
             noise: LegacySurfaceNoise1_16_5::from_seed(seed),
+            air: state("minecraft:air")?,
             bedrock: state("minecraft:bedrock")?,
             stone: state("minecraft:stone")?,
             dirt: state("minecraft:dirt")?,
@@ -103,13 +105,16 @@ impl LegacyTerrain {
         })
     }
 
-    fn generate(
-        &self,
-        density: &LegacyTerrainDensityChunk1_16_5,
-        chunk_x: i32,
-        chunk_z: i32,
-    ) -> Chunk {
+    /// Creates resident storage with the registry's actual air state.
+    ///
+    /// Do not assume state ID zero is air: the legacy generator is bound to
+    /// the active resource registry, whose IDs are not the 1.16.5 protocol IDs.
+    fn empty_chunk(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
         let mut chunk = Chunk::empty(chunk_x, chunk_z);
+        for section in &mut chunk.sections {
+            let section = Arc::make_mut(section);
+            section.blocks = PalettedContainer::new(block_strategy(), self.air);
+        }
 
         // 1.16.5 build height is Y=0..255. Its sections occupy resident
         // slots 4..19 because the renderer's current storage starts at Y=-64.
@@ -117,6 +122,16 @@ impl LegacyTerrain {
             Arc::make_mut(&mut chunk.sections[section_y]).biomes =
                 PalettedContainer::new(BIOME_STRATEGY, u32::from(self.plains));
         }
+        chunk
+    }
+
+    fn generate(
+        &self,
+        density: &LegacyTerrainDensityChunk1_16_5,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> Chunk {
+        let mut chunk = self.empty_chunk(chunk_x, chunk_z);
 
         for z in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
             for x in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
@@ -205,6 +220,33 @@ mod tests {
     use crate::chunk::MIN_Y;
 
     #[test]
+    fn resident_chunk_starts_with_the_resolved_air_state() {
+        let terrain = LegacyTerrain {
+            noise: LegacySurfaceNoise1_16_5::from_seed(17),
+            air: 91,
+            bedrock: 1,
+            stone: 2,
+            dirt: 3,
+            grass: 4,
+            water: 5,
+            plains: 6,
+        };
+        let chunk = terrain.empty_chunk(-2, 3);
+
+        assert_eq!(chunk.get(-32, 100, 48), 91);
+        assert_eq!(chunk.get(-32, 0, 48), 91);
+        assert_eq!(chunk.get(-32, 255, 48), 91);
+        assert_eq!(
+            chunk.sections[4].biomes.get(0),
+            u32::from(terrain.plains)
+        );
+        assert_eq!(
+            chunk.sections[19].biomes.get(63),
+            u32::from(terrain.plains)
+        );
+    }
+
+    #[test]
     fn legacy_world_sections_land_in_the_correct_resident_slots() {
         assert_eq!((0 - MIN_Y) / 16, 4);
         assert_eq!((240 - MIN_Y) / 16, 19);
@@ -223,6 +265,7 @@ mod tests {
     fn lod_surface_uses_block_coordinates_and_reuses_the_chunk_density() {
         let terrain = LegacyTerrain {
             noise: LegacySurfaceNoise1_16_5::from_seed(9876),
+            air: 0,
             bedrock: 1,
             stone: 2,
             dirt: 3,
