@@ -4,7 +4,7 @@
 //! not claim vanilla parity: biome shaping, caves, structures, surface rules
 //! and decoration are separate follow-up stages.
 use crate::{
-    chunk::{block_strategy, BIOME_STRATEGY, Chunk, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, SECTIONS, block_strategy},
     lod::Surface,
     streaming::{ChunkGenerator, Proto},
 };
@@ -236,14 +236,8 @@ mod tests {
         assert_eq!(chunk.get(-32, 100, 48), 91);
         assert_eq!(chunk.get(-32, 0, 48), 91);
         assert_eq!(chunk.get(-32, 255, 48), 91);
-        assert_eq!(
-            chunk.sections[4].biomes.get(0),
-            u32::from(terrain.plains)
-        );
-        assert_eq!(
-            chunk.sections[19].biomes.get(63),
-            u32::from(terrain.plains)
-        );
+        assert_eq!(chunk.sections[4].biomes.get(0), u32::from(terrain.plains));
+        assert_eq!(chunk.sections[19].biomes.get(63), u32::from(terrain.plains));
     }
 
     #[test]
