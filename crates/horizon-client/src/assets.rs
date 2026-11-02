@@ -104,10 +104,7 @@ fn invalid(message: &str) -> io::Error {
 /// Accept the native version's bundle, or the explicitly marked 1.16.5
 /// prototype bundle. A client-assets-only verification manifest is never enough:
 /// the legacy bundle must include the exported block registry and tag definitions.
-fn validate_resource_data_version(
-    manifest: &Value,
-    root: &Path,
-) -> io::Result<()> {
+fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<()> {
     let found = manifest["data_version"].as_i64();
     if found == Some(i64::from(DATA_VERSION)) {
         return Ok(());
