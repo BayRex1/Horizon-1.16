@@ -63,6 +63,22 @@ class Prepare1165Tests(unittest.TestCase):
                 '{"values":["minecraft:water"]}',
             )
 
+    def test_legacy_jar_gets_prototype_heightmap_tag_fallbacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = Path(tmp) / "server.jar"
+            with zipfile.ZipFile(jar, "w") as archive:
+                archive.writestr("data/minecraft/tags/block/planks.json", '{"values":["minecraft:oak_planks"]}')
+            tags = prepare.export_block_tags(jar)
+            self.assertIn("minecraft:stone", json.loads(tags["minecraft:blocks_motion_in_heightmap"])["values"])
+            self.assertEqual(
+                json.loads(tags["minecraft:blocks_motion_in_heightmap_no_leaves"]),
+                json.loads(tags["minecraft:blocks_motion_in_heightmap"]),
+            )
+            self.assertEqual(
+                json.loads(tags["minecraft:blocks_fluid_flow"]),
+                {"values": []},
+            )
+
     def test_block_tag_export_rejects_missing_required_tags(self):
         with tempfile.TemporaryDirectory() as tmp:
             jar = Path(tmp) / "server.jar"
