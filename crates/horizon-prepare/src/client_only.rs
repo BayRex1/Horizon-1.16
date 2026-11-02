@@ -120,35 +120,13 @@ pub fn verify_1_16_5(resources: &Path, root: &Path, log: Log) -> Result<PathBuf,
     let report_path = report_dir.join("source-verified.json");
     write_json(&report_path, &report)?;
 
-    // The runtime uses this manifest as the readiness marker for the shared
-    // resource root. This client-only path records only vanilla files it has
-    // actually verified; it does not claim the legacy exporter pipeline ran.
-    let resource_manifest = Value::Object(vec![
-        ("schema".into(), Value::Int(crate::SCHEMA.to_string())),
-        ("minecraft".into(), Value::str("1.16.5")),
-        ("data_version".into(), Value::Int("2586".into())),
-        ("resource_pack_format".into(), Value::Int("6".into())),
-        ("data_pack_format".into(), Value::Int("6".into())),
-        ("bundle_kind".into(), Value::str("client-assets-only")),
-        ("client_jar_sha1".into(), Value::str(CLIENT_JAR_SHA1)),
-        (
-            "version_json_sha1".into(),
-            Value::str(version_json_sha1.clone()),
-        ),
-        ("asset_index_id".into(), Value::str("1.16")),
-        ("asset_index_sha1".into(), Value::str(ASSET_INDEX_SHA1)),
-        (
-            "verified_asset_objects".into(),
-            Value::Int(checked.to_string()),
-        ),
-        ("source".into(), Value::str("horizon-prepare verify-1.16.5")),
-    ]);
-    let resource_manifest_path = resources.join("horizon-resources.json");
-    write_json(&resource_manifest_path, &resource_manifest)?;
-    log(&format!(
-        "Created verified resource manifest: {}",
-        resource_manifest_path.display()
-    ));
+    // Verification is deliberately not preparation. Do not write
+    // horizon-resources.json into the shared resource root: the launcher treats
+    // that file as a readiness marker, but this command has not generated the
+    // block registry, world-generation data, or the runtime resource bundle.
+    // Keeping the report under the version-specific Horizon state directory
+    // also avoids changing resources used by other Minecraft versions.
+    log("Verified Minecraft 1.16.5 source files; no runtime-ready manifest was written.");
     log("Minecraft 1.16.5: client JAR and version metadata verified");
     log(&format!("Minecraft assets: {checked} objects verified"));
     log(&format!("Verification report: {}", report_path.display()));
