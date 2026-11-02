@@ -7,7 +7,7 @@
 
 use crate::legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5;
 use crate::legacy_terrain_interpolation_1_16_5::{
-    trilinear_interpolate_1_16_5, LEGACY_NOISE_CELL_HEIGHT_1_16_5,
+    LEGACY_NOISE_CELL_HEIGHT_1_16_5,
     LEGACY_NOISE_CELL_WIDTH_1_16_5,
 };
 
@@ -83,7 +83,10 @@ impl LegacyTerrainDensityChunk1_16_5 {
                         coarse[coarse_index(x1, y1, z1)],
                     ];
 
-                    let cell = crate::legacy_terrain_interpolation_1_16_5::LegacyNoiseCell1_16_5::new(corners);
+                    let cell =
+                        crate::legacy_terrain_interpolation_1_16_5::LegacyNoiseCell1_16_5::new(
+                            corners,
+                        );
                     for oy in 0..LEGACY_NOISE_CELL_HEIGHT_1_16_5 {
                         for oz in 0..LEGACY_NOISE_CELL_WIDTH_1_16_5 {
                             for ox in 0..LEGACY_NOISE_CELL_WIDTH_1_16_5 {
