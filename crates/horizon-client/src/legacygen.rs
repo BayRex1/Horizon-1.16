@@ -53,8 +53,7 @@ impl LegacyTerrain {
     }
 
     fn generate(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
-        let density =
-            LegacyTerrainDensityChunk1_16_5::generate(&self.noise, chunk_x, chunk_z);
+        let density = LegacyTerrainDensityChunk1_16_5::generate(&self.noise, chunk_x, chunk_z);
         let mut chunk = Chunk::empty(chunk_x, chunk_z);
 
         // 1.16.5 build height is Y=0..255. Its sections occupy resident
