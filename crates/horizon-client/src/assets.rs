@@ -101,16 +101,30 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// Rejects a resource bundle from another Minecraft data version before its registry is read.
-fn validate_resource_data_version(found: Option<i64>) -> io::Result<()> {
+/// Accept the native version's bundle, or the explicitly marked 1.16.5
+/// prototype bundle. A client-assets-only verification manifest is never enough:
+/// the legacy bundle must include the exported block registry and tag definitions.
+fn validate_resource_data_version(
+    manifest: &Value,
+    root: &Path,
+) -> io::Result<()> {
+    let found = manifest["data_version"].as_i64();
     if found == Some(i64::from(DATA_VERSION)) {
+        return Ok(());
+    }
+    let legacy_prototype = found == Some(2586)
+        && manifest["minecraft"].as_str() == Some("1.16.5")
+        && manifest["bundle_kind"].as_str() == Some("prototype-1.16.5")
+        && root.join("facts.json").is_file()
+        && root.join("block-tags.json").is_file();
+    if legacy_prototype {
         return Ok(());
     }
     let found = found
         .map(|version| version.to_string())
         .unwrap_or_else(|| "missing or invalid".to_owned());
     Err(invalid(&format!(
-        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). The verified 1.16.5 client assets are not a complete game-data bundle for this build; the 1.16.5 registry and world-data port must be connected before these resources can be used for singleplayer.",
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). A 1.16.5 bundle is accepted only when it is marked prototype-1.16.5 and contains facts.json plus block-tags.json; client-assets-only verification is not sufficient.",
         horizon_core::version::VERSION_ID
     )))
 }
@@ -122,7 +136,7 @@ impl Assets {
         )?))?;
         log::info!("Horizon: Assets::load: validating data version");
 
-        validate_resource_data_version(manifest["data_version"].as_i64())?;
+        validate_resource_data_version(&manifest, root)?;
         log::info!("Horizon: Assets::load: parsing block registry facts");
         let (registry, flags) =
             BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
@@ -273,21 +287,46 @@ mod resource_version_tests {
     use super::*;
 
     #[test]
-    fn accepts_only_the_compiled_data_version() {
-        assert!(validate_resource_data_version(Some(i64::from(DATA_VERSION))).is_ok());
-        assert!(validate_resource_data_version(Some(2586)).is_err());
-        assert!(validate_resource_data_version(None).is_err());
+    fn accepts_native_bundle_and_complete_marked_legacy_prototype() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-resource-version-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("facts.json"), "{}").unwrap();
+        std::fs::write(root.join("block-tags.json"), "{}").unwrap();
+        let native = serde_json::json!({"data_version": DATA_VERSION});
+        assert!(validate_resource_data_version(&native, &root).is_ok());
+        let legacy = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "prototype-1.16.5"
+        });
+        assert!(validate_resource_data_version(&legacy, &root).is_ok());
+        let client_only = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "client-assets-only"
+        });
+        assert!(validate_resource_data_version(&client_only, &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn mismatch_error_identifies_both_versions() {
-        let error = validate_resource_data_version(Some(2586)).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("2586"), "{message}");
-        assert!(message.contains(&DATA_VERSION.to_string()), "{message}");
-        assert!(
-            message.contains(horizon_core::version::VERSION_ID),
-            "{message}"
-        );
+    fn legacy_bundle_requires_both_registry_files() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-resource-version-incomplete-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("facts.json"), "{}").unwrap();
+        let legacy = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "prototype-1.16.5"
+        });
+        let error = validate_resource_data_version(&legacy, &root).unwrap_err();
+        assert!(error.to_string().contains("prototype-1.16.5"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
