@@ -3,8 +3,9 @@
 use horizon_world::{
     DATA_VERSION,
     legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty},
+    movement_properties::MovementProperties,
     nbt::{JavaString, Limits, NamedTag, Tag, write_named},
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
 };
 use serde_json::{json, Value};
 use std::{
@@ -130,6 +131,60 @@ fn facts_bundle() -> Result<(Value, usize), String> {
     Ok((json!({"facts": facts, "tags": tags}), count))
 }
 
+/// Build the versioned per-block movement table. These are baseline vanilla
+/// coefficients; special-case movement effects remain disabled until their
+/// exact 1.16.5 behavior exporters are connected.
+fn movement_table(registry: &BlockRegistry) -> NamedTag {
+    let mut blocks = BTreeMap::new();
+    for index in 0..registry.len() {
+        let name = &registry.state(BlockStateId(index as u32)).unwrap().name;
+        let friction = match name.as_str() {
+            "minecraft:slime_block" => 0.8,
+            "minecraft:ice" | "minecraft:packed_ice" | "minecraft:blue_ice" => 0.98,
+            "minecraft:honey_block" | "minecraft:soul_sand" => 0.4,
+            _ => 0.6,
+        };
+        let properties = Tag::compound([
+            ("friction", Tag::Float((frictionf32(friction)).to_bits())),
+            ("speedFactor", Tag::Float(1.0f32.to_bits())),
+            ("jumpFactor", Tag::Float(1.0f32.to_bits())),
+            ("bounceRestitution", Tag::Float(0.0f32.to_bits())),
+            ("fallDistanceReduction", Tag::Float(0.0f32.to_bits())),
+            (
+                "fenceGate",
+                Tag::Byte(i8::from(name.ends_with("_fence_gate"))),
+            ),
+        ]);
+        blocks.insert(JavaString::from(name.as_str()), properties);
+    }
+    let states = (0..registry.len())
+        .map(|index| registry.state(BlockStateId(index as u32)).unwrap().to_nbt())
+        .collect::<Vec<_>>();
+    let nested = Tag::compound([
+        ("DataVersion", Tag::Int(DATA_VERSION)),
+        ("states", Tag::List(states.clone())),
+        ("blocks", Tag::Compound(blocks)),
+    ]);
+    NamedTag {
+        name: JavaString::default(),
+        tag: Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("states", Tag::List(states)),
+            ("movement", nested),
+        ]),
+    }
+}
+
+fn frictionf32(value: f64) -> f32 {
+    value as f32
+}
+
+fn write_movement_table(path: &Path, registry: &BlockRegistry) -> Result<(), String> {
+    let bytes = write_named(&movement_table(registry), Limits::tables())
+        .map_err(|e| e.to_string())?;
+    fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Build a deliberately conservative collision/occlusion table for the first
 /// terrain prototype. Only registry states known to be empty or full cubes are
 /// cached; all partial/dynamic shapes remain uncached instead of being lied about.
@@ -252,6 +307,7 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
         .map_err(|e| e.to_string())?;
     write_shape_table(&resources.join("cached-collision.nbt"), &registry)?;
     write_shape_table(&resources.join("occlusion.nbt"), &registry)?;
+    write_movement_table(&resources.join("movement-properties.nbt"), &registry)?;
 
     let manifest = json!({
         "minecraft": "1.16.5",
@@ -285,6 +341,21 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movement_table_round_trips_for_every_registry_block() {
+        use horizon_world::registry::BlockTableFile;
+        let (bundle, _) = facts_bundle().unwrap();
+        let registry = BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes())
+            .unwrap();
+        let bytes = write_named(&movement_table(&registry), Limits::tables()).unwrap();
+        let file = BlockTableFile::read(&bytes, &registry).unwrap();
+        let movement = MovementProperties::from_table(file.table("movement").unwrap()).unwrap();
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let ice = registry.default_state("minecraft:ice").unwrap();
+        assert_eq!(movement.coefficients(stone).unwrap().friction, 0.6);
+        assert_eq!(movement.coefficients(ice).unwrap().friction, 0.98);
+    }
 
     #[test]
     fn cached_shape_tables_round_trip_with_canonical_identities() {
