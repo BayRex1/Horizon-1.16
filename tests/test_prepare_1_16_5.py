@@ -2,6 +2,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 
@@ -25,6 +26,24 @@ class Prepare1165Tests(unittest.TestCase):
             path.write_text(json.dumps({"id": "1.16.5"}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "pinned official"):
                 prepare.validate_manifest(path)
+
+    def test_runs_vanilla_datagen_and_finds_the_block_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = root / "server.jar"
+            server.write_bytes(b"test")
+            def fake_run(command, cwd, stdout, stderr, check):
+                self.assertEqual(command[0], "java-test")
+                self.assertIn("-DbundlerMainClass=net.minecraft.data.Main", command)
+                self.assertEqual(command[-3:], ["--output", "out"][-3:])
+                self.assertEqual(cwd, root / "out" / "datagen")
+                report = cwd / "out" / "reports" / "blocks.json"
+                report.parent.mkdir(parents=True)
+                report.write_text("{}", encoding="utf-8")
+            with patch.object(prepare.subprocess, "run", side_effect=fake_run) as run:
+                report = prepare.run_blocks_datagen(server, root / "out", "java-test")
+            self.assertEqual(report, root / "out" / "datagen" / "out" / "reports" / "blocks.json")
+            run.assert_called_once()
 
     def test_safe_extract_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:
