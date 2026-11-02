@@ -162,8 +162,7 @@ impl Environment {
         } else {
             serde_json::json!({"period_ticks": 24000, "tracks": {}})
         };
-        let dimension_path =
-            root.join(format!("data/minecraft/dimension_type/{dimension}.json"));
+        let dimension_path = root.join(format!("data/minecraft/dimension_type/{dimension}.json"));
         let dimension_data = match fs::read(dimension_path) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -423,10 +422,8 @@ mod legacy_environment_tests {
 
     #[test]
     fn legacy_dimension_json_and_missing_day_timeline_load() {
-        let root = std::env::temp_dir().join(format!(
-            "horizon-legacy-environment-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("horizon-legacy-environment-{}", std::process::id()));
         let dimensions = root.join("data/minecraft/dimension_type");
         fs::create_dir_all(&dimensions).unwrap();
         fs::write(
@@ -448,4 +445,3 @@ mod legacy_environment_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
-
