@@ -7,8 +7,7 @@
 
 use crate::legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5;
 use crate::legacy_terrain_interpolation_1_16_5::{
-    LEGACY_NOISE_CELL_HEIGHT_1_16_5,
-    LEGACY_NOISE_CELL_WIDTH_1_16_5,
+    LEGACY_NOISE_CELL_HEIGHT_1_16_5, LEGACY_NOISE_CELL_WIDTH_1_16_5,
 };
 
 pub const LEGACY_CHUNK_WIDTH_1_16_5: usize = 16;
@@ -16,10 +15,8 @@ pub const LEGACY_CHUNK_HEIGHT_1_16_5: usize = 256;
 pub const LEGACY_CHUNK_DENSITY_COUNT_1_16_5: usize =
     LEGACY_CHUNK_WIDTH_1_16_5 * LEGACY_CHUNK_HEIGHT_1_16_5 * LEGACY_CHUNK_WIDTH_1_16_5;
 
-const CELLS_XZ: usize =
-    LEGACY_CHUNK_WIDTH_1_16_5 / LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize;
-const CELLS_Y: usize =
-    LEGACY_CHUNK_HEIGHT_1_16_5 / LEGACY_NOISE_CELL_HEIGHT_1_16_5 as usize;
+const CELLS_XZ: usize = LEGACY_CHUNK_WIDTH_1_16_5 / LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize;
+const CELLS_Y: usize = LEGACY_CHUNK_HEIGHT_1_16_5 / LEGACY_NOISE_CELL_HEIGHT_1_16_5 as usize;
 const GRID_XZ: usize = CELLS_XZ + 1;
 const GRID_Y: usize = CELLS_Y + 1;
 
@@ -40,11 +37,7 @@ impl LegacyTerrainDensityChunk1_16_5 {
     ///
     /// Only 5x33x5 coarse samples are evaluated; the 65,536 block positions
     /// are filled by trilinear interpolation.
-    pub fn generate(
-        noise: &LegacySurfaceNoise1_16_5,
-        chunk_x: i32,
-        chunk_z: i32,
-    ) -> Self {
+    pub fn generate(noise: &LegacySurfaceNoise1_16_5, chunk_x: i32, chunk_z: i32) -> Self {
         let mut coarse = vec![0.0_f64; GRID_XZ * GRID_Y * GRID_XZ];
         let coarse_index = |x: usize, y: usize, z: usize| (y * GRID_XZ + z) * GRID_XZ + x;
 
@@ -93,12 +86,10 @@ impl LegacyTerrainDensityChunk1_16_5 {
                                 let density = cell
                                     .sample_block(ox, oy, oz)
                                     .expect("loop offsets are inside a legacy noise cell");
-                                let bx = cx * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize
-                                    + ox as usize;
-                                let by = cy * LEGACY_NOISE_CELL_HEIGHT_1_16_5 as usize
-                                    + oy as usize;
-                                let bz = cz * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize
-                                    + oz as usize;
+                                let bx = cx * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize + ox as usize;
+                                let by =
+                                    cy * LEGACY_NOISE_CELL_HEIGHT_1_16_5 as usize + oy as usize;
+                                let bz = cz * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize + oz as usize;
                                 densities[(by * LEGACY_CHUNK_WIDTH_1_16_5 + bz)
                                     * LEGACY_CHUNK_WIDTH_1_16_5
                                     + bx] = density as f32;
@@ -124,9 +115,7 @@ impl LegacyTerrainDensityChunk1_16_5 {
         {
             return None;
         }
-        Some(self.densities[(y * LEGACY_CHUNK_WIDTH_1_16_5 + z)
-            * LEGACY_CHUNK_WIDTH_1_16_5
-            + x])
+        Some(self.densities[(y * LEGACY_CHUNK_WIDTH_1_16_5 + z) * LEGACY_CHUNK_WIDTH_1_16_5 + x])
     }
 
     /// Returns the complete density array in Y, Z, X order.
