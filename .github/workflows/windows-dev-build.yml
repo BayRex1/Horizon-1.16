@@ -43,6 +43,10 @@ jobs:
         with:
           shared-key: windows-dev-x64
 
+      - name: Test 1.16.5 resource bundle generation
+        shell: bash
+        run: cargo test --release --locked -p horizon-prepare
+
       - name: Build Horizon executables
         shell: bash
         run: |
