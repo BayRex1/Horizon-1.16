@@ -378,7 +378,7 @@ pub(super) fn make_streaming(
                 structures,
             )
             .map_err(|e| {
-                format!("{e}\\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
+                format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?,
         );
         if dim == Dim::Overworld && structures {
