@@ -175,8 +175,8 @@ fn movement_table(registry: &BlockRegistry) -> NamedTag {
 }
 
 fn write_movement_table(path: &Path, registry: &BlockRegistry) -> Result<(), String> {
-    let bytes = write_named(&movement_table(registry), Limits::tables())
-        .map_err(|e| e.to_string())?;
+    let bytes =
+        write_named(&movement_table(registry), Limits::tables()).map_err(|e| e.to_string())?;
     fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -189,18 +189,57 @@ fn cached_shape_table(registry: &BlockRegistry) -> Result<NamedTag, String> {
     // shapes (fences, stairs, panes, etc.). Cache full cubes only for this
     // explicit vanilla terrain whitelist; everything else stays on fallback.
     const FULL_CUBES: &[&str] = &[
-        "stone", "granite", "polished_granite", "diorite", "polished_diorite",
-        "andesite", "polished_andesite", "grass_block", "dirt", "coarse_dirt",
-        "podzol", "cobblestone", "bedrock", "sand", "red_sand", "gravel",
-        "clay", "bricks", "stone_bricks", "cracked_stone_bricks",
-        "mossy_stone_bricks", "nether_bricks", "red_nether_bricks",
-        "netherrack", "end_stone", "obsidian", "crying_obsidian",
-        "sandstone", "red_sandstone", "quartz_block", "prismarine",
-        "dark_prismarine", "sea_lantern", "coal_block", "iron_block",
-        "gold_block", "diamond_block", "emerald_block", "lapis_block",
-        "copper_block", "raw_iron_block", "raw_gold_block", "raw_copper_block",
-        "oak_planks", "spruce_planks", "birch_planks", "jungle_planks",
-        "acacia_planks", "dark_oak_planks", "crimson_planks", "warped_planks",
+        "stone",
+        "granite",
+        "polished_granite",
+        "diorite",
+        "polished_diorite",
+        "andesite",
+        "polished_andesite",
+        "grass_block",
+        "dirt",
+        "coarse_dirt",
+        "podzol",
+        "cobblestone",
+        "bedrock",
+        "sand",
+        "red_sand",
+        "gravel",
+        "clay",
+        "bricks",
+        "stone_bricks",
+        "cracked_stone_bricks",
+        "mossy_stone_bricks",
+        "nether_bricks",
+        "red_nether_bricks",
+        "netherrack",
+        "end_stone",
+        "obsidian",
+        "crying_obsidian",
+        "sandstone",
+        "red_sandstone",
+        "quartz_block",
+        "prismarine",
+        "dark_prismarine",
+        "sea_lantern",
+        "coal_block",
+        "iron_block",
+        "gold_block",
+        "diamond_block",
+        "emerald_block",
+        "lapis_block",
+        "copper_block",
+        "raw_iron_block",
+        "raw_gold_block",
+        "raw_copper_block",
+        "oak_planks",
+        "spruce_planks",
+        "birch_planks",
+        "jungle_planks",
+        "acacia_planks",
+        "dark_oak_planks",
+        "crimson_planks",
+        "warped_planks",
     ];
     let bounds: HashMap<String, i32> = blocks
         .into_iter()
@@ -298,8 +337,9 @@ pub fn prepare(resources: &Path, root: &Path, log: &dyn Fn(&str)) -> Result<Path
 
     // The collision and light loaders require canonical empty/full shape
     // identities. Partial shapes deliberately stay uncached for vanilla fallback.
-    let registry = BlockRegistry::from_facts_json(fs::File::open(&facts_path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let registry =
+        BlockRegistry::from_facts_json(fs::File::open(&facts_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     write_shape_table(&resources.join("cached-collision.nbt"), &registry)?;
     write_shape_table(&resources.join("occlusion.nbt"), &registry)?;
     write_movement_table(&resources.join("movement-properties.nbt"), &registry)?;
@@ -343,8 +383,8 @@ mod tests {
     fn movement_table_round_trips_for_every_registry_block() {
         use horizon_world::{movement_properties::MovementProperties, registry::BlockTableFile};
         let (bundle, _) = facts_bundle().unwrap();
-        let registry = BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes())
-            .unwrap();
+        let registry =
+            BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes()).unwrap();
         let bytes = write_named(&movement_table(&registry), Limits::tables()).unwrap();
         let file = BlockTableFile::read(&bytes, &registry).unwrap();
         let movement = MovementProperties::from_table(file.table("movement").unwrap()).unwrap();
@@ -366,8 +406,8 @@ mod tests {
         let named = cached_shape_table(&registry).unwrap();
         let bytes = write_named(&named, Limits::tables()).unwrap();
         let file = BlockTableFile::read(&bytes, &registry).unwrap();
-        let cached = CachedCollisionRegistry::from_table(file.table("collision").unwrap())
-            .unwrap();
+        let cached =
+            CachedCollisionRegistry::from_table(file.table("collision").unwrap()).unwrap();
         assert!(cached.has_canonical_identities());
         assert!(cached.cached_state_count() > 0);
         assert!(cached.cached_state_count() <= registry.len());
