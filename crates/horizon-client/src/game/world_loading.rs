@@ -339,13 +339,45 @@ pub(super) fn make_streaming(
             pack.context.clone(),
             res.threads(),
         )
+    } else if dim == Dim::Overworld
+        && (horizon_client::save::is_legacy_1_16_5_world(world_root)
+            || options
+                .resources
+                .join("versions/1.16.5/1.16.5.json")
+                .is_file())
+    {
+        // Existing 1.16.5 saves are recognized by DataVersion 2586. New
+        // worlds use the official 1.16.5 version manifest imported into
+        // horizon-resources. Flat and explicit test worlds keep precedence.
+        let inner = Arc::new(horizon_client::legacygen::LegacyTerrain::new(
+            pack.assets.registry,
+            res.biomes(),
+            seed,
+        )?);
+        Streaming::new(
+            Arc::new(Persistent {
+                inner,
+                save: save.clone(),
+                registry: pack.assets.clone(),
+                biomes: res.biomes().clone(),
+            }),
+            pack.context.clone(),
+            res.threads(),
+        )
     } else {
         // WorldOptions.generateStructures, from the world's settings.
         let structures =
             horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
-                format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
-            })?);
+        let inner = Arc::new(VanillaTerrain::for_world(
+            &options.resources.join("worldgen"),
+            pack.assets.registry,
+            res.biomes(),
+            seed,
+            dim.id(),
+            structures,
+        ).map_err(|e| {
+            format!("{e}\\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
+        })?);
         if dim == Dim::Overworld && structures {
             inner.search_rings_behind();
         }
@@ -360,6 +392,7 @@ pub(super) fn make_streaming(
             pack.context.clone(),
             res.threads(),
         )
+    }
     };
     streaming.forced = save.load_forced_chunks();
     streaming.radius = settings.render_distance;
