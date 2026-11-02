@@ -395,7 +395,6 @@ pub(super) fn make_streaming(
             pack.context.clone(),
             res.threads(),
         )
-    }
     };
     streaming.forced = save.load_forced_chunks();
     streaming.radius = settings.render_distance;
