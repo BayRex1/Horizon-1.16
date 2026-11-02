@@ -249,10 +249,7 @@ mod tests {
             .find(|&y| density.is_solid(15, y, 0) == Some(true))
             .unwrap() as i32;
         assert_eq!(surface.height, top + 1);
-        assert_eq!(
-            worker.surface_heights.as_ref().unwrap().2[15],
-            top as i16
-        );
+        assert_eq!(worker.surface_heights.as_ref().unwrap().2[15], top as i16);
         assert_eq!(surface.state.0, terrain.grass);
         assert_eq!(surface.biome, terrain.plains);
         assert_eq!(
