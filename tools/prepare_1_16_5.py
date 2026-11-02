@@ -115,12 +115,33 @@ def export_block_tags(server: Path) -> dict[str, str]:
             f"minecraft:{name[len(prefix):-5]}": archive.read(name).decode("utf-8")
             for name in names
         }
+    # These heightmap/fluid-flow tags are newer than 1.16.5. Keep the
+    # prototype's LegacyTerrain materials usable without pretending the old
+    # server jar contains the newer tag definitions.
+    prototype_solids = [
+        "minecraft:bedrock",
+        "minecraft:stone",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:sand",
+        "minecraft:oak_planks",
+        "minecraft:bricks",
+    ]
+    tags.setdefault(
+        "minecraft:blocks_motion_in_heightmap",
+        json.dumps({"values": prototype_solids}, separators=(",", ":")),
+    )
+    tags.setdefault(
+        "minecraft:blocks_motion_in_heightmap_no_leaves",
+        json.dumps({"values": prototype_solids}, separators=(",", ":")),
+    )
+    tags.setdefault(
+        "minecraft:blocks_fluid_flow",
+        json.dumps({"values": []}, separators=(",", ":")),
+    )
     missing = sorted(required - tags.keys())
     if missing:
-        raise ValueError(
-            "The official 1.16.5 server jar is missing required block tags: "
-            + ", ".join(missing)
-        )
+        raise ValueError("Could not prepare required Horizon block tags: " + ", ".join(missing))
     return tags
 
 
