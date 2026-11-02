@@ -138,14 +138,14 @@ fn movement_table(registry: &BlockRegistry) -> NamedTag {
     let mut blocks = BTreeMap::new();
     for index in 0..registry.len() {
         let name = &registry.state(BlockStateId(index as u32)).unwrap().name;
-        let friction = match name.as_str() {
+        let friction: f32 = match name.as_str() {
             "minecraft:slime_block" => 0.8,
             "minecraft:ice" | "minecraft:packed_ice" | "minecraft:blue_ice" => 0.98,
             "minecraft:honey_block" | "minecraft:soul_sand" => 0.4,
             _ => 0.6,
         };
         let properties = Tag::compound([
-            ("friction", Tag::Float((frictionf32(friction)).to_bits())),
+            ("friction", Tag::Float(friction.to_bits())),
             ("speedFactor", Tag::Float(1.0f32.to_bits())),
             ("jumpFactor", Tag::Float(1.0f32.to_bits())),
             ("bounceRestitution", Tag::Float(0.0f32.to_bits())),
@@ -173,10 +173,6 @@ fn movement_table(registry: &BlockRegistry) -> NamedTag {
             ("movement", nested),
         ]),
     }
-}
-
-fn frictionf32(value: f64) -> f32 {
-    value as f32
 }
 
 fn write_movement_table(path: &Path, registry: &BlockRegistry) -> Result<(), String> {
