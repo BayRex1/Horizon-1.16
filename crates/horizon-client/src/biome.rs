@@ -107,7 +107,14 @@ impl Biomes {
     pub fn load(root: &Path) -> Result<Self> {
         let grass = colormap(root, "grass")?;
         let foliage = colormap(root, "foliage")?;
-        let dry = colormap(root, "dry_foliage")?;
+        // Minecraft 1.16.5 has grass and foliage colormaps, but predates
+        // the separate dry_foliage map introduced by newer resource bundles.
+        let dry_path = root.join("assets/minecraft/textures/colormap/dry_foliage.png");
+        let dry = if dry_path.is_file() {
+            colormap(root, "dry_foliage")?
+        } else {
+            foliage.clone()
+        };
         let mut list = Vec::new();
         let mut names: Vec<_> = fs::read_dir(root.join("data/minecraft/worldgen/biome"))?
             .filter_map(|e| e.ok())
@@ -159,7 +166,9 @@ impl Biomes {
                 temperature,
                 frozen: v["temperature_modifier"].as_str() == Some("frozen"),
                 downfall,
-                precipitation: v["has_precipitation"].as_bool().unwrap_or(true),
+                precipitation: v["has_precipitation"].as_bool().unwrap_or_else(|| {
+                    matches!(v["precipitation"].as_str(), Some("rain" | "snow"))
+                }),
                 grass: color(&effects["grass_color"])
                     .unwrap_or_else(|| sample(&grass, temperature, downfall, 0xFF00FF)),
                 modifier,
@@ -168,8 +177,10 @@ impl Biomes {
                 dry_foliage: color(&effects["dry_foliage_color"])
                     .unwrap_or_else(|| sample(&dry, temperature, downfall, 0x5D4930)),
                 water: color(&effects["water_color"]).unwrap_or(0x3F76E4),
-                sky: color(&attributes["minecraft:visual/sky_color"]),
-                fog: color(&attributes["minecraft:visual/fog_color"]),
+                sky: color(&attributes["minecraft:visual/sky_color"])
+                    .or_else(|| color(&effects["sky_color"])),
+                fog: color(&attributes["minecraft:visual/fog_color"])
+                    .or_else(|| color(&effects["fog_color"])),
                 water_fog: color(&attributes["minecraft:visual/water_fog_color"])
                     .unwrap_or(0x050533),
                 name,
@@ -288,6 +299,18 @@ mod blend_tests {
         // The kernel sums to 16 per axis whatever the offset.
         assert!((weights[0].1 - 16f64.powi(3)).abs() < 1e-9);
         assert_eq!(blend_rgb(&weights, |_| [0.2, 0.4, 0.6]), [0.2, 0.4, 0.6]);
+    }
+
+    #[test]
+    fn legacy_precipitation_strings_are_understood() {
+        assert!(matches!(
+            serde_json::json!({"precipitation": "rain"})["precipitation"].as_str(),
+            Some("rain" | "snow")
+        ));
+        assert!(!matches!(
+            serde_json::json!({"precipitation": "none"})["precipitation"].as_str(),
+            Some("rain" | "snow")
+        ));
     }
 
     #[test]
