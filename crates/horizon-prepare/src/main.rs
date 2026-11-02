@@ -97,6 +97,7 @@ fn main() -> ExitCode {
                     | "languages"
                     | "compile-exporters"
                     | "verify-1.16.5"
+                    | "prepare-1.16.5"
             )
         )
     });
@@ -148,8 +149,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let is_client_verification =
-        assets.as_deref().and_then(|a| a.to_str()) == Some("verify-1.16.5");
+    let is_client_verification = matches!(
+        assets.as_deref().and_then(|a| a.to_str()),
+        Some("verify-1.16.5" | "prepare-1.16.5")
+    );
     let Some(root) = root.or_else(default_root).or_else(|| {
         is_client_verification
             .then(|| resources_dir.clone().or_else(default_resources_dir))
@@ -176,7 +179,11 @@ fn main() -> ExitCode {
             .and_then(|dir| {
                 horizon_prepare::client_only::verify_1_16_5(&dir, &options.root, &log).map(|_| ())
             }),
-        Some("prepare-1.16.5") => resources_dir\n            .or_else(default_resources_dir)\n            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())\n            .and_then(|dir| horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())),\n        Some("compile-exporters") => {
+        Some("prepare-1.16.5") => resources_dir
+            .or_else(default_resources_dir)
+            .ok_or_else(|| "could not determine the shared Minecraft resource folder; pass --resources-dir PATH".to_string())
+            .and_then(|dir| horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())),
+        Some("compile-exporters") => {
             horizon_prepare::compile_exporters(&options, &log).map(|dir| {
                 log(&dir.display().to_string());
             })
