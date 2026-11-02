@@ -215,9 +215,7 @@ mod tests {
         for y in 0..=10 {
             for z in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
                 for x in 0..LEGACY_CHUNK_WIDTH_1_16_5 {
-                    let index = (y * LEGACY_CHUNK_WIDTH_1_16_5 + z)
-                        * LEGACY_CHUNK_WIDTH_1_16_5
-                        + x;
+                    let index = (y * LEGACY_CHUNK_WIDTH_1_16_5 + z) * LEGACY_CHUNK_WIDTH_1_16_5 + x;
                     chunk.densities[index] = 1.0;
                 }
             }
