@@ -163,11 +163,14 @@ def run_blocks_datagen(server: Path, output: Path, java: str | None = None) -> P
     datagen.mkdir(parents=True, exist_ok=True)
     server = server.expanduser().resolve()
     log = datagen / "datagen.log"
+    # 1.16.5 predates the bundler launcher. Its server JAR is the classpath
+    # root, so invoke the data generator directly instead of using -jar and
+    # -DbundlerMainClass (the latter is for newer bundled server JARs).
     command = [
         executable,
-        "-DbundlerMainClass=net.minecraft.data.Main",
-        "-jar",
+        "-cp",
         str(server),
+        "net.minecraft.data.Main",
         "--reports",
         "--output",
         "out",
@@ -310,7 +313,7 @@ def main() -> int:
                 server = Path(temp_dir) / "minecraft_server.1.16.5.jar"
                 print(f"Downloading official Minecraft {VERSION} data jar...")
                 urllib.request.urlretrieve(SERVER_URL, server)
-                result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report)
+                result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report, args.java)
     except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(f"1.16.5 resource staging failed: {exc}", file=sys.stderr)
         return 1
