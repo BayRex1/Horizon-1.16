@@ -5,6 +5,7 @@
 //! and decoration are separate follow-up stages.
 use crate::{
     chunk::{BIOME_STRATEGY, Chunk, SECTIONS},
+    lod::Surface,
     streaming::{ChunkGenerator, Proto},
 };
 use horizon_core::paletted::PalettedContainer;
@@ -16,6 +17,14 @@ use horizon_world::{
     registry::BlockRegistry,
 };
 use std::sync::Arc;
+
+/// One worker keeps its most recently sampled density chunk. The same density
+/// volume feeds both near terrain and far-terrain LOD, avoiding a second noise
+/// evaluation when the streamer asks for the same chunk's surface.
+#[derive(Default)]
+pub struct LegacyTerrainWorker {
+    cached: Option<(i32, i32, LegacyTerrainDensityChunk1_16_5)>,
+}
 
 /// Minimal 1.16.5 base-terrain generator for the live chunk streaming API.
 pub struct LegacyTerrain {
@@ -52,8 +61,50 @@ impl LegacyTerrain {
         })
     }
 
-    fn generate(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
-        let density = LegacyTerrainDensityChunk1_16_5::generate(&self.noise, chunk_x, chunk_z);
+    fn density<'a>(
+        &self,
+        worker: &'a mut LegacyTerrainWorker,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> &'a LegacyTerrainDensityChunk1_16_5 {
+        if worker
+            .cached
+            .as_ref()
+            .is_none_or(|(x, z, _)| *x != chunk_x || *z != chunk_z)
+        {
+            worker.cached = Some((
+                chunk_x,
+                chunk_z,
+                LegacyTerrainDensityChunk1_16_5::generate(&self.noise, chunk_x, chunk_z),
+            ));
+        }
+        &worker.cached.as_ref().expect("density cache populated").2
+    }
+
+    fn surface(
+        &self,
+        density: &LegacyTerrainDensityChunk1_16_5,
+        x: usize,
+        z: usize,
+    ) -> Option<Surface> {
+        let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+            .rev()
+            .find(|&y| density.is_solid(x, y, z) == Some(true))? as i32;
+        Some(Surface {
+            height: top + 1,
+            state: horizon_world::registry::BlockStateId(self.grass),
+            water: (top < 63)
+                .then_some((64, horizon_world::registry::BlockStateId(self.water))),
+            biome: self.plains,
+        })
+    }
+
+    fn generate(
+        &self,
+        density: &LegacyTerrainDensityChunk1_16_5,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> Chunk {
         let mut chunk = Chunk::empty(chunk_x, chunk_z);
 
         // 1.16.5 build height is Y=0..255. Its sections occupy resident
@@ -97,12 +148,24 @@ impl LegacyTerrain {
 }
 
 impl ChunkGenerator for LegacyTerrain {
-    type Worker = ();
+    type Worker = LegacyTerrainWorker;
 
-    fn worker(&self) {}
+    fn worker(&self) -> Self::Worker {
+        LegacyTerrainWorker::default()
+    }
 
-    fn proto(&self, _worker: &mut (), x: i32, z: i32) -> Proto {
-        Box::new(self.generate(x, z))
+    fn lod_surface(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Option<Surface> {
+        let chunk_x = x.div_euclid(16);
+        let chunk_z = z.div_euclid(16);
+        let local_x = x.rem_euclid(16) as usize;
+        let local_z = z.rem_euclid(16) as usize;
+        let density = self.density(worker, chunk_x, chunk_z);
+        self.surface(density, local_x, local_z)
+    }
+
+    fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto {
+        let density = self.density(worker, x, z);
+        Box::new(self.generate(density, x, z))
     }
 
     fn finish(&self, proto: Proto) -> Chunk {
@@ -135,5 +198,39 @@ mod tests {
         let chunk = LegacyTerrainDensityChunk1_16_5::generate(&noise, -3, 7);
         assert_eq!((chunk.x, chunk.z), (-3, 7));
         assert!(chunk.density(0, 64, 0).is_some());
+    }
+
+    #[test]
+    fn lod_surface_uses_block_coordinates_and_reuses_the_chunk_density() {
+        let terrain = LegacyTerrain {
+            noise: LegacySurfaceNoise1_16_5::from_seed(9876),
+            bedrock: 1,
+            stone: 2,
+            dirt: 3,
+            grass: 4,
+            water: 5,
+            plains: 6,
+        };
+        let mut worker = terrain.worker();
+
+        // -1, 16 is local block (15, 0) in chunk (-1, 1).
+        let surface = terrain.lod_surface(&mut worker, -1, 16).unwrap();
+        assert_eq!(
+            worker.cached.as_ref().map(|(x, z, _)| (*x, *z)),
+            Some((-1, 1))
+        );
+
+        let density = terrain.density(&mut worker, -1, 1);
+        let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+            .rev()
+            .find(|&y| density.is_solid(15, y, 0) == Some(true))
+            .unwrap() as i32;
+        assert_eq!(surface.height, top + 1);
+        assert_eq!(surface.state.0, terrain.grass);
+        assert_eq!(surface.biome, terrain.plains);
+        assert_eq!(
+            surface.water.map(|(height, state)| (height, state.0)),
+            (top < 63).then_some((64, terrain.water))
+        );
     }
 }
