@@ -93,8 +93,7 @@ impl LegacyTerrain {
         Some(Surface {
             height: top + 1,
             state: horizon_world::registry::BlockStateId(self.grass),
-            water: (top < 63)
-                .then_some((64, horizon_world::registry::BlockStateId(self.water))),
+            water: (top < 63).then_some((64, horizon_world::registry::BlockStateId(self.water))),
             biome: self.plains,
         })
     }
