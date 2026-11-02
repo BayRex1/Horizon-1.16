@@ -5,12 +5,12 @@
 //! interpolates it to block resolution. Biome shaping, surface replacement,
 //! caves, structures and block-state assignment are later stages.
 
+use crate::legacy_terrain_interpolation_1_16_5::{
+    LEGACY_NOISE_CELL_HEIGHT_1_16_5, LEGACY_NOISE_CELL_WIDTH_1_16_5,
+};
 use crate::{
     legacy_1_16_5::{LegacyBlockSection, LegacyBlockState},
     legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5,
-};
-use crate::legacy_terrain_interpolation_1_16_5::{
-    LEGACY_NOISE_CELL_HEIGHT_1_16_5, LEGACY_NOISE_CELL_WIDTH_1_16_5,
 };
 
 pub const LEGACY_CHUNK_WIDTH_1_16_5: usize = 16;
