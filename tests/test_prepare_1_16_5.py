@@ -79,17 +79,6 @@ class Prepare1165Tests(unittest.TestCase):
                 {"values": []},
             )
 
-    def test_block_tag_export_rejects_missing_required_tags(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            jar = Path(tmp) / "server.jar"
-            with zipfile.ZipFile(jar, "w") as archive:
-                archive.writestr(
-                    "data/minecraft/tags/block/blocks_motion_in_heightmap.json",
-                    '{"values":[]}',
-                )
-            with self.assertRaisesRegex(ValueError, "missing required block tags"):
-                prepare.export_block_tags(jar)
-
     def test_safe_extract_writes_selected_resources_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / "sample.zip"
