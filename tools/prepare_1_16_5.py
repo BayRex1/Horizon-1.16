@@ -199,8 +199,10 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"Output directory must be empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
-    assets_dir = output / "client-assets"
-    data_dir = output / "server-data"
+    # Merge both namespaces into the runtime resource root. The ZIP members
+    # already start with assets/ and data/, exactly as Assets::load expects.
+    assets_dir = output
+    data_dir = output
     with zipfile.ZipFile(client) as archive:
         asset_members = [n for n in archive.namelist()
                          if n.startswith("assets/minecraft/") and not n.endswith("/")]
@@ -269,6 +271,28 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         "block_registry": registry,
         "missing_work": missing_work,
     }
+    resource_manifest = {
+        "schema": 1,
+        "minecraft": VERSION,
+        "data_version": DATA_VERSION,
+        "resource_pack_format": 6,
+        "data_pack_format": 6,
+        "bundle_kind": "prototype-1.16.5",
+        "client_jar_sha1": CLIENT_SHA1,
+        "version_json_sha1": VERSION_JSON_SHA1,
+        "facts_file": "facts.json",
+        "block_tags_file": "block-tags.json",
+        "block_registry": "official-1.16.5-data-generator",
+        "source": "tools/prepare_1_16_5.py",
+        "limitations": [
+            "prototype registry, tags and client assets only",
+            "not a complete 1.16.5 gameplay or world-data port",
+            "biome generation, lighting, data fixing and save compatibility remain incomplete",
+        ],
+    }
+    (output / "horizon-resources.json").write_text(
+        json.dumps(resource_manifest, indent=2) + "\n", encoding="utf-8"
+    )
     (output / "horizon-1.16.5-inputs.json").write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )
