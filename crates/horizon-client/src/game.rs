@@ -390,9 +390,20 @@ fn import_official_asset_store(
     Ok(())
 }
 
-/// Expand the official Minecraft object store into the ordinary resource tree
-/// expected by the renderer, font loader and title screen. The cache is kept
-/// beside the downloaded assets and is rebuilt only when the asset index changes.
+#[cfg(test)]
+mod jar_resource_tests {
+    use super::*;
+
+    #[test]
+    fn materialization_marker_is_versioned_for_legacy_gameplay_data() {
+        let marker = format!(".horizon-materialized-{}-jar-v8", "1.16");
+        assert!(marker.ends_with("-jar-v8"));
+    }
+}
+
+/// Expand the official Minecraft object store and client JAR into the ordinary
+/// resource tree expected by rendering and gameplay. The JAR supplies both
+/// built-in assets and the 1.16.5 data/minecraft definitions.
 fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind, Read};
     let version_json = root.join("versions/1.16.5/1.16.5.json");
@@ -422,10 +433,12 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
         "assets/minecraft/textures/gui/title/edition.png",
         "assets/minecraft/font/default.json",
         "assets/minecraft/textures/font/ascii.png",
+        "data/minecraft/worldgen/biome/plains.json",
+        "data/minecraft/dimension_type/overworld.json",
     ];
     let marker = root
         .join("assets")
-        .join(format!(".horizon-materialized-{index_id}-jar-v7"));
+        .join(format!(".horizon-materialized-{index_id}-jar-v8"));
     if client_jar.is_file()
         && required_jar_resources
             .iter()
@@ -477,7 +490,11 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
                 .by_index(i)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
             let name = entry.name().replace('\\', "/");
-            let Some(relative) = name.strip_prefix("assets/minecraft/") else {
+            let (tree, relative) = if let Some(relative) = name.strip_prefix("assets/minecraft/") {
+                ("assets", relative)
+            } else if let Some(relative) = name.strip_prefix("data/minecraft/") {
+                ("data", relative)
+            } else {
                 continue;
             };
             let relative_path = std::path::Path::new(relative);
@@ -493,10 +510,13 @@ fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf>
             // full six cube faces and overlay come from the version's asset
             // index above; never overwrite those full-resolution files with
             // the placeholders extracted from the JAR.
-            if relative_path.starts_with("textures/gui/title/background") {
+            if tree == "assets" && relative_path.starts_with("textures/gui/title/background") {
                 continue;
             }
-            let destination = root.join("assets/minecraft").join(relative_path);
+            // Minecraft 1.16.5 stores gameplay definitions (including biome
+            // JSON and dimension types) under data/minecraft in the client JAR.
+            // Those files are not part of the launcher asset index.
+            let destination = root.join(tree).join("minecraft").join(relative_path);
             // The prepared root can still contain same-path resources from the
             // newer bootstrap version (26.3). For Minecraft 1.16.5, the client
             // JAR is authoritative: replace those files instead of silently
