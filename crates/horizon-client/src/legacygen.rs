@@ -4,15 +4,14 @@
 //! not claim vanilla parity: biome shaping, caves, structures, surface rules
 //! and decoration are separate follow-up stages.
 use crate::{
-    chunk::{Chunk, BIOME_STRATEGY, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, MIN_Y, SECTIONS},
     streaming::{ChunkGenerator, Proto},
 };
 use horizon_core::paletted::PalettedContainer;
 use horizon_world::{
     legacy_surface_noise_1_16_5::LegacySurfaceNoise1_16_5,
     legacy_terrain_density_chunk_1_16_5::{
-        LegacyTerrainDensityChunk1_16_5, LEGACY_CHUNK_HEIGHT_1_16_5,
-        LEGACY_CHUNK_WIDTH_1_16_5,
+        LEGACY_CHUNK_HEIGHT_1_16_5, LEGACY_CHUNK_WIDTH_1_16_5, LegacyTerrainDensityChunk1_16_5,
     },
     registry::BlockRegistry,
 };
@@ -54,11 +53,8 @@ impl LegacyTerrain {
     }
 
     fn generate(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
-        let density = LegacyTerrainDensityChunk1_16_5::generate(
-            &self.noise,
-            chunk_x,
-            chunk_z,
-        );
+        let density =
+            LegacyTerrainDensityChunk1_16_5::generate(&self.noise, chunk_x, chunk_z);
         let mut chunk = Chunk::empty(chunk_x, chunk_z);
 
         // 1.16.5 build height is Y=0..255. Its sections occupy resident
@@ -93,12 +89,7 @@ impl LegacyTerrain {
                     } else {
                         continue;
                     };
-                    chunk.set(
-                        chunk_x * 16 + x as i32,
-                        y,
-                        chunk_z * 16 + z as i32,
-                        state,
-                    );
+                    chunk.set(chunk_x * 16 + x as i32, y, chunk_z * 16 + z as i32, state);
                 }
             }
         }
