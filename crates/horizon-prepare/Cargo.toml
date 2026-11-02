@@ -11,6 +11,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 sha1 = "0.10"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+horizon-world = { path = "../horizon-world" }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
