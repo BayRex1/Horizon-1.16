@@ -35,7 +35,7 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
 Needs Minecraft played once from the official launcher, and Java of the version
 research-lock.json pins. Releases use a runtime; development or changed exporters need a JDK.
 compile-exporters builds and validates a release bundle from the already imported pinned jars.
-The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.\nIt writes a verification report only; it does not prepare runtime world data.\n\nprepare-1.16.5 builds a minimal single-player prototype registry bundle from the\nbundled legacy block-state reference. It does not provide full worldgen parity.
+The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.\nIt writes a verification report only; it does not prepare runtime world data.\n\nprepare-1.16.5 stages a registry-only prototype from the\nbundled legacy block-state reference. It is not yet a complete game resource\nbundle and cannot start a world.
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
