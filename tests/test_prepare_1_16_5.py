@@ -35,6 +35,45 @@ class Prepare1165Tests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Unsafe jar entry"):
                     prepare.safe_extract(archive, ["../escape.txt"], Path(tmp) / "out")
 
+    def test_exports_required_block_tags_from_server_jar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = Path(tmp) / "server.jar"
+            expected = {
+                "data/minecraft/tags/block/blocks_motion_in_heightmap.json": '{"values":["minecraft:stone"]}',
+                "data/minecraft/tags/block/blocks_motion_in_heightmap_no_leaves.json": '{"values":["minecraft:stone"]}',
+                "data/minecraft/tags/block/blocks_fluid_flow.json": '{"values":["minecraft:water"]}',
+                "data/minecraft/tags/block/replaceable.json": '{"values":["minecraft:grass"]}',
+            }
+            with zipfile.ZipFile(jar, "w") as archive:
+                for name, value in expected.items():
+                    archive.writestr(name, value)
+                archive.writestr("data/minecraft/loot_table/ignored.json", "{}")
+            tags = prepare.export_block_tags(jar)
+            self.assertEqual(
+                set(tags),
+                {
+                    "minecraft:blocks_motion_in_heightmap",
+                    "minecraft:blocks_motion_in_heightmap_no_leaves",
+                    "minecraft:blocks_fluid_flow",
+                    "minecraft:replaceable",
+                },
+            )
+            self.assertEqual(
+                tags["minecraft:blocks_fluid_flow"],
+                '{"values":["minecraft:water"]}',
+            )
+
+    def test_block_tag_export_rejects_missing_required_tags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = Path(tmp) / "server.jar"
+            with zipfile.ZipFile(jar, "w") as archive:
+                archive.writestr(
+                    "data/minecraft/tags/block/blocks_motion_in_heightmap.json",
+                    '{"values":[]}',
+                )
+            with self.assertRaisesRegex(ValueError, "missing required block tags"):
+                prepare.export_block_tags(jar)
+
     def test_safe_extract_writes_selected_resources_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / "sample.zip"
