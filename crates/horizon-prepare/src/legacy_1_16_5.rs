@@ -151,7 +151,7 @@ fn movement_table(registry: &BlockRegistry) -> NamedTag {
             ("fallDistanceReduction", Tag::Float(0.0f32.to_bits())),
             (
                 "fenceGate",
-                Tag::Byte(i8::from(name.ends_with("_fence_gate"))),
+                Tag::Byte(if name.ends_with("_fence_gate") { 1 } else { 0 }),
             ),
         ]);
         blocks.insert(JavaString::from(name.as_str()), properties);
