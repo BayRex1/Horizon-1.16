@@ -4,7 +4,7 @@
 //! not claim vanilla parity: biome shaping, caves, structures, surface rules
 //! and decoration are separate follow-up stages.
 use crate::{
-    chunk::{BIOME_STRATEGY, Chunk, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, SECTIONS},
     streaming::{ChunkGenerator, Proto},
 };
 use horizon_core::paletted::PalettedContainer;
@@ -71,7 +71,7 @@ impl LegacyTerrain {
                     .map(|y| y as i32)
                     .unwrap_or(-1);
 
-                let highest = top.max(63).min(255);
+                let highest = top.clamp(63, 255);
                 for y in 0..=highest {
                     let state = if y == 0 {
                         self.bedrock
@@ -120,6 +120,7 @@ impl ChunkGenerator for LegacyTerrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk::MIN_Y;
 
     #[test]
     fn legacy_world_sections_land_in_the_correct_resident_slots() {
