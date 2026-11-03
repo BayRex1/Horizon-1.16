@@ -120,10 +120,18 @@ fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<(
         && root.join("block-tags.json").is_file()
         && root.join("gameplay-facts.json").is_file()
         && root.join("block-behaviours.json").is_file()
-        && root.join("data/minecraft/worldgen/biome/plains.json").is_file()
-        && root.join("data/minecraft/dimension_type/overworld.json").is_file()
-        && root.join("assets/minecraft/textures/colormap/grass.png").is_file()
-        && root.join("assets/minecraft/textures/colormap/foliage.png").is_file()
+        && root
+            .join("data/minecraft/worldgen/biome/plains.json")
+            .is_file()
+        && root
+            .join("data/minecraft/dimension_type/overworld.json")
+            .is_file()
+        && root
+            .join("assets/minecraft/textures/colormap/grass.png")
+            .is_file()
+        && root
+            .join("assets/minecraft/textures/colormap/foliage.png")
+            .is_file()
         && root.join("occlusion.nbt").is_file();
     if legacy_prototype {
         return Ok(());
@@ -311,7 +319,11 @@ mod resource_version_tests {
             "bundle_kind": "prototype-1.16.5",
             "status": "playable"
         });
-        for name in ["gameplay-facts.json", "block-behaviours.json", "occlusion.nbt"] {
+        for name in [
+            "gameplay-facts.json",
+            "block-behaviours.json",
+            "occlusion.nbt",
+        ] {
             std::fs::write(root.join(name), "{}").unwrap();
         }
         let required = [
