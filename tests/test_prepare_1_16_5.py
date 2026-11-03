@@ -45,6 +45,33 @@ class Prepare1165Tests(unittest.TestCase):
             self.assertEqual(report, root / "out" / "datagen" / "out" / "reports" / "blocks.json")
             run.assert_called_once()
 
+    def test_validates_actual_1165_biome_dimension_and_colormap_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            biome = root / "data/minecraft/worldgen/biome/plains.json"
+            dimension = root / "data/minecraft/dimension_type/overworld.json"
+            biome.parent.mkdir(parents=True)
+            dimension.parent.mkdir(parents=True)
+            biome.write_text('{"temperature":0.8,"downfall":0.4}', encoding="utf-8")
+            dimension.write_text('{"has_skylight":true}', encoding="utf-8")
+            for name in ("grass", "foliage"):
+                path = root / f"assets/minecraft/textures/colormap/{name}.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                header = bytearray(24)
+                header[:8] = b"\\x89PNG\\r\\n\\x1a\\n"
+                header[12:16] = b"IHDR"
+                header[16:20] = (256).to_bytes(4, "big")
+                header[20:24] = (256).to_bytes(4, "big")
+                path.write_bytes(header)
+            result = prepare.validate_runtime_inputs(root)
+            self.assertEqual(result["biomes"], 1)
+            self.assertEqual(result["colormap_pixels"], 2 * 256 * 256)
+
+    def test_rejects_missing_1165_worldgen_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(FileNotFoundError, "plains.json"):
+                prepare.validate_runtime_inputs(Path(tmp))
+
     def test_safe_extract_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / "sample.zip"
