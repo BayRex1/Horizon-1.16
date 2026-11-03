@@ -652,7 +652,10 @@ fn runtime_biome_section(
     section_y: i8,
     biome_names: &std::collections::HashMap<i32, String>,
 ) -> std::io::Result<crate::nbt::Tag> {
-    use crate::{compression::invalid, nbt::{JavaString, Tag}};
+    use crate::{
+        compression::invalid,
+        nbt::{JavaString, Tag},
+    };
     use horizon_core::storage::PackedStorage;
 
     if legacy_biomes.len() != 1024 {
@@ -662,7 +665,9 @@ fn runtime_biome_section(
         )));
     }
     if !(-1..=16).contains(&section_y) {
-        return Err(invalid(format!("legacy biome section Y outside runtime range: {section_y}")));
+        return Err(invalid(format!(
+            "legacy biome section Y outside runtime range: {section_y}"
+        )));
     }
     // Light-only boundary sections have no corresponding 1.16.5 biome cells.
     if section_y == -1 || section_y == 16 {
@@ -709,7 +714,9 @@ fn runtime_biome_section(
         let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(1) as u8;
         let mut storage = PackedStorage::new(bits, 64).map_err(|e| invalid(e.to_string()))?;
         for (index, palette_index) in indices.into_iter().enumerate() {
-            storage.set(index, palette_index).map_err(|e| invalid(e.to_string()))?;
+            storage
+                .set(index, palette_index)
+                .map_err(|e| invalid(e.to_string()))?;
         }
         fields.insert(
             JavaString::from("data"),
@@ -850,7 +857,9 @@ pub fn to_client_runtime_chunk(
         // Preserve the light-only boundary sections at Y=-1 and Y=16.
         // Both coordinates are inside the modern runtime's vertical range.
         if !(-4..=19).contains(y) {
-            return Err(invalid(format!("legacy section Y outside runtime range: {y}")));
+            return Err(invalid(format!(
+                "legacy section Y outside runtime range: {y}"
+            )));
         }
         // Keep absolute section coordinates; Y=0 remains world Y=0.
     }
