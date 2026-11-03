@@ -399,10 +399,9 @@ fn minecraft_jar_resource_destination(
 ) -> Option<std::path::PathBuf> {
     let (tree, relative) = if let Some(relative) = name.strip_prefix("assets/minecraft/") {
         ("assets", relative)
-    } else if let Some(relative) = name.strip_prefix("data/minecraft/") {
-        ("data", relative)
     } else {
-        return None;
+        let relative = name.strip_prefix("data/minecraft/")?;
+        ("data", relative)
     };
     let relative = std::path::Path::new(relative);
     if relative.as_os_str().is_empty()
