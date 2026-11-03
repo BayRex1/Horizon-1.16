@@ -397,7 +397,8 @@ impl LegacyBlockState {
                         })
                         .collect(),
                 ),
-            );        }
+            );
+        }
         Tag::Compound(map)
     }
 
@@ -1195,7 +1196,8 @@ pub fn create_bootstrap_world(
         ("randomTickSpeed", string("3")),
         ("spawnRadius", string("10")),
         ("reducedDebugInfo", string("false")),
-        ("naturalRegeneration", string("true")),        ("doImmediateRespawn", string("false")),
+        ("naturalRegeneration", string("true")),
+        ("doImmediateRespawn", string("false")),
         ("announceAdvancements", string("true")),
     ]);
     let world_gen = compound(vec![
