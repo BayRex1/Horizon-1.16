@@ -561,14 +561,17 @@ impl LegacyBlockSection {
             return Err(invalid("legacy section palette exceeds block count"));
         }
         if palette.len() == 1 {
-            if let Some(Tag::LongArray(words)) = tag.get("BlockStates") {
-                // 4096 entries at the minimum four bits per entry occupy
-                // exactly 256 longs in the padded 1.16.5 representation.
-                if words.len() != 256 || words.iter().any(|word| *word != 0) {
-                    return Err(invalid(
-                        "single-entry legacy palette has invalid BlockStates",
-                    ));
-                }
+            let Some(Tag::LongArray(words)) = tag.get("BlockStates") else {
+                return Err(invalid(
+                    "single-entry legacy palette is missing BlockStates",
+                ));
+            };
+            // 4096 entries at the minimum four bits per entry occupy
+            // exactly 256 longs in the padded 1.16.5 representation.
+            if words.len() != 256 || words.iter().any(|word| *word != 0) {
+                return Err(invalid(
+                    "single-entry legacy palette has invalid BlockStates",
+                ));
             }
             return Ok(Self {
                 palette,
