@@ -44,16 +44,21 @@ impl LegacyTerrainDensityChunk1_16_5 {
         let mut coarse = vec![0.0_f64; GRID_XZ * GRID_Y * GRID_XZ];
         let coarse_index = |x: usize, y: usize, z: usize| (y * GRID_XZ + z) * GRID_XZ + x;
 
+        // The 1.16.5 density sampler is evaluated on the 4x8x4 noise-cell
+        // lattice, not in block coordinates. Its internal 684.412 scaling
+        // converts these lattice coordinates into the vanilla noise domain.
         for gy in 0..GRID_Y {
-            let block_y = (gy * LEGACY_NOISE_CELL_HEIGHT_1_16_5 as usize) as i32;
+            let cell_y = gy as i32;
             for gz in 0..GRID_XZ {
-                let block_z = chunk_z * LEGACY_CHUNK_WIDTH_1_16_5 as i32
-                    + (gz * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize) as i32;
+                let cell_z = chunk_z
+                    .wrapping_mul(CELLS_XZ as i32)
+                    .wrapping_add(gz as i32);
                 for gx in 0..GRID_XZ {
-                    let block_x = chunk_x * LEGACY_CHUNK_WIDTH_1_16_5 as i32
-                        + (gx * LEGACY_NOISE_CELL_WIDTH_1_16_5 as usize) as i32;
+                    let cell_x = chunk_x
+                        .wrapping_mul(CELLS_XZ as i32)
+                        .wrapping_add(gx as i32);
                     coarse[coarse_index(gx, gy, gz)] =
-                        noise.sample_density(block_x, block_y, block_z);
+                        noise.sample_density(cell_x, cell_y, cell_z);
                 }
             }
         }
