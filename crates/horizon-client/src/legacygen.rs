@@ -248,6 +248,51 @@ mod tests {
     }
 
     #[test]
+    fn generated_chunk_contains_the_sampled_legacy_terrain() {
+        let terrain = LegacyTerrain {
+            noise: LegacySurfaceNoise1_16_5::from_seed(0x16_5),
+            air: 0,
+            bedrock: 1,
+            stone: 2,
+            dirt: 3,
+            grass: 4,
+            water: 5,
+            plains: 6,
+        };
+        let chunk_x = -2;
+        let chunk_z = 3;
+        let density = LegacyTerrainDensityChunk1_16_5::generate(
+            &terrain.noise,
+            chunk_x,
+            chunk_z,
+        );
+        let chunk = terrain.generate(&density, chunk_x, chunk_z);
+
+        assert_eq!(chunk.get(chunk_x * 16, 0, chunk_z * 16), terrain.bedrock);
+        let column = (0..256)
+            .find_map(|column| {
+                let x = column & 15;
+                let z = column >> 4;
+                let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+                    .rev()
+                    .find(|&y| density.is_solid(x, y, z) == Some(true))?;
+                (top >= 4).then_some((x, z, top as i32))
+            })
+            .expect("seed should produce at least one solid surface column");
+        let (x, z, top) = column;
+        let world_x = chunk_x * 16 + x as i32;
+        let world_z = chunk_z * 16 + z as i32;
+
+        assert_eq!(chunk.get(world_x, top, world_z), terrain.grass);
+        assert_eq!(chunk.get(world_x, top - 1, world_z), terrain.dirt);
+        assert_eq!(chunk.get(world_x, top - 3, world_z), terrain.dirt);
+        assert_eq!(chunk.get(world_x, top - 4, world_z), terrain.stone);
+        if top < 63 {
+            assert_eq!(chunk.get(world_x, 63, world_z), terrain.water);
+        }
+    }
+
+    #[test]
     fn legacy_density_chunk_uses_the_requested_chunk_coordinates() {
         let noise = LegacySurfaceNoise1_16_5::from_seed(1234);
         let chunk = LegacyTerrainDensityChunk1_16_5::generate(&noise, -3, 7);
