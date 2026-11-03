@@ -644,6 +644,74 @@ impl LegacyBlockSection {
     }
 }
 
+/// Convert the 1.16.5 4x64x4 biome volume into one modern 4x4x4
+/// biome palette for a block section. Legacy ordering is
+/// (quart_y << 4) | (quart_z << 2) | quart_x.
+fn runtime_biome_section(
+    legacy_biomes: &[i32],
+    section_y: i8,
+    biome_names: &std::collections::HashMap<i32, String>,
+) -> std::io::Result<crate::nbt::Tag> {
+    use crate::{compression::invalid, nbt::{JavaString, Tag}};
+    use horizon_core::storage::PackedStorage;
+
+    if legacy_biomes.len() != 1024 {
+        return Err(invalid(format!(
+            "1.16.5 chunk must contain 1024 biome IDs, got {}",
+            legacy_biomes.len()
+        )));
+    }
+    if !(0..16).contains(&section_y) {
+        return Err(invalid(format!("legacy biome section Y outside 0..15: {section_y}")));
+    }
+
+    let mut palette = Vec::<String>::new();
+    let mut indices = Vec::with_capacity(64);
+    for local_qy in 0..4usize {
+        let qy = section_y as usize * 4 + local_qy;
+        for qz in 0..4usize {
+            for qx in 0..4usize {
+                let legacy_index = (qy << 4) | (qz << 2) | qx;
+                let biome_id = legacy_biomes[legacy_index];
+                let name = biome_names.get(&biome_id).ok_or_else(|| {
+                    invalid(format!("unknown 1.16.5 biome ID {biome_id}"))
+                })?;
+                let palette_index = palette
+                    .iter()
+                    .position(|entry| entry == name)
+                    .unwrap_or_else(|| {
+                        palette.push(name.clone());
+                        palette.len() - 1
+                    });
+                indices.push(palette_index as u32);
+            }
+        }
+    }
+
+    let mut fields = crate::nbt::Compound::new();
+    fields.insert(
+        JavaString::from("palette"),
+        Tag::List(
+            palette
+                .iter()
+                .map(|name| Tag::String(JavaString::from(name.as_str())))
+                .collect(),
+        ),
+    );
+    if palette.len() > 1 {
+        let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(1) as u8;
+        let mut storage = PackedStorage::new(bits, 64).map_err(|e| invalid(e.to_string()))?;
+        for (index, palette_index) in indices.into_iter().enumerate() {
+            storage.set(index, palette_index).map_err(|e| invalid(e.to_string()))?;
+        }
+        fields.insert(
+            JavaString::from("data"),
+            Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()),
+        );
+    }
+    Ok(Tag::Compound(fields))
+}
+
 /// Adapt a 1.16.5 saved chunk for the current Horizon runtime's block access.
 ///
 /// This is an in-memory schema bridge only: it does not alter the source NBT or
@@ -675,6 +743,20 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
         return Err(invalid("legacy chunk is missing Sections list"));
     };
 
+    let Some(Tag::IntArray(legacy_biomes)) = level.get("Biomes") else {
+        return Err(invalid("legacy chunk is missing Biomes int array"));
+    };
+    if legacy_biomes.len() != 1024 {
+        return Err(invalid(format!(
+            "legacy chunk Biomes must contain 1024 IDs, got {}",
+            legacy_biomes.len()
+        )));
+    }
+    let biome_names = biomes()?
+        .into_iter()
+        .map(|biome| (biome.id as i32, format!("minecraft:{}", biome.name)))
+        .collect::<std::collections::HashMap<_, _>>();
+
     let mut sections = Vec::with_capacity(legacy_sections.len());
     for legacy in legacy_sections {
         let Some(Tag::Byte(y)) = legacy.get("Y") else {
@@ -695,10 +777,7 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
         }
         fields.insert(
             JavaString::from("biomes"),
-            Tag::compound([(
-                "palette",
-                Tag::List(vec![Tag::String(JavaString::from("minecraft:plains"))]),
-            )]),
+            runtime_biome_section(legacy_biomes, *y, &biome_names)?,
         );
         sections.push(Tag::Compound(fields));
     }
@@ -953,7 +1032,7 @@ pub fn generate_bootstrap_chunk(seed: i64, chunk_x: i32, chunk_z: i32) -> crate:
             "Status".to_owned(),
             Tag::String(JavaString::from("minecraft:full")),
         ),
-        ("Biomes".to_owned(), Tag::IntArray(vec![1; 256])),
+        ("Biomes".to_owned(), Tag::IntArray(vec![1; 1024])),
         ("Heightmaps".to_owned(), heightmaps),
         ("Sections".to_owned(), Tag::List(section_tags)),
         ("Entities".to_owned(), Tag::List(Vec::new())),
@@ -1234,7 +1313,7 @@ mod tests {
                 Tag::IntArray(values) => Some(values.len()),
                 _ => None,
             }),
-            Some(256)
+            Some(1024)
         );
         assert_eq!(
             level.get("Sections").and_then(|tag| match tag {
@@ -1535,11 +1614,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_uniform_section_omits_block_states_and_checks_bounds() {
+    fn legacy_uniform_section_writes_zeroed_block_states_and_checks_bounds() {
         use crate::nbt::{JavaString, Tag};
         let section = LegacyBlockSection::uniform(LegacyBlockState::new("stone"));
         let encoded = section.to_nbt();
-        assert!(encoded.get("BlockStates").is_none());
+        assert_eq!(
+            encoded.get("BlockStates").and_then(|tag| match tag {
+                Tag::LongArray(words) => Some(words.len()),
+                _ => None,
+            }),
+            Some(256)
+        );
         assert_eq!(
             LegacyBlockSection::from_nbt(&encoded)
                 .unwrap()
