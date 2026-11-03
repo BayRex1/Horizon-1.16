@@ -661,8 +661,15 @@ fn runtime_biome_section(
             legacy_biomes.len()
         )));
     }
-    if !(0..16).contains(&section_y) {
-        return Err(invalid(format!("legacy biome section Y outside 0..15: {section_y}")));
+    if !(-1..=16).contains(&section_y) {
+        return Err(invalid(format!("legacy biome section Y outside runtime range: {section_y}")));
+    }
+    // Light-only boundary sections have no corresponding 1.16.5 biome cells.
+    if section_y == -1 || section_y == 16 {
+        return Ok(Tag::compound([(
+            "palette",
+            Tag::List(vec![Tag::String(JavaString::from("minecraft:plains"))]),
+        )]));
     }
 
     let mut palette = Vec::<String>::new();
@@ -752,7 +759,8 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
             legacy_biomes.len()
         )));
     }
-    let biome_names = biomes()?
+    let biome_names = biomes()
+        .map_err(|error| invalid(error.to_string()))?
         .into_iter()
         .map(|biome| (biome.id as i32, format!("minecraft:{}", biome.name)))
         .collect::<std::collections::HashMap<_, _>>();
