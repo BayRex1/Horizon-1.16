@@ -314,47 +314,60 @@ pub fn import_legacy_1_16_5(
                 }
                 let adapted = horizon_world::legacy_1_16_5::to_client_runtime_chunk(&root)?;
                 if let Some(mut chunk) = decode_with(&adapted, assets.registry, biomes, None) {
-                    // Java 1.16.5 stores a 16x16 horizontal biome grid for the
-                    // entire column. Sample its centre in each 4x4 cell and
-                    // expand it vertically into Horizon's 3D quart-biome grid.
+                    // 1.16.5 stores a full 4x64x4 quart-biome volume.
+                    // Preserve every cell and translate the renamed legacy IDs.
                     if let Some(Tag::Compound(level)) = root.tag.get("Level")
                         && let Some(Tag::IntArray(old_biomes)) =
                             level.get(&JavaString::from("Biomes"))
-                        && old_biomes.len() == 256
                     {
-                        for qz in 0..4 {
-                            for qx in 0..4 {
-                                let sample_x = qx * 4 + 2;
-                                let sample_z = qz * 4 + 2;
-                                let old_id = old_biomes[sample_z * 16 + sample_x] as u32;
-                                let name = legacy_biome_names
-                                    .get(&old_id)
-                                    .map(String::as_str)
-                                    .unwrap_or("plains");
-                                let current_name = match name {
-                                    "mountains" => "windswept_hills",
-                                    "gravelly_mountains" => "windswept_gravelly_hills",
-                                    "modified_gravelly_mountains" => "modified_gravelly_hills",
-                                    "giant_tree_taiga" => "old_growth_pine_taiga",
-                                    "giant_spruce_taiga" => "old_growth_spruce_taiga",
-                                    "tall_birch_forest" | "tall_birch_hills" => {
-                                        "old_growth_birch_forest"
-                                    }
-                                    "shattered_savanna" | "shattered_savanna_plateau" => {
-                                        "windswept_savanna"
-                                    }
-                                    "snowy_tundra" => "snowy_plains",
-                                    "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
-                                    "stone_shore" => "stony_shore",
-                                    "snowy_mountains" => "snowy_slopes",
-                                    "wooded_badlands_plateau"
-                                    | "modified_wooded_badlands_plateau" => "wooded_badlands",
-                                    "modified_badlands_plateau" => "badlands",
-                                    other => other,
-                                };
-                                let biome_id = biomes.id(&format!("minecraft:{current_name}"));
-                                for qy in 16..80 {
-                                    chunk.set_biome_cell(qx as i32, qy, qz as i32, biome_id);
+                        if old_biomes.len() != 1024 {
+                            return Err(format!(
+                                "1.16.5 chunk ({}, {}) has {} biome IDs; expected 1024",
+                                pos.x,
+                                pos.z,
+                                old_biomes.len()
+                            )
+                            .into());
+                        }
+                        for qy in 0..64 {
+                            for qz in 0..4 {
+                                for qx in 0..4 {
+                                    let legacy_index = (qy << 4) | (qz << 2) | qx;
+                                    let old_id = old_biomes[legacy_index] as u32;
+                                    let name = legacy_biome_names.get(&old_id).ok_or_else(|| {
+                                        format!(
+                                            "unknown 1.16.5 biome ID {old_id} in chunk ({}, {})",
+                                            pos.x, pos.z
+                                        )
+                                    })?;
+                                    let current_name = match name.as_str() {
+                                        "mountains" => "windswept_hills",
+                                        "gravelly_mountains" => "windswept_gravelly_hills",
+                                        "modified_gravelly_mountains" => "modified_gravelly_hills",
+                                        "giant_tree_taiga" => "old_growth_pine_taiga",
+                                        "giant_spruce_taiga" => "old_growth_spruce_taiga",
+                                        "tall_birch_forest" | "tall_birch_hills" => {
+                                            "old_growth_birch_forest"
+                                        }
+                                        "shattered_savanna" | "shattered_savanna_plateau" => {
+                                            "windswept_savanna"
+                                        }
+                                        "snowy_tundra" => "snowy_plains",
+                                        "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
+                                        "stone_shore" => "stony_shore",
+                                        "snowy_mountains" => "snowy_slopes",
+                                        "wooded_badlands_plateau"
+                                        | "modified_wooded_badlands_plateau" => "wooded_badlands",
+                                        "modified_badlands_plateau" => "badlands",
+                                        other => other,
+                                    };
+                                    let biome_id = biomes.id(&format!("minecraft:{current_name}"));
+                                    chunk.set_biome_cell(
+                                        qx as i32,
+                                        qy + 16,
+                                        qz as i32,
+                                        biome_id,
+                                    );
                                 }
                             }
                         }
