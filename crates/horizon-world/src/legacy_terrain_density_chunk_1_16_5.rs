@@ -57,8 +57,7 @@ impl LegacyTerrainDensityChunk1_16_5 {
                     let cell_x = chunk_x
                         .wrapping_mul(CELLS_XZ as i32)
                         .wrapping_add(gx as i32);
-                    coarse[coarse_index(gx, gy, gz)] =
-                        noise.sample_density(cell_x, cell_y, cell_z);
+                    coarse[coarse_index(gx, gy, gz)] = noise.sample_density(cell_x, cell_y, cell_z);
                 }
             }
         }
