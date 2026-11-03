@@ -1,0 +1,150 @@
+import importlib.util
+import json
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+from pathlib import Path
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "prepare_1_16_5.py"
+SPEC = importlib.util.spec_from_file_location("prepare_1_16_5", MODULE_PATH)
+prepare = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(prepare)
+
+
+class Prepare1165Tests(unittest.TestCase):
+    def test_profile_is_the_expected_legacy_target(self):
+        self.assertEqual(prepare.VERSION, "1.16.5")
+        self.assertEqual(prepare.DATA_VERSION, 2586)
+        self.assertEqual(prepare.PROTOCOL_VERSION, 754)
+        self.assertEqual(prepare.CLIENT_SHA1, "37fd3c903861eeff3bc24b71eed48f828b5269c8")
+        self.assertEqual(prepare.SERVER_SHA1, "1b557e7b033b583cd9f66746b7a9ab1ec1673ced")
+
+    def test_manifest_rejects_wrong_hash_before_parsing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "1.16.5.json"
+            path.write_text(json.dumps({"id": "1.16.5"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "pinned official"):
+                prepare.validate_manifest(path)
+
+    def test_runs_vanilla_datagen_and_finds_the_block_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = root / "server.jar"
+            server.write_bytes(b"test")
+            def fake_run(command, cwd, stdout, stderr, check):
+                self.assertEqual(command[0], "java-test")
+                self.assertEqual(command[1:4], ["-cp", str(server.resolve()), "net.minecraft.data.Main"])
+                self.assertEqual(command[-3:], ["--reports", "--output", "out"])
+                self.assertEqual(cwd, root / "out" / "datagen")
+                report = cwd / "out" / "reports" / "blocks.json"
+                report.parent.mkdir(parents=True)
+                report.write_text("{}", encoding="utf-8")
+            with patch.object(prepare.subprocess, "run", side_effect=fake_run) as run:
+                report = prepare.run_blocks_datagen(server, root / "out", "java-test")
+            self.assertEqual(report, root / "out" / "datagen" / "out" / "reports" / "blocks.json")
+            run.assert_called_once()
+
+    def test_validates_actual_1165_biome_dimension_and_colormap_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            biome = root / "data/minecraft/worldgen/biome/plains.json"
+            dimension = root / "data/minecraft/dimension_type/overworld.json"
+            biome.parent.mkdir(parents=True)
+            dimension.parent.mkdir(parents=True)
+            biome.write_text('{"temperature":0.8,"downfall":0.4}', encoding="utf-8")
+            dimension.write_text('{"has_skylight":true}', encoding="utf-8")
+            for name in ("grass", "foliage"):
+                path = root / f"assets/minecraft/textures/colormap/{name}.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                header = bytearray(24)
+                header[:8] = b"\\x89PNG\\r\\n\\x1a\\n"
+                header[12:16] = b"IHDR"
+                header[16:20] = (256).to_bytes(4, "big")
+                header[20:24] = (256).to_bytes(4, "big")
+                path.write_bytes(header)
+            result = prepare.validate_runtime_inputs(root)
+            self.assertEqual(result["biomes"], 1)
+            self.assertEqual(result["colormap_pixels"], 2 * 256 * 256)
+
+    def test_rejects_missing_1165_worldgen_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(FileNotFoundError, "plains.json"):
+                prepare.validate_runtime_inputs(Path(tmp))
+
+    def test_safe_extract_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "sample.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("../escape.txt", "no")
+            with zipfile.ZipFile(archive_path) as archive:
+                with self.assertRaisesRegex(ValueError, "Unsafe jar entry"):
+                    prepare.safe_extract(archive, ["../escape.txt"], Path(tmp) / "out")
+
+    def test_exports_required_block_tags_from_server_jar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = Path(tmp) / "server.jar"
+            expected = {
+                "data/minecraft/tags/block/blocks_motion_in_heightmap.json": '{"values":["minecraft:stone"]}',
+                "data/minecraft/tags/block/blocks_motion_in_heightmap_no_leaves.json": '{"values":["minecraft:stone"]}',
+                "data/minecraft/tags/block/blocks_fluid_flow.json": '{"values":["minecraft:water"]}',
+                "data/minecraft/tags/block/replaceable.json": '{"values":["minecraft:grass"]}',
+            }
+            with zipfile.ZipFile(jar, "w") as archive:
+                for name, value in expected.items():
+                    archive.writestr(name, value)
+                archive.writestr("data/minecraft/loot_table/ignored.json", "{}")
+            tags = prepare.export_block_tags(jar)
+            self.assertEqual(
+                set(tags),
+                {
+                    "minecraft:blocks_motion_in_heightmap",
+                    "minecraft:blocks_motion_in_heightmap_no_leaves",
+                    "minecraft:blocks_fluid_flow",
+                    "minecraft:replaceable",
+                },
+            )
+            self.assertEqual(
+                tags["minecraft:blocks_fluid_flow"],
+                '{"values":["minecraft:water"]}',
+            )
+
+    def test_legacy_jar_gets_prototype_heightmap_tag_fallbacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = Path(tmp) / "server.jar"
+            with zipfile.ZipFile(jar, "w") as archive:
+                archive.writestr("data/minecraft/tags/block/planks.json", '{"values":["minecraft:oak_planks"]}')
+            tags = prepare.export_block_tags(jar)
+            self.assertIn("minecraft:stone", json.loads(tags["minecraft:blocks_motion_in_heightmap"])["values"])
+            self.assertEqual(
+                json.loads(tags["minecraft:blocks_motion_in_heightmap_no_leaves"]),
+                json.loads(tags["minecraft:blocks_motion_in_heightmap"]),
+            )
+            self.assertEqual(
+                json.loads(tags["minecraft:blocks_fluid_flow"]),
+                {"values": []},
+            )
+
+    def test_safe_extract_writes_selected_resources_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "sample.zip"
+            output = Path(tmp) / "out"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("data/minecraft/worldgen/noise_settings.json", "{}")
+                archive.writestr("unrelated.txt", "ignored")
+            with zipfile.ZipFile(archive_path) as archive:
+                count = prepare.safe_extract(
+                    archive,
+                    ["data/minecraft/worldgen/noise_settings.json"],
+                    output,
+                )
+            self.assertEqual(count, 1)
+            self.assertEqual(
+                (output / "data/minecraft/worldgen/noise_settings.json").read_text(),
+                "{}",
+            )
+            self.assertFalse((output / "unrelated.txt").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

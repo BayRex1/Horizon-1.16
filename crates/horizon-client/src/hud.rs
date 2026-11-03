@@ -374,15 +374,38 @@ impl HudAtlas {
         for folder in folders {
             walk(&textures.join(folder), &mut files);
         }
+        // A resource pack is an overlay, not a complete replacement for the
+        // vanilla texture tree. Keep its files first, then add every missing
+        // vanilla texture so title art, widgets and the bitmap font remain
+        // available when the selected pack does not override them.
+        if let Some(defaults) = &default_textures {
+            let mut vanilla = Vec::new();
+            for folder in folders {
+                walk(&defaults.join(folder), &mut vanilla);
+            }
+            let present: std::collections::HashSet<_> = files
+                .iter()
+                .filter_map(|path| path.strip_prefix(&textures).ok())
+                .map(|path| path.to_path_buf())
+                .collect();
+            files.extend(vanilla.into_iter().filter(|path| {
+                path.strip_prefix(defaults)
+                    .ok()
+                    .is_some_and(|relative| !present.contains(relative))
+            }));
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
         type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
-            let name = path
-                .strip_prefix(&textures)
-                .ok()?
+            let relative = path.strip_prefix(&textures).ok().or_else(|| {
+                default_textures
+                    .as_ref()
+                    .and_then(|defaults| path.strip_prefix(defaults).ok())
+            })?;
+            let name = relative
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/");

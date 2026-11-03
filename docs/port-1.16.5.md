@@ -1,0 +1,153 @@
+# Minecraft Java 1.16.5 port
+
+## Target and baseline
+
+Target: **Minecraft: Java Edition 1.16.5** (protocol **754**, data version **2586**, Java 8).
+
+This branch starts from Horizon's Rust implementation for Minecraft 26.3 (protocol 777, data version 5023, Java 25). It is not a 1.16.5 game merely because the protocol helpers compile: block registries, world-generation data, assets, save format, and gameplay rules also differ.
+
+## Priority decision: singleplayer first
+
+The first playable milestone is now a **local singleplayer world**. Do not spend the next implementation steps wiring remote-server connections. The existing client already has a local-world loading path and an integrated game/server tick path, but those paths currently use modern-version assumptions. The job is to backport the local world path to 1.16.5, not to invent a new server connection as a shortcut.
+
+Implementation order:
+1. Load the user's own 1.16.5 resources and registry data without committing Mojang jars/assets.
+2. Create a new local world from the existing Create World flow; seed and game mode must reach the local world request.
+3. Generate the first terrain chunks locally and put them into the resident chunk/streaming pipeline.
+4. Render the generated chunks, find a valid spawn, and make movement/collision work.
+5. Save and reopen the world using the 1.16.5-compatible data version and region/chunk layout.
+6. Optimize chunk generation, meshing, draw distance, and frame pacing only after the first local world is visible.
+7. **Defer multiplayer/server compatibility** until the singleplayer acceptance checks pass.
+
+## Milestone 1 — build and identify the local-world seams
+
+- [x] Fix the Rust compile error in the legacy biome helper (return `Ok(cells)`).
+- [x] Keep CI green on the current branch before adding more changes.
+- [x] Trace Create World -> WorldRequest -> PreparedWorld -> integrated game tick -> streaming -> renderer.
+- [x] Mark the first data/version dependency: `Assets::load` rejects resource bundles whose `data_version` differs from the single compiled `horizon_world::DATA_VERSION`; the preparer is pinned by `research-lock.json` to 26.3 / Java 25. The current Create World UI and integrated server are present, but they do not make the game 1.16.5-compatible.
+- [ ] Establish a local-world test that does not require a network connection.
+
+## Milestone 2 — 1.16.5 local world bootstrap
+
+- [x] Add `tools/prepare_1_16_5.py`: it pins official 1.16.5 manifest/client/server SHA-1 values, validates the player's local files, and stages client `assets/minecraft` plus server `data/minecraft` inputs. It never downloads or commits the game jars/assets.
+- [ ] Turn the staged inputs into a complete Horizon bundle. The staging tool intentionally does not emit `horizon-resources.json` because the version-specific registry/state exporter and worldgen adapters are not implemented yet.
+- [ ] Build a complete version-specific registry/resource bundle for block states, biomes, dimensions, features, and tags. The initial block/biome reference dataset and isolated Rust parser are now present; they are not yet wired into world generation. Keep the existing 26.3 resource format working until the 1.16.5 bundle is parsed and validated end-to-end.
+- [ ] Make the Create World flow construct a world with 1.16.5 defaults: overworld dimension height, seed, game mode, difficulty, structures and bonus-chest options.
+- [ ] Ensure the first local chunks are generated in-process; no TCP connection or remote chunk packet is involved.
+- [ ] Add deterministic tests for a fixed seed and key terrain/spawn invariants.
+
+## Milestone 3 — terrain visible and playable
+
+- [ ] Generate and install the spawn-area chunk columns into the resident world.
+- [ ] Use the 1.16.5 vertical range (Y=0..255; the modern -64..319 range is incorrect) throughout chunk storage, heightmaps, lighting and collision.
+- [ ] Calculate lighting and build meshes for local chunks.
+- [ ] Place the player at a safe spawn and verify walking, jumping, collision, block targeting, breaking and placing.
+- [ ] Test create -> play -> save -> quit -> reopen with the same seed and terrain.
+
+## Milestone 4 — assets, persistence and performance
+
+- [ ] Load 1.16.5 textures, models, sounds and language files from the user's installation; do not ship game assets in the repository.
+- [ ] Read/write 1.16.5 save metadata and chunk NBT correctly; do not label modern save data as 1.16.5.
+- [ ] Add a low-end preset after rendering is correct: short render distance, fewer effects, bounded chunk build queues, and sensible memory use.
+- [ ] Measure frame time, chunk generation time and memory. Do not claim FPS gains without measurements on actual hardware.
+- [ ] Run formatting, unit tests and CI after each coherent change.
+
+## Deferred milestone — multiplayer
+
+Protocol-754 groundwork already exists in `crates/horizon-protocol/src/legacy_1_16_5.rs`, and a chunk event bridge exists in the client. It is **not the current priority**. Once singleplayer works, revisit packet login, online-mode authentication, server chunk decoding, movement/interactions, and clean disconnect handling. Do not claim server compatibility until an end-to-end test succeeds.
+
+## Technical risks
+
+1. The port is a substantial backport from 26.3, not a version-string change.
+2. Existing generation and gameplay code depends on modern registry/resource data and world-height assumptions.
+3. The renderer's graphics API/driver requirements are independent of the protocol and may limit old Intel GPUs.
+4. Rust/toolchain/dependency requirements may exceed what the target laptop can run comfortably.
+
+## Acceptance criteria
+
+**Singleplayer milestone:** launch the client, create a world with a fixed seed without network access, see locally generated terrain, spawn safely, move and interact with blocks, save, exit, and reopen the same world without a crash. A successful Rust compilation alone is not sufficient.
+
+
+## Version-specific preparation — first implementation
+
+The 1.16.5 input stager is a developer tool, separate from the existing 26.3 preparer, so the current version's research lock and generated constants stay untouched. It checks official hashes before extracting anything, rejects unsafe archive paths, and writes a report that explicitly marks the output as staged inputs rather than a playable bundle. A local server jar is optional: if omitted, the script downloads the pinned official 1.16.5 server jar into a temporary directory and removes it afterward.
+
+Example (Windows PowerShell; use the path to your Minecraft launcher install):
+
+```powershell
+py -3 tools/prepare_1_16_5.py `
+  --minecraft-dir "$env:APPDATA\.minecraft" `
+  --out ".local\horizon-client\1.16.5-inputs"
+```
+
+You do not need Linux or a running Minecraft server. This script is for developers preparing source data; someone testing a prebuilt Horizon Windows package should not need to run it at all.
+
+The output contains `client-assets/`, `server-data/`, and `horizon-1.16.5-inputs.json`. It is an intermediate dataset only. If you already generated the official 1.16.5 DataGenerator `reports/blocks.json`, pass `--blocks-report "path/to/blocks.json"`; the preparer then runs `tools/export_1_16_5_registry.py` and writes `facts.json` into the output directory. This exports block-state identities/default states only, not a playable bundle. The block-state identity exporter can now be invoked by the preparation script when a verified DataGenerator report is supplied. The remaining critical work includes exact block behavior/tag facts, biome registry and biome-source adapters, noise settings/density functions, carvers and placed features. Until those exist, do not point the current client at the staged folder or describe it as a working resource bundle.
+
+
+## Public research sources — no manual JAR downloads for the tester
+
+The port can be researched and implemented using public technical references and versioned data repositories. These are development inputs; the tester on Windows 7 should receive a prebuilt client and should not run this preparation script.
+
+- **Versioned generated game data:** [misode/mcmeta](https://github.com/misode/mcmeta). Its repository describes versioned snapshots of generated data and assets, with a `summary` branch containing condensed block-state data and registries. Select the exact 1.16.5 revision/branch before importing anything; do not use the repository's current-version data for this port.
+- **Block, item, biome and protocol reference data:** [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data). Its supported-version list includes Java 1.16.5 and it provides machine-readable data useful for building Rust lookup tables and protocol fixtures. Treat it as reference data, not as the terrain generator itself.
+- **Chunk storage and network representation:** [Minecraft Wiki — Java Edition protocol/Chunk format](https://minecraft.wiki/w/Java_Edition_protocol/Chunk_format). Use the version-specific sections to implement palettes, block-state indices, biome data and chunk-section serialization.
+- **World-generation concepts and data-pack schema:** [Minecraft Wiki — Custom world generation](https://minecraft.wiki/w/Custom_world_generation), [Noise settings](https://minecraft.wiki/w/Noise_settings), and [Biome definition (Java Edition)](https://minecraft.wiki/w/Biome_definition_(Java_Edition)). These explain the data model, but the exact 1.16.5 defaults and algorithm behavior must be verified against versioned data.
+- **Historical 1.16.5 worldgen examples:** [KubeJS 1.16.5 worldgen reference](https://kubejs.com/wiki/tutorials/worldgen/1605) and [slicedlime/examples](https://github.com/slicedlime/examples) can help clarify feature ordering and legacy worldgen conventions.
+
+### How to use these sources
+
+1. Import only data verified to match Java 1.16.5 (data version 2586); record source URL, version and checksum for each generated table.
+2. Generate Rust tables for block identifiers/states, biome identifiers/properties, tags and collision shapes from machine-readable sources where possible.
+3. Implement the 1.16.5 terrain algorithm in Rust: noise settings and density calculations, biome selection, caves/carvers, surface rules, placed features and structures. Public documentation alone does not guarantee bit-for-bit seed parity.
+4. Add deterministic fixture tests for known seeds and compare biome/terrain samples against independently generated 1.16.5 reference outputs.
+5. Keep the JAR staging script optional as a verification/fallback tool for developers. It is not a runtime dependency and is not something the Windows 7 tester should have to use.
+
+**Important:** public reference data can remove the need for a developer to manually download the JARs for every iteration, but it does not make a complete generator appear automatically. The Rust implementation and seed-based validation remain required. Check each source's license/terms before copying or redistributing its data.
+
+
+## Nether biome preset — four-channel query adapter
+
+- [x] Model the four sampled channels used by the 1.16.5 Nether multi-noise source: temperature, humidity, altitude and weirdness.
+- [x] Keep the preset offset as candidate-biome metadata; do not model it as a fifth sampled noise field.
+- [x] Add `vanilla_nether_biome_from_noise` to pass four finite samples into the five-axis nearest-preset selector.
+- [ ] Implement the four seed-initialized 1.16.5 `DoublePerlinNoiseSampler` instances and verify their sample coordinates against vanilla fixtures.
+
+The adapter does not construct noise samplers and is not yet a seed-to-biome generator. Its input must come from the exact 1.16.5 sampler implementation; arbitrary or modern-version noise values are not valid parity evidence.
+
+## Nether biome preset — implemented selection stage
+
+- [x] Add the five vanilla 1.16.x Nether multi-noise preset points for Nether Wastes, Soul Sand Valley, Crimson Forest, Warped Forest and Basalt Deltas.
+- [x] Add a separate five-axis nearest-point selector, without mapping Nether coordinates into the six-axis Overworld climate index.
+- [x] Reject non-finite climate samples and test each preset point.
+- [ ] Generate the five climate-noise inputs from the 1.16.5 world seed and sample coordinates; the current selector accepts already-computed climate values only.
+- [ ] Validate the generated biome samples against a vanilla 1.16.5 reference world before connecting this selector to chunk generation.
+
+The preset coordinates are cross-checked against the historical Nether dimension JSON example at [alcatrazEscapee's reference](https://gist.github.com/alcatrazEscapee/b4c7f2cb94d48c5f5a0ba035d162ea3d). This is a source for the five preset points, not proof that the Rust implementation already reproduces vanilla climate noise or complete Nether terrain.
+
+## Milestone — initial 1.16.x registry reference data
+
+- [x] Add a compact machine-readable block registry reference at `crates/horizon-world/data/legacy_1_16_5/blocks.json` (763 block types; state ID range 0–17111).
+- [x] Add a biome registry reference at `crates/horizon-world/data/legacy_1_16_5/biomes.json` (79 biome entries, including Nether biomes).
+- [x] Add `horizon_world::legacy_1_16_5` accessors that parse the bundled reference data, plus tests for registry ordering, state ranges, selected block properties, and required biomes.
+- [x] Record source/version caveats in `crates/horizon-world/data/legacy_1_16_5/source.json`.
+
+**Source caveat:** PrismarineJS currently exposes Java block/biome dumps under 1.16.2 rather than a separate 1.16.5 directory. These are useful as a 1.16.5 reference because no new block types were introduced in the intervening patch releases, but they are explicitly kept isolated and are not claimed as a complete 1.16.5 world-generation dataset. Biome numeric IDs must not be confused with the later 1.16.5 network registry ordering without a version-specific mapping. The next step is to import the exact 1.16.5 worldgen JSON (noise settings, density functions, carvers, features, biome definitions) from a versioned source and adapt the Rust generator to the 1.16.5 0..255 height range.
+
+
+## Public-data import — implemented starter
+
+- [x] Add `tools/import_1_16_5_reference_data.py` to fetch versioned worldgen JSON from `misode/mcmeta@1.16.5-data`.
+- [x] Fetch reference block/biome tables from PrismarineJS `1.16.2` and exact target protocol metadata from `1.16.5`; the importer labels the patch-version caveat rather than pretending the 1.16.2 table is independently verified as exact.
+- [x] Record each downloaded file's source URL, SHA-256, size and JSON type in a manifest.
+- [x] Add unit tests for version pins, digest shape, invalid JSON and output-directory safety.
+- [ ] Run the importer in CI and inspect actual downloaded file counts and schema.
+- [ ] Convert imported definitions into Rust-consumable version-specific data and wire them into a 1.16.5 generator adapter.
+
+Run on a developer machine (Python 3; no Java or JAR needed):
+
+```powershell
+py -3 tools/import_1_16_5_reference_data.py --out .local\horizon-client\1.16.5-reference
+```
+
+This step downloads structured reference JSON only. It does not download the Minecraft client/server JAR, and it does not yet make the Rust client playable. The already checked-in `crates/horizon-world/data/legacy_1_16_5/` block/biome tables remain the initial lookup reference until the importer output is validated and deliberately promoted.

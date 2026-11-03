@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+//! Build retry marker: restart CI after a stalled Windows compilation.
 mod advancements;
 mod advancements_screen;
 mod agent;
@@ -318,6 +319,288 @@ struct Options {
     /// What this Game executes; independent of its current server connection.
     execution_role: execution_role::ExecutionRole,
 }
+/// Import the official launcher's indexed 1.16.5 assets into a prepared Horizon
+/// resource bundle. The dev ZIP ships the generated Horizon manifest, while the
+/// player's Minecraft installation owns the vanilla asset index and object store.
+fn import_official_asset_store(
+    root: &std::path::Path,
+    minecraft_dirs: &[std::path::PathBuf],
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let version_rel = std::path::Path::new("versions/1.16.5/1.16.5.json");
+    let source = minecraft_dirs.iter().find(|dir| {
+        // The shared resource root may itself be the official asset store.
+        // Never copy a file onto itself; materialize_asset_objects will read
+        // the assets directly from that root.
+        *dir != root
+            && dir.join(version_rel).is_file()
+            && dir.join("assets/indexes").is_dir()
+            && dir.join("assets/objects").is_dir()
+    });
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let version_json = source.join(version_rel);
+    let version: serde_json::Value = serde_json::from_slice(&std::fs::read(&version_json)?)
+        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let index_id = version
+        .get("assetIndex")
+        .and_then(|v| v.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "version JSON has no assetIndex.id"))?;
+    let index_rel = std::path::PathBuf::from("assets/indexes").join(format!("{index_id}.json"));
+    let index_bytes = std::fs::read(source.join(&index_rel))?;
+    let index: serde_json::Value =
+        serde_json::from_slice(&index_bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let objects = index
+        .get("objects")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
+    std::fs::create_dir_all(root.join("assets/indexes"))?;
+    std::fs::copy(source.join(&index_rel), root.join(&index_rel))?;
+    for entry in objects.values() {
+        let Some(hash) = entry.get("hash").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        let rel = std::path::PathBuf::from("assets/objects")
+            .join(&hash[..2])
+            .join(hash);
+        let from = source.join(&rel);
+        let to = root.join(&rel);
+        if from.is_file() && !to.is_file() {
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(from, to)?;
+        }
+    }
+    std::fs::create_dir_all(root.join("versions/1.16.5"))?;
+    std::fs::copy(&version_json, root.join(version_rel))?;
+    let jar_rel = std::path::Path::new("versions/1.16.5/1.16.5.jar");
+    if source.join(jar_rel).is_file() && !root.join(jar_rel).is_file() {
+        std::fs::copy(source.join(jar_rel), root.join(jar_rel))?;
+    }
+    log::info!(
+        "Horizon: imported the Minecraft 1.16.5 asset index and {} object files into the prepared resource bundle",
+        objects.len()
+    );
+    Ok(())
+}
+
+/// Resolve a safe resource path from the Minecraft 1.16.5 client JAR.
+/// Only the vanilla minecraft namespace is imported; other namespaces are
+/// owned by mods and must not be copied into the base game bundle.
+fn minecraft_jar_resource_destination(
+    root: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    let (tree, relative) = if let Some(relative) = name.strip_prefix("assets/minecraft/") {
+        ("assets", relative)
+    } else {
+        let relative = name.strip_prefix("data/minecraft/")?;
+        ("data", relative)
+    };
+    let relative = std::path::Path::new(relative);
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(root.join(tree).join("minecraft").join(relative))
+}
+
+#[cfg(test)]
+mod jar_resource_tests {
+    use super::*;
+
+    #[test]
+    fn jar_import_includes_assets_and_gameplay_data() {
+        let root = std::path::Path::new("prepared");
+        assert_eq!(
+            minecraft_jar_resource_destination(
+                root,
+                "assets/minecraft/textures/gui/title/minecraft.png"
+            ),
+            Some(root.join("assets/minecraft/textures/gui/title/minecraft.png"))
+        );
+        assert_eq!(
+            minecraft_jar_resource_destination(root, "data/minecraft/worldgen/biome/plains.json"),
+            Some(root.join("data/minecraft/worldgen/biome/plains.json"))
+        );
+    }
+
+    #[test]
+    fn jar_import_rejects_other_namespaces_and_traversal() {
+        let root = std::path::Path::new("prepared");
+        assert!(
+            minecraft_jar_resource_destination(root, "data/example/worldgen/biome/plains.json")
+                .is_none()
+        );
+        assert!(
+            minecraft_jar_resource_destination(root, "data/minecraft/../../outside.json").is_none()
+        );
+    }
+}
+
+/// Expand the official Minecraft object store and client JAR into the ordinary
+/// resource tree expected by rendering and gameplay. The JAR supplies both
+/// built-in assets and the 1.16.5 data/minecraft definitions.
+fn materialize_asset_objects(root: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind, Read};
+    let version_json = root.join("versions/1.16.5/1.16.5.json");
+    let version: serde_json::Value = serde_json::from_slice(&std::fs::read(&version_json)?)
+        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let index_id = version
+        .get("assetIndex")
+        .and_then(|v| v.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "version JSON has no assetIndex.id"))?;
+    let index_path = root.join("assets/indexes").join(format!("{index_id}.json"));
+    let index_bytes = std::fs::read(&index_path)?;
+    let index: serde_json::Value =
+        serde_json::from_slice(&index_bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let objects = index
+        .get("objects")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asset index has no objects map"))?;
+    // The title logo, edition banner and bitmap font are shipped inside the
+    // version JAR, not in the launcher asset index. A marker is valid only
+    // after that JAR was available and all menu-critical files were extracted.
+    // This also repairs installations that were first started before the JAR
+    // had been copied into the prepared resource root.
+    let client_jar = root.join("versions/1.16.5/1.16.5.jar");
+    let required_jar_resources = [
+        "assets/minecraft/textures/gui/title/minecraft.png",
+        "assets/minecraft/textures/gui/title/edition.png",
+        "assets/minecraft/font/default.json",
+        "assets/minecraft/textures/font/ascii.png",
+        "data/minecraft/worldgen/biome/plains.json",
+        "data/minecraft/dimension_type/overworld.json",
+    ];
+    let marker = root
+        .join("assets")
+        .join(format!(".horizon-materialized-{index_id}-jar-v8"));
+    if client_jar.is_file()
+        && required_jar_resources
+            .iter()
+            .all(|path| root.join(path).is_file())
+        && marker.is_file()
+    {
+        return Ok(root.to_path_buf());
+    }
+    std::fs::create_dir_all(root.join("assets"))?;
+    let mut copied = 0usize;
+    for (name, entry) in objects {
+        let Some(hash) = entry.get("hash").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        let relative = std::path::Path::new(name);
+        if relative
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let source = root.join("assets/objects").join(&hash[..2]).join(hash);
+        if !source.is_file() {
+            continue;
+        }
+        let destination = root.join("assets").join(relative);
+        // This is the 1.16.5 asset index, so replace stale files left by 26.3.
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match std::fs::copy(&source, &destination) {
+            Ok(_) => copied += 1,
+            Err(error) => log::warn!("Horizon: could not materialize asset {name}: {error}"),
+        }
+    }
+
+    // Minecraft's client JAR contains important built-in resources that are
+    // not represented by assets/indexes (notably the title logo and fonts).
+    if client_jar.is_file() {
+        let file = std::fs::File::open(&client_jar)?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let mut jar_copied = 0usize;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            let name = entry.name().replace('\\', "/");
+            if entry.is_dir() {
+                continue;
+            }
+            // The JAR carries 1x1 placeholders for the title panorama. The
+            // full six cube faces and overlay come from the version's asset
+            // index above; never overwrite those full-resolution files.
+            if name.starts_with("assets/minecraft/textures/gui/title/background") {
+                continue;
+            }
+            // The client JAR also contains the 1.16.5 biome and dimension JSON
+            // under data/minecraft; these are absent from the launcher asset index.
+            let Some(destination) = minecraft_jar_resource_destination(root, &name) else {
+                continue;
+            };
+            // The prepared root can still contain same-path resources from the
+            // newer bootstrap version (26.3). For Minecraft 1.16.5, the client
+            // JAR is authoritative: replace those files instead of silently
+            // keeping the newer logo/font textures.
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            std::fs::write(&destination, bytes)?;
+            jar_copied += 1;
+        }
+        log::info!(
+            "Horizon: materialized {jar_copied} additional resources from Minecraft 1.16.5 client JAR"
+        );
+    } else {
+        log::warn!(
+            "Horizon: Minecraft 1.16.5 client JAR not found at {}; built-in logo/font resources may be missing",
+            client_jar.display()
+        );
+    }
+
+    for path in [
+        "assets/minecraft/textures/gui/title/minecraft.png",
+        "assets/minecraft/font/default.json",
+        "assets/minecraft/textures/font/ascii.png",
+    ] {
+        log::info!(
+            "Horizon: resource check {path}: {}",
+            root.join(path).is_file()
+        );
+    }
+    if client_jar.is_file()
+        && required_jar_resources
+            .iter()
+            .all(|path| root.join(path).is_file())
+    {
+        std::fs::write(
+            &marker,
+            format!("index={index_id}\nasset_files={copied}\njar=1.16.5\n"),
+        )?;
+    } else {
+        log::warn!(
+            "Horizon: menu resources are incomplete; the 1.16.5 client JAR must be present at {}",
+            client_jar.display()
+        );
+    }
+    log::info!("Horizon: materialized {copied} Minecraft assets from index {index_id}");
+    Ok(root.to_path_buf())
+}
+
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
     /// next to options.txt (created on first use).
@@ -330,16 +613,71 @@ impl Options {
         })
     }
     fn read() -> Result<Option<Self>> {
-        let sibling = std::env::current_exe()?
+        let executable_dir = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
-            .join("resources");
+            .to_path_buf();
+        let packaged = executable_dir.join("resources");
+        let versioned = executable_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        let working_dir = std::env::current_dir().unwrap_or_default();
+        let working_versioned = working_dir
+            .join(".local")
+            .join("horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        // On Windows, use the shared Minecraft resource home requested by
+        // players. Its assets/ and versions/ directories live side by side.
+        // APPDATA is the roaming profile directory, e.g.
+        // %APPDATA%\\.minecraft\\horizon-resources.
+        let roaming_resources = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|appdata| appdata.join(".minecraft").join("horizon-resources"));
+        // The shared resource directory is the canonical runtime location:
+        // %APPDATA%\\.minecraft\\horizon-resources. Prefer it whenever it
+        // exists, just as the earlier Horizon builds did. The version-local
+        // folders are only fallbacks for installations without that directory.
+        let resources = roaming_resources
+            .as_ref()
+            .filter(|path| path.is_dir() && path.join("horizon-resources.json").is_file())
+            .cloned()
+            .or_else(|| {
+                [packaged, versioned.clone(), working_versioned]
+                    .into_iter()
+                    .find(|path| path.join("horizon-resources.json").is_file())
+            })
+            .unwrap_or(versioned);
+        // The official launcher stores assets by SHA-1 under assets/objects.
+        // Expose a cached ordinary resource tree to existing game loaders.
+        // A dev ZIP contains Horizon's generated manifest but deliberately does
+        // not bundle Minecraft's copyrighted client assets. Merge the player's
+        // own official asset store into that prepared root before loading it.
+        let minecraft_dirs: Vec<PathBuf> = roaming_resources
+            .as_ref()
+            .into_iter()
+            .flat_map(|path| [path.clone(), path.parent().unwrap_or(path).to_path_buf()])
+            .collect();
+        if resources.join("horizon-resources.json").is_file()
+            && let Err(error) = import_official_asset_store(&resources, &minecraft_dirs)
+        {
+            log::warn!("Horizon: could not import the official Minecraft asset store: {error}");
+        }
+        let resources = if resources.join("assets/indexes").is_dir()
+            && resources.join("assets/objects").is_dir()
+        {
+            match materialize_asset_objects(&resources) {
+                Ok(prepared_root) => prepared_root,
+                Err(error) => {
+                    log::warn!("Horizon: could not prepare indexed Minecraft assets: {error}");
+                    resources
+                }
+            }
+        } else {
+            resources
+        };
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
-                sibling
-            } else {
-                std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
-            },
+            resources,
             distance: 12,
             distance_override: None,
             seed: 0,
@@ -1183,7 +1521,9 @@ impl UiResources {
     pub fn load(root: &std::path::Path, defaults: &std::path::Path) -> Result<Self> {
         Ok(Self {
             atlas: HudAtlas::build_over(root, defaults)?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load_over(
+                root, defaults,
+            )),
         })
     }
 }
@@ -13012,17 +13352,32 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        let title_idle = self.title.is_some()
+            && self.player.is_none()
+            && self.pending_entry.is_none()
+            && self.pending_save.is_none();
         if let Some(w) = &self.window {
             if self.options.offscreen {
                 // Offscreen frames don't wait for the window to be drawn: an
                 // occluded window (a locked macOS session) gets no redraws.
                 let id = w.id();
                 self.window_event(event_loop, id, WindowEvent::RedrawRequested);
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else if title_idle {
+                // No world simulation is active on the title screen. Do not
+                // spin the entire event loop just to animate a menu; input and
+                // window events still wake it immediately.
+                w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(66),
+                ));
             } else {
                 w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
             }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
@@ -13731,6 +14086,16 @@ fn synchronous_startup(options: &Options) -> bool {
         || std::env::var_os("HORIZON_NET_REPORT").is_some()
 }
 
+/// Preserve the panic payload when a resource sub-worker fails.
+fn worker_panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+        .to_owned()
+}
+
 /// The synchronous launch loads both phases; an ordinary launch returns the
 /// core bundle while the rest worker keeps loading.
 fn load_resources(
@@ -13742,6 +14107,7 @@ fn load_resources(
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
 ) -> Result<Loaded> {
+    log::info!("Horizon: resource loader stage 0: resolving resource root");
     let requested_root = root.clone();
     let threads = settings.horizon.worker_threads();
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
@@ -13775,6 +14141,7 @@ fn load_resources(
         }
         ui_ready = true;
     }
+    log::info!("Horizon: resource loader stage 1: loading asset registry and render resources");
     progress.set(0);
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
@@ -13816,6 +14183,7 @@ fn load_resources(
     }
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(1);
+    log::info!("Horizon: resource loader stage 2: reading block behaviour data");
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
@@ -13828,20 +14196,39 @@ fn load_resources(
     };
     let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
     let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
+    log::info!(
+        "Horizon: resource loader stage 3: loading block facts, biomes and environment ({} workers)",
+        threads
+    );
     let (facts, biomes, environment) = if threads > 1 {
         std::thread::scope(|scope| {
             let facts = scope.spawn(load_facts);
             let biomes = scope.spawn(load_biomes);
             let environment = scope.spawn(load_environment);
-            (
-                facts.join().unwrap(),
-                biomes.join().unwrap(),
-                environment.join().unwrap(),
-            )
+            let facts = facts.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "block facts worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            let biomes = biomes.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "biome worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            let environment = environment.join().unwrap_or_else(|panic| {
+                Err(format!(
+                    "environment worker panicked: {}",
+                    worker_panic_message(panic)
+                ))
+            });
+            (facts, biomes, environment)
         })
     } else {
         (load_facts(), load_biomes(), load_environment())
     };
+    log::info!("Horizon: resource loader stage 4: validating worker results");
     let (facts, gameplay_projection) =
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
@@ -13850,6 +14237,7 @@ fn load_resources(
     progress.set(2);
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(3);
+    log::info!("Horizon: resource loader stage 5: loading light and pack tables");
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
@@ -13861,6 +14249,7 @@ fn load_resources(
             &settings.language,
         ));
     }
+    log::info!("Horizon: resource loader stage 6: loading collision and motion data");
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load_with_facts(&root, &registry_owner, &facts)?;
@@ -13890,6 +14279,7 @@ fn load_resources(
     }
     // Finish fallible CPU preparation before starting the tail, so an error
     // cannot detach a tail worker that races the next pack-loader generation.
+    log::info!("Horizon: resource loader stage 7: preparing game and renderer CPU resources");
     let prepared_at = Instant::now();
     let game_cpu = menu.then(|| GameCpuResources::load(&root)).transpose()?;
     let renderer_cpu = menu.then(|| prepare_renderer_textures(&pack));
@@ -14398,8 +14788,15 @@ struct Loading {
     receiver: Receiver<LoaderMsg>,
     loaded: Option<std::result::Result<Loaded, String>>,
     handle: Option<JoinHandle<()>>,
+    /// The resource worker failed after the menu bundle was published. Keep
+    /// the window alive in menu-only mode instead of exiting the application.
+    resource_failed: bool,
     shown: bool,
     menu: startup_menu::StartupMenu,
+    /// Audio and menu music are active before the full game starts.
+    audio: Option<Audio>,
+    music: horizon_client::music::MusicManager,
+    audio_tick_at: Instant,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -14470,6 +14867,7 @@ impl Loading {
             "Horizon: loading the title artwork after {} ms",
             self.started.elapsed().as_millis()
         );
+        self.audio = Some(Audio::new(&root));
         self.menu.set_root(root, &self.settings);
         self.gui = Some(gui);
         horizon_client::ui_theme::reset_atlas();
@@ -14506,14 +14904,44 @@ impl Loading {
             event_loop.exit();
             return;
         }
-        if let Some(w) = &self.window {
-            if self.options.as_ref().is_some_and(|o| o.offscreen) {
-                self.draw();
-            } else {
-                w.request_redraw();
+        if self.audio_tick_at.elapsed() >= Duration::from_millis(50) {
+            self.audio_tick_at = Instant::now();
+            if let Some(audio) = self.audio.as_mut() {
+                self.music.tick(
+                    Some(&horizon_client::music::Music::menu()),
+                    1.0,
+                    false,
+                    audio,
+                );
+                audio.tick(
+                    false,
+                    &horizon_client::sound_engine::TickContext {
+                        player_underwater: false,
+                        player_removed: true,
+                        vehicle: None,
+                        carts: Vec::new(),
+                        frozen: false,
+                    },
+                );
             }
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
+        if let Some(w) = &self.window {
+            if self.options.as_ref().is_some_and(|o| o.offscreen) {
+                // Offscreen harnesses intentionally run as fast as possible:
+                // their frame count and timeout are part of the test contract.
+                self.draw();
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else {
+                // Keep the title screen responsive without an unbounded redraw loop.
+                // A 16 ms cadence targets approximately 60 FPS.
+                w.request_redraw();
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(16),
+                ));
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
     fn draw(&mut self) {
         let Some(size) = self
@@ -14684,9 +15112,27 @@ impl ApplicationHandler for App {
             Step::Done => event_loop.exit(),
             Step::Failed(e) => {
                 if let App::Loading(loading) = self {
-                    loading.error = Some(e);
+                    if loading.gui.is_some() && loading.menu.title.is_some() {
+                        let message = e.to_string();
+                        log::error!(
+                            "Horizon: continuing with the title menu; world resources are unavailable: {message}"
+                        );
+                        // The title screen only needs the menu bundle, which was
+                        // already published. Keep it visible and show the normal
+                        // resource error panel instead of terminating the client.
+                        loading.menu.show_resource_error(message);
+                        loading.resource_failed = true;
+                        loading.loaded = None;
+                        if let Some(handle) = loading.handle.take() {
+                            let _ = handle.join();
+                        }
+                    } else {
+                        loading.error = Some(e);
+                        event_loop.exit();
+                    }
+                } else {
+                    event_loop.exit();
                 }
-                event_loop.exit();
             }
         }
     }
@@ -14725,8 +15171,12 @@ fn run_loading(
         receiver,
         loaded: None,
         handle: Some(loader),
+        resource_failed: false,
         shown: false,
         menu,
+        audio: None,
+        music: horizon_client::music::MusicManager::default(),
+        audio_tick_at: Instant::now(),
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
@@ -14748,7 +15198,25 @@ fn run_loading(
     Ok(())
 }
 
+/// Make direct launches use the same writable game home as the launcher.
+/// Windows can start a program with System32 as its working directory; relative
+/// saves/options/profile paths must never be resolved there.
+#[cfg(windows)]
+fn prepare_game_home() -> Result<()> {
+    let app_data = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
+    let home = std::path::PathBuf::from(app_data).join("horizon");
+    std::fs::create_dir_all(&home)?;
+    std::env::set_current_dir(home)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn prepare_game_home() -> Result<()> {
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
+    prepare_game_home()?;
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };

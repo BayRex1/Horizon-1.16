@@ -325,7 +325,14 @@ fn load_bitmap(
                 top,
                 right: cell_w as f32 * scale,
                 bottom: top + cell_h as f32 * scale,
-                advance: (0.5 + used as f32 * scale).floor() + 1.0,
+                // The vanilla ASCII bitmap sheet's space cell is fully transparent;
+                // measuring its visible pixels would collapse word spacing to 1 px.
+                // Minecraft's 1.16.5 bitmap font gives the space a 4 px advance.
+                advance: if *ch == ' ' {
+                    4.0
+                } else {
+                    (0.5 + used as f32 * scale).floor() + 1.0
+                },
                 offset: 1.0,
             };
             let glyph = match &sheet {
@@ -352,6 +359,31 @@ fn load_bitmap(
         }
     }
     out
+}
+/// A bundled emergency font for title/menu text when the version resource pack
+/// is not installed yet. This keeps the launcher UI readable while the
+/// version-specific Minecraft resources are being prepared.
+fn bundled_fallback() -> Option<TrueType> {
+    let data = include_bytes!("../../horizon-theme/fonts/Geist-Regular.ttf").to_vec();
+    let font = ab_glyph::FontVec::try_from_vec(data)
+        .map_err(|e| log::warn!("bundled fallback font: {e}"))
+        .ok()?;
+    let ids = font
+        .codepoint_ids()
+        .filter(|(id, _)| id.0 != 0)
+        .map(|(id, c)| (c, id))
+        .collect();
+    let size = 11.0f32;
+    let oversample = 2.0f32;
+    let units = font.units_per_em().unwrap_or(1000.0);
+    let scale = ab_glyph::PxScale::from(size * oversample * font.height_unscaled() / units);
+    Some(TrueType {
+        font,
+        ids,
+        scale,
+        oversample,
+        shift: (0.0, 0.0),
+    })
 }
 /// `TrueTypeGlyphProviderDefinition.load`: a TrueType file (not CFF) under
 /// `font/`, its Unicode characters but the `skip` ones.
@@ -608,6 +640,9 @@ impl Font {
         };
         // FontManager.prepare: every font definition of the resources.
         let mut ids = font_ids(root);
+        if !ids.iter().any(|id| id == DEFAULT) {
+            ids.push(DEFAULT.to_owned());
+        }
         ids.sort_by_key(|id| id != DEFAULT);
         let sets = ids
             .into_iter()
@@ -623,7 +658,7 @@ impl Font {
     fn load_set(&self, id: &str, pixels: &[u8]) -> FontSet {
         let mut all = Vec::new();
         providers(&self.root, id, 0, &mut all);
-        let providers = all
+        let mut providers: Vec<Provider> = all
             .iter()
             .filter_map(|p| match p["type"].as_str()? {
                 "space" => Some(Provider::Space(
@@ -646,6 +681,15 @@ impl Font {
                 _ => None,
             })
             .collect();
+        // The missing 1.16.5 resource bundle must not turn every menu label
+        // into a tofu box. Use a bundled Unicode-capable font only when the
+        // requested font has no resource providers at all.
+        if providers.is_empty()
+            && id == DEFAULT
+            && let Some(font) = bundled_fallback()
+        {
+            providers.push(Provider::TrueType(Filter::default(), Box::new(font)));
+        }
         FontSet {
             providers,
             glyphs: Default::default(),

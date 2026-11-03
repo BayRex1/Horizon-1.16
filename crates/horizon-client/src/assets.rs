@@ -100,16 +100,68 @@ pub struct RenderAssets {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+/// Accept the native version's bundle, or a fully staged 1.16.5 prototype.
+/// Registry-only and client-assets-only manifests are intentionally rejected:
+/// a legacy bundle must include gameplay/behaviour data, biome and dimension
+/// definitions, colormaps, and the cached shape tables used by world loading.
+fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<()> {
+    let found = manifest["data_version"].as_i64();
+    if found == Some(i64::from(DATA_VERSION)) {
+        return Ok(());
+    }
+    // Registry-only preparation is deliberately not launchable. The runtime
+    // needs the gameplay, behaviour, biome, environment and shape tables too;
+    // accepting the old marker here only moves the failure deeper into loading.
+    let legacy_prototype = found == Some(2586)
+        && manifest["minecraft"].as_str() == Some("1.16.5")
+        && manifest["bundle_kind"].as_str() == Some("prototype-1.16.5")
+        && manifest["status"].as_str() == Some("playable")
+        && root.join("facts.json").is_file()
+        && root.join("block-tags.json").is_file()
+        && root.join("gameplay-facts.json").is_file()
+        && root.join("block-behaviours.json").is_file()
+        && root
+            .join("data/minecraft/worldgen/biome/plains.json")
+            .is_file()
+        && root
+            .join("data/minecraft/dimension_type/overworld.json")
+            .is_file()
+        && root
+            .join("assets/minecraft/textures/colormap/grass.png")
+            .is_file()
+        && root
+            .join("assets/minecraft/textures/colormap/foliage.png")
+            .is_file()
+        && root.join("occlusion.nbt").is_file();
+    if legacy_prototype {
+        return Ok(());
+    }
+    let found = found
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| "missing or invalid".to_owned());
+    Err(invalid(&format!(
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). A 1.16.5 bundle is accepted only when it is marked prototype-1.16.5 with status=playable and contains the block registry, gameplay/behaviour exports, overworld biome and dimension data, grass/foliage colormaps, and occlusion table. Registry-only preparation is not playable.",
+        horizon_core::version::VERSION_ID
+    )))
+}
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
+        log::info!("Horizon: Assets::load: reading resource manifest");
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
             root.join("horizon-resources.json"),
         )?))?;
-        if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
-            return Err(invalid("resources do not match Horizon's pinned data version").into());
-        }
+        log::info!("Horizon: Assets::load: validating data version");
+
+        validate_resource_data_version(&manifest, root)?;
+        log::info!("Horizon: Assets::load: parsing block registry facts");
         let (registry, flags) =
             BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
+        log::info!(
+            "Horizon: Assets::load: parsed block registry ({} states)",
+            registry.len()
+        );
+        log::info!("Horizon: Assets::load: reading block tags");
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -124,6 +176,7 @@ impl Assets {
                     .ok_or_else(|| invalid("invalid block tag text"))?,
             )?;
         }
+        log::info!("Horizon: Assets::load: resolving block tags");
         let built =
             definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
         if !built.missing.is_empty() {
@@ -175,10 +228,12 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
         }
+        log::info!("Horizon: Assets::load: preparing block-state storage");
         // Chunks hold every state of this registry: content mods can take it
         // past vanilla's 16-bit global palette.
         crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+        log::info!("Horizon: Assets::load: complete");
         Ok(Self {
             registry,
             properties,
@@ -195,13 +250,17 @@ impl Assets {
 }
 impl RenderAssets {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        log::info!("Horizon: RenderAssets::load: starting sprite and model preparation");
         let registry = assets.registry;
         let mut sprites = crate::sprites::Sprites::default();
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
+        log::info!("Horizon: RenderAssets::load: parsing model library");
         let parsed = crate::model_library::ParsedModels::load(root);
+        log::info!("Horizon: RenderAssets::load: baking block models");
         let models = crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?;
+        log::info!("Horizon: RenderAssets::load: block models baked");
         let model_library = parsed.into_item_library();
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
@@ -217,7 +276,12 @@ impl RenderAssets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
+        log::info!(
+            "Horizon: RenderAssets::load: finalizing {} sprite layers",
+            sprites.count()
+        );
         sprites.finish();
+        log::info!("Horizon: RenderAssets::load: complete");
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
@@ -232,5 +296,74 @@ impl RenderAssets {
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
         })
+    }
+}
+
+#[cfg(test)]
+mod resource_version_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_native_bundle_and_complete_marked_legacy_prototype() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-resource-version-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("facts.json"), "{}").unwrap();
+        std::fs::write(root.join("block-tags.json"), "{}").unwrap();
+        let native = serde_json::json!({"data_version": DATA_VERSION});
+        assert!(validate_resource_data_version(&native, &root).is_ok());
+        let legacy = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "prototype-1.16.5",
+            "status": "playable"
+        });
+        for name in [
+            "gameplay-facts.json",
+            "block-behaviours.json",
+            "occlusion.nbt",
+        ] {
+            std::fs::write(root.join(name), "{}").unwrap();
+        }
+        let required = [
+            "data/minecraft/worldgen/biome/plains.json",
+            "data/minecraft/dimension_type/overworld.json",
+            "assets/minecraft/textures/colormap/grass.png",
+            "assets/minecraft/textures/colormap/foliage.png",
+        ];
+        for name in required {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}").unwrap();
+        }
+        assert!(validate_resource_data_version(&legacy, &root).is_ok());
+        let client_only = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "client-assets-only"
+        });
+        assert!(validate_resource_data_version(&client_only, &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_bundle_requires_both_registry_files() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-resource-version-incomplete-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("facts.json"), "{}").unwrap();
+        let legacy = serde_json::json!({
+            "minecraft": "1.16.5",
+            "data_version": 2586,
+            "bundle_kind": "prototype-1.16.5",
+            "status": "registry-only-not-playable"
+        });
+        let error = validate_resource_data_version(&legacy, &root).unwrap_err();
+        assert!(error.to_string().contains("prototype-1.16.5"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

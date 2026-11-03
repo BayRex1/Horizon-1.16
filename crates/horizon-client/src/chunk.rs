@@ -6,6 +6,7 @@ use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, OnceLock};
 
+/// Resident chunk storage currently uses the modern world-height layout.
 pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;

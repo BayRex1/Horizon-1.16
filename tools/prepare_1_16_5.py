@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""Validate a player's own Minecraft Java 1.16.5 files and stage version-specific inputs.
+
+This deliberately does NOT create horizon-resources.json: the Rust client still needs
+1.16.5-specific registry/state exporters and worldgen adapters before this data is
+safe to load as a playable world.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path, PurePosixPath
+
+VERSION = "1.16.5"
+DATA_VERSION = 2586
+PROTOCOL_VERSION = 754
+CLIENT_SHA1 = "37fd3c903861eeff3bc24b71eed48f828b5269c8"
+SERVER_SHA1 = "1b557e7b033b583cd9f66746b7a9ab1ec1673ced"
+VERSION_JSON_SHA1 = "436877ffaef948954053e1a78a366b8b7c204a91"
+CLIENT_URL = f"https://piston-data.mojang.com/v1/objects/{CLIENT_SHA1}/client.jar"
+SERVER_URL = f"https://piston-data.mojang.com/v1/objects/{SERVER_SHA1}/server.jar"
+VERSION_JSON_URL = f"https://piston-meta.mojang.com/v1/packages/{VERSION_JSON_SHA1}/{VERSION}.json"
+
+
+def sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_manifest(path: Path) -> dict:
+    actual = sha1(path)
+    if actual != VERSION_JSON_SHA1:
+        raise ValueError(
+            f"{path} is not the pinned official {VERSION} manifest: "
+            f"expected SHA-1 {VERSION_JSON_SHA1}, got {actual}"
+        )
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("id") != VERSION:
+        raise ValueError(f"Manifest id must be {VERSION!r}")
+    downloads = manifest.get("downloads", {})
+    for name, expected in (("client", CLIENT_SHA1), ("server", SERVER_SHA1)):
+        actual_hash = downloads.get(name, {}).get("sha1")
+        if actual_hash != expected:
+            raise ValueError(f"Manifest {name} SHA-1 mismatch: {actual_hash!r}")
+    if manifest.get("javaVersion", {}).get("majorVersion") != 8:
+        raise ValueError("Pinned 1.16.5 manifest does not declare Java 8")
+    return manifest
+
+
+def verify_jar(path: Path, expected: str, kind: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Missing {kind} jar: {path}\n"
+            f"Install and run Minecraft Java {VERSION} in the official launcher, "
+            f"or supply --server-jar. Official download: "
+            f"{CLIENT_URL if kind == 'client' else SERVER_URL}"
+        )
+    actual = sha1(path)
+    if actual != expected:
+        raise ValueError(
+            f"{path} is not the pinned {VERSION} {kind} jar: "
+            f"expected SHA-1 {expected}, got {actual}"
+        )
+    with zipfile.ZipFile(path) as archive:
+        bad = archive.testzip()
+        if bad:
+            raise ValueError(f"Corrupt {kind} jar entry: {bad}")
+
+
+def safe_extract(archive: zipfile.ZipFile, members: list[str], destination: Path) -> int:
+    """Extract only selected, normal relative paths; reject traversal and symlinks."""
+    count = 0
+    root = destination.resolve()
+    for name in members:
+        member = PurePosixPath(name)
+        if member.is_absolute() or ".." in member.parts:
+            raise ValueError(f"Unsafe jar entry: {name}")
+        target = (destination / Path(*member.parts)).resolve()
+        if target != root and root not in target.parents:
+            raise ValueError(f"Jar entry escapes output directory: {name}")
+        info = archive.getinfo(name)
+        if (info.external_attr >> 16) & 0o170000 == 0o120000:
+            raise ValueError(f"Refusing symbolic link in jar: {name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as source, target.open("wb") as output:
+            shutil.copyfileobj(source, output)
+        count += 1
+    return count
+
+
+def validate_runtime_inputs(root: Path) -> dict[str, int]:
+    """Validate the real 1.16.5 biome/dimension/colormap inputs used by the client."""
+    required_json = (
+        "data/minecraft/worldgen/biome/plains.json",
+        "data/minecraft/dimension_type/overworld.json",
+    )
+    for relative in required_json:
+        path = root / relative
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Official 1.16.5 data is missing {relative}; refusing to stage an incomplete bundle."
+            )
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid 1.16.5 JSON resource {relative}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Expected a JSON object in {relative}")
+
+    biome_dir = root / "data/minecraft/worldgen/biome"
+    biomes = sorted(biome_dir.glob("*.json"))
+    if len(biomes) < 1:
+        raise ValueError("The 1.16.5 biome registry is empty after extraction.")
+
+    colormaps = {}
+    for name in ("grass", "foliage"):
+        relative = f"assets/minecraft/textures/colormap/{name}.png"
+        path = root / relative
+        if not path.is_file():
+            raise FileNotFoundError(f"Official 1.16.5 client assets are missing {relative}.")
+        header = path.read_bytes()[:24]
+        if len(header) != 24 or header[:8] != b"\\x89PNG\\r\\n\\x1a\\n" or header[12:16] != b"IHDR":
+            raise ValueError(f"Invalid PNG colormap: {relative}")
+        width = int.from_bytes(header[16:20], "big")
+        height = int.from_bytes(header[20:24], "big")
+        if (width, height) != (256, 256):
+            raise ValueError(f"{relative} must be 256x256, got {width}x{height}")
+        colormaps[name] = width * height
+    return {"biomes": len(biomes), "colormap_pixels": sum(colormaps.values())}
+
+
+def export_block_tags(server: Path) -> dict[str, str]:
+    """Export vanilla 1.16.5 block tags in the exact bundle shape Assets::load reads."""
+    prefix = "data/minecraft/tags/block/"
+    required = {
+        "minecraft:blocks_motion_in_heightmap",
+        "minecraft:blocks_motion_in_heightmap_no_leaves",
+        "minecraft:blocks_fluid_flow",
+    }
+    with zipfile.ZipFile(server) as archive:
+        names = sorted(
+            name for name in archive.namelist()
+            if name.startswith(prefix) and name.endswith(".json") and not name.endswith("/")
+        )
+        tags = {
+            f"minecraft:{name[len(prefix):-5]}": archive.read(name).decode("utf-8")
+            for name in names
+        }
+    # These heightmap/fluid-flow tags are newer than 1.16.5. Keep the
+    # prototype's LegacyTerrain materials usable without pretending the old
+    # server jar contains the newer tag definitions.
+    prototype_solids = [
+        "minecraft:bedrock",
+        "minecraft:stone",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:sand",
+        "minecraft:oak_planks",
+        "minecraft:bricks",
+    ]
+    tags.setdefault(
+        "minecraft:blocks_motion_in_heightmap",
+        json.dumps({"values": prototype_solids}, separators=(",", ":")),
+    )
+    tags.setdefault(
+        "minecraft:blocks_motion_in_heightmap_no_leaves",
+        json.dumps({"values": prototype_solids}, separators=(",", ":")),
+    )
+    tags.setdefault(
+        "minecraft:blocks_fluid_flow",
+        json.dumps({"values": []}, separators=(",", ":")),
+    )
+    missing = sorted(required - tags.keys())
+    if missing:
+        raise ValueError("Could not prepare required Horizon block tags: " + ", ".join(missing))
+    return tags
+
+
+def run_blocks_datagen(server: Path, output: Path, java: str | None = None) -> Path:
+    """Run Mojang's own 1.16.5 data generator and return reports/blocks.json."""
+    executable = java or shutil.which("java")
+    if executable is None:
+        java_home = __import__("os").environ.get("JAVA_HOME")
+        if java_home:
+            candidate = Path(java_home) / "bin" / ("java.exe" if sys.platform == "win32" else "java")
+            if candidate.is_file():
+                executable = str(candidate)
+    if executable is None:
+        raise FileNotFoundError(
+            "Java 8 is required to generate the official 1.16.5 block registry report. "
+            "Install a Java 8 runtime or pass --java PATH_TO_JAVA."
+        )
+    datagen = output / "datagen"
+    datagen.mkdir(parents=True, exist_ok=True)
+    server = server.expanduser().resolve()
+    log = datagen / "datagen.log"
+    # 1.16.5 predates the bundler launcher. Its server JAR is the classpath
+    # root, so invoke the data generator directly instead of using -jar and
+    # -DbundlerMainClass (the latter is for newer bundled server JARs).
+    command = [
+        executable,
+        "-cp",
+        str(server),
+        "net.minecraft.data.Main",
+        "--reports",
+        "--output",
+        "out",
+    ]
+    with log.open("w", encoding="utf-8") as stream:
+        subprocess.run(
+            command,
+            cwd=datagen,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+    report = datagen / "out" / "reports" / "blocks.json"
+    if not report.is_file():
+        raise FileNotFoundError(
+            f"Minecraft 1.16.5 DataGenerator finished without {report}; see {log}"
+        )
+    return report
+
+
+def stage(client: Path, server: Path, manifest_path: Path, output: Path,
+          blocks_report: Path | None = None, java: str | None = None) -> dict:
+    manifest = validate_manifest(manifest_path)
+    verify_jar(client, CLIENT_SHA1, "client")
+    verify_jar(server, SERVER_SHA1, "server")
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Output directory must be empty: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    # Merge both namespaces into the runtime resource root. The ZIP members
+    # already start with assets/ and data/, exactly as Assets::load expects.
+    assets_dir = output
+    data_dir = output
+    with zipfile.ZipFile(client) as archive:
+        asset_members = [n for n in archive.namelist()
+                         if n.startswith("assets/minecraft/") and not n.endswith("/")]
+        asset_count = safe_extract(archive, asset_members, assets_dir)
+    with zipfile.ZipFile(server) as archive:
+        # Vanilla worldgen JSON, tags, dimensions, loot tables and other data-driven inputs.
+        data_members = [n for n in archive.namelist()
+                        if n.startswith("data/minecraft/") and not n.endswith("/")]
+        if not data_members:
+            raise ValueError(
+                "The 1.16.5 server jar contains no data/minecraft resources; "
+                "the bundled-jar layout may have changed and must be handled explicitly."
+            )
+        data_count = safe_extract(archive, data_members, data_dir)
+    world_inputs = validate_runtime_inputs(output)
+    block_tags = export_block_tags(server)
+    (output / "block-tags.json").write_text(
+        json.dumps(block_tags, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    report_path = (
+        blocks_report.expanduser().resolve()
+        if blocks_report is not None
+        else run_blocks_datagen(server, output, java)
+    )
+    if not report_path.is_file():
+        raise FileNotFoundError(f"Missing 1.16.5 DataGenerator blocks report: {report_path}")
+    exporter = Path(__file__).with_name("export_1_16_5_registry.py")
+    facts_path = output / "facts.json"
+    subprocess.run(
+        [sys.executable, str(exporter), str(report_path), "--out", str(facts_path)],
+        check=True,
+    )
+    registry = {
+        "source_report": str(report_path),
+        "facts_file": "facts.json",
+        "status": "block-state-identities-exported",
+    }
+
+    missing_work = [
+        "1.16.5 biome registry and biome-source adapter",
+        "1.16.5 noise settings, density functions, carvers and feature placement adapter",
+        "1.16.5 chunk section layout, heightmaps, lighting and spawn integration",
+        "1.16.5 save/load NBT and data-fixer compatibility",
+    ]
+    if registry is None:
+        missing_work.insert(0, "1.16.5 block-state and registry facts exporter")
+
+    result = {
+        "format": 1,
+        "minecraft_version": VERSION,
+        "data_version": DATA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "java_major": 8,
+        "source": "official-launcher-install",
+        "client_sha1": CLIENT_SHA1,
+        "server_sha1": SERVER_SHA1,
+        "version_json_sha1": VERSION_JSON_SHA1,
+        "asset_index": manifest.get("assetIndex", {}).get("id"),
+        "extracted_client_asset_files": asset_count,
+        "extracted_server_data_files": data_count,
+        "validated_world_inputs": world_inputs,
+        "block_tags_file": "block-tags.json",
+        "block_tags_count": len(block_tags),
+        "status": ("inputs-registry-and-tags-staged-not-playable-resource-bundle"
+                   if registry else "inputs-and-tags-staged-not-playable-resource-bundle"),
+        "block_registry": registry,
+        "missing_work": missing_work,
+    }
+    resource_manifest = {
+        "schema": 1,
+        "minecraft": VERSION,
+        "data_version": DATA_VERSION,
+        "resource_pack_format": 6,
+        "data_pack_format": 6,
+        "bundle_kind": "prototype-1.16.5",
+        "status": "registry-only-not-playable",
+        "client_jar_sha1": CLIENT_SHA1,
+        "version_json_sha1": VERSION_JSON_SHA1,
+        "facts_file": "facts.json",
+        "block_tags_file": "block-tags.json",
+        "block_registry": "official-1.16.5-data-generator",
+        "source": "tools/prepare_1_16_5.py",
+        "limitations": [
+            "prototype registry, tags, validated 1.16.5 biome/dimension JSON and client assets only",
+            "not a complete 1.16.5 gameplay or world-data port",
+            "biome-source/noise generation, lighting facts, block behaviour exports, data fixing and save compatibility remain incomplete",
+        ],
+    }
+    (output / "horizon-resources.json").write_text(
+        json.dumps(resource_manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (output / "horizon-1.16.5-inputs.json").write_text(
+        json.dumps(result, indent=2) + "\n", encoding="utf-8"
+    )
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--minecraft-dir", type=Path,
+                        help="Minecraft game directory (default: ~/.minecraft or platform equivalent)")
+    parser.add_argument("--client-jar", type=Path,
+                        help="override the official launcher's 1.16.5 client jar")
+    parser.add_argument("--server-jar", type=Path,
+                        help="optional local official 1.16.5 server jar (downloaded automatically if omitted)")
+    parser.add_argument("--manifest", type=Path,
+                        help="override versions/1.16.5/1.16.5.json")
+    parser.add_argument("--blocks-report", type=Path,
+                        help="reuse an existing official 1.16.5 DataGenerator reports/blocks.json")
+    parser.add_argument("--java", help="Java 8 executable for the data generator (default: PATH or JAVA_HOME)")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="new/empty directory for staged input data")
+    args = parser.parse_args()
+    if args.minecraft_dir:
+        game_dir = args.minecraft_dir.expanduser()
+    elif sys.platform == "win32":
+        import os
+        game_dir = Path(os.environ.get("APPDATA", Path.home())) / ".minecraft"
+    elif sys.platform == "darwin":
+        game_dir = Path.home() / "Library" / "Application Support" / "minecraft"
+    else:
+        game_dir = Path.home() / ".minecraft"
+    manifest = args.manifest or game_dir / "versions" / VERSION / f"{VERSION}.json"
+    client = args.client_jar or game_dir / "versions" / VERSION / f"{VERSION}.jar"
+    try:
+        if args.server_jar:
+            server = args.server_jar.expanduser()
+            result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report, args.java)
+        else:
+            # This is a developer-only preparation step; users testing a packaged build
+            # do not need Python, the server jar, or a Minecraft server running.
+            with tempfile.TemporaryDirectory(prefix="horizon-1.16.5-") as temp_dir:
+                server = Path(temp_dir) / "minecraft_server.1.16.5.jar"
+                print(f"Downloading official Minecraft {VERSION} data jar...")
+                urllib.request.urlretrieve(SERVER_URL, server)
+                result = stage(client, server, manifest.expanduser(), args.out.expanduser(), args.blocks_report, args.java)
+    except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        print(f"1.16.5 resource staging failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2))
+    print("\nStaging complete. This is not yet a playable Horizon resource bundle.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

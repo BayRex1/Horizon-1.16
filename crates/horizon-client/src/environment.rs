@@ -148,14 +148,31 @@ impl Environment {
     }
     /// A dimension's base attributes, optionally driven by the day timeline.
     pub fn load_dimension(root: &Path, dimension: &str, day_cycle: bool) -> Result<Self> {
+        // 1.16.5 predates the data-driven day timeline. An absent timeline
+        // means the vanilla 24,000-tick cycle with no attribute tracks.
         let timeline: Value = if day_cycle {
-            serde_json::from_slice(&fs::read(root.join("data/minecraft/timeline/day.json"))?)?
+            let path = root.join("data/minecraft/timeline/day.json");
+            match fs::read(path) {
+                Ok(bytes) => serde_json::from_slice(&bytes)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::json!({"period_ticks": 24000, "tracks": {}})
+                }
+                Err(error) => return Err(error.into()),
+            }
         } else {
             serde_json::json!({"period_ticks": 24000, "tracks": {}})
         };
-        let dimension: Value = serde_json::from_slice(&fs::read(
-            root.join(format!("data/minecraft/dimension_type/{dimension}.json")),
-        )?)?;
+        let dimension_path = root.join(format!("data/minecraft/dimension_type/{dimension}.json"));
+        let dimension_data = match fs::read(dimension_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Keep the prototype usable with a minimal bundle that has no
+                // dimension JSON yet; the Overworld is the default dimension.
+                serde_json::json!({"has_skylight": dimension != "the_nether"})
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let dimension: Value = dimension_data;
         let mut tracks = HashMap::new();
         for (name, track) in timeline["tracks"].as_object().ok_or("invalid timeline")? {
             let easing = match &track["ease"] {
@@ -203,6 +220,15 @@ impl Environment {
             "minecraft:gameplay/sky_light_level".into(),
             [15.0, 0.0, 0.0, 0.0],
         );
+        // Legacy dimension_type JSON stores has_skylight directly instead of
+        // the modern visual/sky_light_factor attribute.
+        if !dimension["attributes"].is_object() {
+            let has_skylight = dimension["has_skylight"].as_bool().unwrap_or(true);
+            base.insert(
+                "minecraft:visual/sky_light_factor".into(),
+                [if has_skylight { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            );
+        }
         for (k, v) in dimension["attributes"].as_object().into_iter().flatten() {
             if let Some(v) = parse_value(v) {
                 base.insert(k.clone(), v);
@@ -387,5 +413,35 @@ pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
                 s[3],
             ],
         );
+    }
+}
+
+#[cfg(test)]
+mod legacy_environment_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_dimension_json_and_missing_day_timeline_load() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-legacy-environment-{}", std::process::id()));
+        let dimensions = root.join("data/minecraft/dimension_type");
+        fs::create_dir_all(&dimensions).unwrap();
+        fs::write(
+            dimensions.join("overworld.json"),
+            r#"{"has_skylight":true,"ambient_light":0.0}"#,
+        )
+        .unwrap();
+        fs::write(
+            dimensions.join("the_nether.json"),
+            r#"{"has_skylight":false,"ambient_light":0.1}"#,
+        )
+        .unwrap();
+
+        let overworld = Environment::load(&root).unwrap();
+        let nether = Environment::load_dimension(&root, "the_nether", false).unwrap();
+        assert_eq!(overworld.sample(6000, None, None).sky_light_factor, 1.0);
+        assert_eq!(nether.sample(6000, None, None).sky_light_factor, 0.0);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

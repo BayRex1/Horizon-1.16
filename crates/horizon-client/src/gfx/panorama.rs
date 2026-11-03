@@ -1,7 +1,10 @@
 //! Vanilla 26.3's CubeMapTexture and CubeMap, separate from the pixel-filtered GUI atlas.
 use crate::{Result, hud::decode};
 use glam::Mat4;
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use wgpu::util::DeviceExt;
 
 /// Native cube order: +X, -X, +Y, -Y, +Z, -Z (CubeMapTexture.SUFFIXES).
@@ -15,7 +18,23 @@ pub struct Faces {
 
 impl Faces {
     pub fn load(root: &Path) -> Self {
-        Self::try_load(root).unwrap_or_else(|error| {
+        Self::load_over(root, root)
+    }
+
+    /// Load the panorama from the active resource pack, falling back to the
+    /// game's vanilla resources when the pack does not override all six faces.
+    pub fn load_over(root: &Path, defaults: &Path) -> Self {
+        let loaded = Self::try_load(root).or_else(|pack_error| {
+            if root == defaults {
+                Err(pack_error)
+            } else {
+                Self::try_load(defaults).map_err(|default_error| {
+                    format!("pack panorama unavailable ({pack_error}); vanilla panorama unavailable ({default_error})")
+                        .into()
+                })
+            }
+        });
+        loaded.unwrap_or_else(|error| {
             log::warn!("Horizon: title panorama unavailable ({error})");
             Self {
                 size: 1,
@@ -25,11 +44,10 @@ impl Faces {
     }
 
     fn try_load(root: &Path) -> Result<Self> {
-        let background = root.join("assets/minecraft/textures/gui/title/background");
         let mut size = 0;
         let mut pixels = Vec::new();
         for face in FACE_ORDER {
-            let path = background.join(format!("panorama_{face}.png"));
+            let path = panorama_face_path(root, face)?;
             let (w, h, data) = decode(&path)?;
             if w != h || (size != 0 && w != size) {
                 return Err(format!(
@@ -46,6 +64,65 @@ impl Faces {
         }
         Ok(Self { size, pixels })
     }
+}
+
+/// Find a panorama face in an unpacked resource pack or Minecraft's
+/// content-addressed asset store (assets/indexes + assets/objects).
+fn panorama_face_path(root: &Path, face: u8) -> Result<PathBuf> {
+    let relative = format!("minecraft/textures/gui/title/background/panorama_{face}.png");
+    let direct = root.join("assets").join(&relative);
+    if direct.is_file() {
+        return Ok(direct);
+    }
+    let indexes = root.join("assets/indexes");
+    let entries = fs::read_dir(&indexes).map_err(|error| {
+        format!(
+            "missing panorama {face}: neither {} nor an asset index is available ({error})",
+            direct.display()
+        )
+    })?;
+    let mut files: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+    files.sort();
+    for index_path in files
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+    {
+        let Ok(bytes) = fs::read(&index_path) else {
+            continue;
+        };
+        let Ok(index) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(object) = index
+            .get("objects")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|objects| {
+                objects.get(&relative).or_else(|| {
+                    objects.get(&format!(
+                        "textures/gui/title/background/panorama_{face}.png"
+                    ))
+                })
+            })
+        else {
+            continue;
+        };
+        let Some(hash) = object.get("hash").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if hash.len() != 40 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let path = root.join("assets/objects").join(&hash[..2]).join(hash);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "missing panorama {face}: not found unpacked at {} or in {}",
+        direct.display(),
+        indexes.display()
+    )
+    .into())
 }
 
 fn projection(width: u32, height: u32, yaw: f32, pitch: f32) -> Mat4 {
@@ -344,6 +421,15 @@ mod tests {
         fs::remove_file(f.background().join("panorama_5.png")).unwrap();
         assert!(Faces::try_load(&f.0).is_err());
         assert_eq!(Faces::load(&f.0).size, 1);
+    }
+
+    #[test]
+    fn resource_pack_panorama_falls_back_to_vanilla_root() {
+        let vanilla = Fixture::new(2);
+        let pack = vanilla.0.join("pack-without-panorama");
+        let faces = Faces::load_over(&pack, &vanilla.0);
+        assert_eq!(faces.size, 2);
+        assert_eq!(faces.pixels.len(), 6 * 2 * 2 * 4);
     }
 
     #[test]

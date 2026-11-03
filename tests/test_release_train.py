@@ -198,7 +198,8 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertIn("### Known issues\n- Sound cuts out after an hour.", body)
         self.assertNotIn("#7", body)
         self.assertNotIn("#8", body)
-        self.assertIn("Thanks to @cosmic.", body)
+        self.assertIn("Thanks to @cosmic", body)
+        self.assertIn("@ludovic111", body)
         self.assertLess(body.index("### New"), body.index("### Fixed"))
         title, _ = train.notes("game", "v2026.10.15.2", [pr(9, "Horizon's mark", labels=["feature"]),
                                                          pr(10, "Game menus", labels=["feature"])], [])
@@ -231,7 +232,7 @@ class ReleaseTrainTests(unittest.TestCase):
         # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
         _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])
         self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
-        self.assertIn('href="https://github.com/ludovic111/horizon/releases?q=launcher&amp;expanded=true"', body)
+        self.assertIn(f'href="https://github.com/{train.REPO}/releases?q=launcher&amp;expanded=true"', body)
         self.assertNotIn("\n", train.PLAYERS, "one line: one HTML block, which ends at the blank line after it")
         self.assertEqual(body.count("playhorizon.dev"), 1, "said once, at the top")
         _, body = train.notes("game", "v0.2.51", [], [])

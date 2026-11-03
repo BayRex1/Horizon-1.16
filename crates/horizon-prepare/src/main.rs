@@ -17,6 +17,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare compile-exporters [--root PATH]
+       horizon-prepare verify-1.16.5 [--resources-dir PATH] [--root PATH]\n       horizon-prepare prepare-1.16.5 [--resources-dir PATH] [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
        horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
@@ -28,13 +29,13 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
                         (default: HORIZON_SERVER_JAR, or the copy imported before)
   --minecraft-dir PATH  The official launcher's game directory with your installed copy
                         (default: HORIZON_MINECRAFT_DIR, or the launcher's own)
-  --root PATH           The Horizon folder to prepare (default: the folder this program is
+  --resources-dir PATH  Resource folder to verify (default: %APPDATA%\\.minecraft\\horizon-resources on Windows)\n  --root PATH           The Horizon folder to prepare (default: the folder this program is
                         in, else the nearest folder above the current one with research-lock.json)
 
 Needs Minecraft played once from the official launcher, and Java of the version
 research-lock.json pins. Releases use a runtime; development or changed exporters need a JDK.
 compile-exporters builds and validates a release bundle from the already imported pinned jars.
-The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.\n\nverify-1.16.5 validates the vanilla client JAR, version JSON and every indexed asset\nwithout requiring a server JAR, Java, or the legacy exporters.\nIt writes a verification report only; it does not prepare runtime world data.\n\nprepare-1.16.5 stages a registry-only prototype from the\nbundled legacy block-state reference. It is not yet a complete game resource\nbundle and cannot start a world.
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
@@ -62,6 +63,18 @@ fn default_root() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+fn default_resources_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|appdata| appdata.join(".minecraft").join("horizon-resources"))
+    } else {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".minecraft").join("horizon-resources"))
+    }
+}
+
 fn main() -> ExitCode {
     let mut options = horizon_prepare::Options {
         root: PathBuf::new(),
@@ -71,11 +84,21 @@ fn main() -> ExitCode {
         java_home: None,
     };
     let mut root = None;
+    let mut resources_dir = None;
     let mut args = std::env::args_os().skip(1).peekable();
     let assets = args.next_if(|a| {
         matches!(
             a.to_str(),
-            Some("sounds" | "panorama" | "fonts" | "packs" | "languages" | "compile-exporters")
+            Some(
+                "sounds"
+                    | "panorama"
+                    | "fonts"
+                    | "packs"
+                    | "languages"
+                    | "compile-exporters"
+                    | "verify-1.16.5"
+                    | "prepare-1.16.5"
+            )
         )
     });
     while let Some(arg) = args.next() {
@@ -106,6 +129,14 @@ fn main() -> ExitCode {
             "--server-jar" => value("--server-jar").map(|v| options.server_jar = Some(v)),
             "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
             "--root" => value("--root").map(|v| root = Some(v)),
+            "--resources-dir"
+                if matches!(
+                    assets.as_deref().and_then(|a| a.to_str()),
+                    Some("verify-1.16.5" | "prepare-1.16.5")
+                ) =>
+            {
+                value("--resources-dir").map(|v| resources_dir = Some(v))
+            }
             "-h" | "--help" => {
                 print!("{HELP}");
                 return ExitCode::SUCCESS;
@@ -121,7 +152,15 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let Some(root) = root.or_else(default_root) else {
+    let is_client_verification = matches!(
+        assets.as_deref().and_then(|a| a.to_str()),
+        Some("verify-1.16.5" | "prepare-1.16.5")
+    );
+    let Some(root) = root.or_else(default_root).or_else(|| {
+        is_client_verification
+            .then(|| resources_dir.clone().or_else(default_resources_dir))
+            .flatten()
+    }) else {
         eprintln!(
             "horizon-prepare: error: no research-lock.json beside this program or above the current folder; pass --root"
         );
@@ -134,24 +173,50 @@ fn main() -> ExitCode {
         let _ = out.flush();
     };
     let result = match assets.as_deref().and_then(|a| a.to_str()) {
-        Some("compile-exporters") => horizon_prepare::compile_exporters(&options, &log)
-            .inspect(|dir| log(&dir.display().to_string())),
+        Some("verify-1.16.5") => resources_dir
+            .or_else(default_resources_dir)
+            .ok_or_else(|| {
+                "could not determine the shared Minecraft resource folder; pass --resources-dir PATH"
+                    .to_string()
+            })
+            .and_then(|dir| {
+                horizon_prepare::client_only::verify_1_16_5(&dir, &options.root, &log).map(|_| ())
+            }),
+        Some("prepare-1.16.5") => resources_dir
+            .or_else(default_resources_dir)
+            .ok_or_else(|| {
+                "could not determine the shared Minecraft resource folder; pass --resources-dir PATH"
+                    .to_string()
+            })
+            .and_then(|dir| {
+                horizon_prepare::legacy_1_16_5::prepare(&dir, &options.root, &log).map(|_| ())
+            }),
+        Some("compile-exporters") => {
+            horizon_prepare::compile_exporters(&options, &log).map(|dir| {
+                log(&dir.display().to_string());
+            })
+        }
         Some("sounds") => {
             horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
+                .map(|_| ())
         }
         Some("panorama") => {
             horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log)
+                .map(|_| ())
         }
         Some("fonts") => {
             horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log)
+                .map(|_| ())
         }
         Some("packs") => {
             horizon_prepare::packs(&options.root, options.minecraft_dir.as_deref(), &log)
+                .map(|_| ())
         }
         Some("languages") => {
             horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log)
+                .map(|_| ())
         }
-        _ => horizon_prepare::prepare(&options, &log),
+        _ => horizon_prepare::prepare(&options, &log).map(|_| ()),
     };
     match result {
         Ok(_) => ExitCode::SUCCESS,
