@@ -103,6 +103,56 @@ fn sample(map: &[u32], temperature: f32, downfall: f32, fallback: u32) -> u32 {
     let index = (y << 8 | x) as usize;
     map.get(index).copied().unwrap_or(fallback)
 }
+fn spawn_data(v: &Value, attributes: &Value) -> (
+    HashMap<String, Vec<SpawnEntry>>,
+    HashMap<String, crate::mobs::spawn_selection::SpawnCost>,
+) {
+    let mut spawns = HashMap::new();
+    let natural = &attributes["minecraft:gameplay/natural_mob_spawns"];
+    // Modern data-driven biome attributes wrap the value in an optional overlay.
+    let natural = if natural["argument"].is_object() {
+        &natural["argument"]
+    } else {
+        natural
+    };
+    if let Some(categories) = natural["spawns_by_category"].as_object() {
+        for (category, entries) in categories {
+            spawns.insert(
+                category.clone(),
+                crate::mobs::spawn_selection::parse_entries(entries),
+            );
+        }
+        return (
+            spawns,
+            crate::mobs::spawn_selection::parse_costs(&natural["spawn_costs"]),
+        );
+    }
+
+    // Minecraft 1.16.5 stores mob lists directly under "spawners" and uses
+    // minCount/maxCount instead of the modern "count" provider.
+    for (category, entries) in v["spawners"].as_object().into_iter().flatten() {
+        let parsed = entries
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                Some(SpawnEntry {
+                    entity: entry["type"].as_str()?.to_owned(),
+                    weight: entry["weight"].as_u64().unwrap_or(1) as u32,
+                    min: entry["minCount"].as_u64().unwrap_or(1) as u32,
+                    max: entry["maxCount"].as_u64().unwrap_or(1) as u32,
+                    constant: false,
+                })
+            })
+            .collect::<Vec<_>>();
+        spawns.insert(category.clone(), parsed);
+    }
+    (
+        spawns,
+        crate::mobs::spawn_selection::parse_costs(&v["spawn_costs"]),
+    )
+}
+
 impl Biomes {
     pub fn load(root: &Path) -> Result<Self> {
         let grass = colormap(root, "grass")?;
@@ -139,23 +189,10 @@ impl Biomes {
                 Some("swamp") => GrassModifier::Swamp,
                 _ => GrassModifier::None,
             };
-            let mut spawns: HashMap<String, Vec<SpawnEntry>> = HashMap::new();
-            let natural = &attributes["minecraft:gameplay/natural_mob_spawns"];
-            // A modifier object ({argument, modifier: overlay}) or the plain value;
-            // the overlay over the dimension's empty default is the biome's value.
-            let natural = if natural["argument"].is_object() {
-                &natural["argument"]
-            } else {
-                natural
-            };
-            let categories = &natural["spawns_by_category"];
-            for (category, entries) in categories.as_object().into_iter().flatten() {
-                let list = crate::mobs::spawn_selection::parse_entries(entries);
-                spawns.insert(category.clone(), list);
-            }
+            let (spawns, spawn_costs) = spawn_data(&v, attributes);
             list.push(BiomeInfo {
                 spawns,
-                spawn_costs: crate::mobs::spawn_selection::parse_costs(&natural["spawn_costs"]),
+                spawn_costs,
                 creature_probability:
                     attributes["minecraft:gameplay/creature_world_gen_spawn_probability"]
                         .as_f64()
@@ -299,6 +336,31 @@ mod blend_tests {
         // The kernel sums to 16 per axis whatever the offset.
         assert!((weights[0].1 - 16f64.powi(3)).abs() < 1e-9);
         assert_eq!(blend_rgb(&weights, |_| [0.2, 0.4, 0.6]), [0.2, 0.4, 0.6]);
+    }
+
+    #[test]
+    fn legacy_1165_spawners_are_loaded_from_the_old_schema() {
+        let biome = serde_json::json!({
+            "spawners": {
+                "monster": [
+                    {"type": "minecraft:zombie", "weight": 100, "minCount": 2, "maxCount": 4}
+                ],
+                "creature": [
+                    {"type": "minecraft:pig", "weight": 10, "minCount": 1, "maxCount": 3}
+                ]
+            },
+            "spawn_costs": {
+                "minecraft:zombie": {"energy_budget": 1.0, "charge": 0.5}
+            }
+        });
+        let (spawns, costs) = spawn_data(&biome, &biome["attributes"]);
+        let zombie = &spawns["monster"][0];
+        assert_eq!(zombie.entity, "minecraft:zombie");
+        assert_eq!((zombie.weight, zombie.min, zombie.max), (100, 2, 4));
+        assert!(!zombie.constant);
+        assert_eq!(spawns["creature"][0].entity, "minecraft:pig");
+        assert_eq!(costs["minecraft:zombie"].energy_budget, 1.0);
+        assert_eq!(costs["minecraft:zombie"].charge, 0.5);
     }
 
     #[test]
