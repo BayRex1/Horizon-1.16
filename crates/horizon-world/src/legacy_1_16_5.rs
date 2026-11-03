@@ -1359,10 +1359,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            section.get(&crate::nbt::JavaString::from("data")).and_then(|tag| match tag {
-                Tag::LongArray(words) => Some(words.len()),
-                _ => None,
-            }),
+            section
+                .get(&crate::nbt::JavaString::from("data"))
+                .and_then(|tag| match tag {
+                    Tag::LongArray(words) => Some(words.len()),
+                    _ => None,
+                }),
             Some(1)
         );
         assert!(runtime_biome_section(&legacy, 17, &names).is_err());
