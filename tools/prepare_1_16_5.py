@@ -98,6 +98,47 @@ def safe_extract(archive: zipfile.ZipFile, members: list[str], destination: Path
     return count
 
 
+def validate_runtime_inputs(root: Path) -> dict[str, int]:
+    """Validate the real 1.16.5 biome/dimension/colormap inputs used by the client."""
+    required_json = (
+        "data/minecraft/worldgen/biome/plains.json",
+        "data/minecraft/dimension_type/overworld.json",
+    )
+    for relative in required_json:
+        path = root / relative
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Official 1.16.5 data is missing {relative}; refusing to stage an incomplete bundle."
+            )
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid 1.16.5 JSON resource {relative}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Expected a JSON object in {relative}")
+
+    biome_dir = root / "data/minecraft/worldgen/biome"
+    biomes = sorted(biome_dir.glob("*.json"))
+    if len(biomes) < 1:
+        raise ValueError("The 1.16.5 biome registry is empty after extraction.")
+
+    colormaps = {}
+    for name in ("grass", "foliage"):
+        relative = f"assets/minecraft/textures/colormap/{name}.png"
+        path = root / relative
+        if not path.is_file():
+            raise FileNotFoundError(f"Official 1.16.5 client assets are missing {relative}.")
+        header = path.read_bytes()[:24]
+        if len(header) != 24 or header[:8] != b"\\x89PNG\\r\\n\\x1a\\n" or header[12:16] != b"IHDR":
+            raise ValueError(f"Invalid PNG colormap: {relative}")
+        width = int.from_bytes(header[16:20], "big")
+        height = int.from_bytes(header[20:24], "big")
+        if (width, height) != (256, 256):
+            raise ValueError(f"{relative} must be 256x256, got {width}x{height}")
+        colormaps[name] = width * height
+    return {"biomes": len(biomes), "colormap_pixels": sum(colormaps.values())}
+
+
 def export_block_tags(server: Path) -> dict[str, str]:
     """Export vanilla 1.16.5 block tags in the exact bundle shape Assets::load reads."""
     prefix = "data/minecraft/tags/block/"
@@ -217,6 +258,7 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
                 "the bundled-jar layout may have changed and must be handled explicitly."
             )
         data_count = safe_extract(archive, data_members, data_dir)
+    world_inputs = validate_runtime_inputs(output)
     block_tags = export_block_tags(server)
     (output / "block-tags.json").write_text(
         json.dumps(block_tags, ensure_ascii=False, separators=(",", ":")) + "\n",
@@ -264,6 +306,7 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         "asset_index": manifest.get("assetIndex", {}).get("id"),
         "extracted_client_asset_files": asset_count,
         "extracted_server_data_files": data_count,
+        "validated_world_inputs": world_inputs,
         "block_tags_file": "block-tags.json",
         "block_tags_count": len(block_tags),
         "status": ("inputs-registry-and-tags-staged-not-playable-resource-bundle"
@@ -278,6 +321,7 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         "resource_pack_format": 6,
         "data_pack_format": 6,
         "bundle_kind": "prototype-1.16.5",
+        "status": "registry-only-not-playable",
         "client_jar_sha1": CLIENT_SHA1,
         "version_json_sha1": VERSION_JSON_SHA1,
         "facts_file": "facts.json",
@@ -285,9 +329,9 @@ def stage(client: Path, server: Path, manifest_path: Path, output: Path,
         "block_registry": "official-1.16.5-data-generator",
         "source": "tools/prepare_1_16_5.py",
         "limitations": [
-            "prototype registry, tags and client assets only",
+            "prototype registry, tags, validated 1.16.5 biome/dimension JSON and client assets only",
             "not a complete 1.16.5 gameplay or world-data port",
-            "biome generation, lighting, data fixing and save compatibility remain incomplete",
+            "biome-source/noise generation, lighting facts, block behaviour exports, data fixing and save compatibility remain incomplete",
         ],
     }
     (output / "horizon-resources.json").write_text(
