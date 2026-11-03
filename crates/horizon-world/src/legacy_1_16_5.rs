@@ -1301,6 +1301,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_biome_volume_maps_to_runtime_sections_in_vanilla_order() {
+        use crate::nbt::Tag;
+        let mut legacy = vec![1_i32; 1024];
+        // Quart cell (qy=0, qz=0, qx=0) is desert; the next cell is plains.
+        legacy[0] = 2;
+        let names = std::collections::HashMap::from([
+            (1_i32, "minecraft:plains".to_owned()),
+            (2_i32, "minecraft:desert".to_owned()),
+        ]);
+        let Tag::Compound(section) = runtime_biome_section(&legacy, 0, &names).unwrap() else {
+            panic!("runtime biome section must be a compound");
+        };
+        let Some(Tag::List(palette)) = section.get("palette") else {
+            panic!("runtime biome palette must exist");
+        };
+        assert_eq!(
+            palette,
+            &vec![
+                Tag::String(crate::nbt::JavaString::from("minecraft:desert")),
+                Tag::String(crate::nbt::JavaString::from("minecraft:plains")),
+            ]
+        );
+        assert_eq!(
+            section.get("data").and_then(|tag| match tag {
+                Tag::LongArray(words) => Some(words.len()),
+                _ => None,
+            }),
+            Some(1)
+        );
+        assert!(runtime_biome_section(&legacy, 17, &names).is_err());
+        assert!(runtime_biome_section(&legacy[..1023], 0, &names).is_err());
+    }
+
+    #[test]
     fn bootstrap_chunk_is_seeded_and_uses_1165_root_schema() {
         use crate::nbt::{self, Limits, Tag};
         let first = generate_bootstrap_chunk(1234, 0, 0);
