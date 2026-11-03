@@ -1348,7 +1348,7 @@ mod tests {
         let Tag::Compound(section) = runtime_biome_section(&legacy, 0, &names).unwrap() else {
             panic!("runtime biome section must be a compound");
         };
-        let Some(Tag::List(palette)) = section.get("palette") else {
+        let Some(Tag::List(palette)) = section.get(&crate::nbt::JavaString::from("palette")) else {
             panic!("runtime biome palette must exist");
         };
         assert_eq!(
@@ -1359,7 +1359,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            section.get("data").and_then(|tag| match tag {
+            section.get(&crate::nbt::JavaString::from("data")).and_then(|tag| match tag {
                 Tag::LongArray(words) => Some(words.len()),
                 _ => None,
             }),
