@@ -364,7 +364,7 @@ pub fn import_legacy_1_16_5(
                                     let biome_id = biomes.id(&format!("minecraft:{current_name}"));
                                     chunk.set_biome_cell(
                                         qx as i32,
-                                        qy + 16,
+                                        qy as i32 + 16,
                                         qz as i32,
                                         biome_id,
                                     );
