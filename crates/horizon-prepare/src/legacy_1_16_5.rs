@@ -1,10 +1,10 @@
 //! Builds the minimum runtime registry bundle for the 1.16.5 single-player prototype.
 //! This is intentionally separate from the pinned 26.3 Java exporter pipeline.
 use horizon_world::{
-    DATA_VERSION,
     legacy_1_16_5::{blocks, LegacyBlock, LegacyBlockProperty},
-    nbt::{JavaString, Limits, NamedTag, Tag, write_named},
+    nbt::{write_named, JavaString, Limits, NamedTag, Tag},
     registry::{BlockRegistry, BlockStateId},
+    DATA_VERSION,
 };
 use serde_json::{json, Value};
 use std::{
@@ -386,18 +386,14 @@ mod tests {
 
     #[test]
     fn cached_shape_tables_round_trip_with_canonical_identities() {
-        use horizon_world::{
-            collision::CachedCollisionRegistry,
-            registry::BlockTableFile,
-        };
+        use horizon_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
         let (bundle, _) = facts_bundle().unwrap();
-        let registry = BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes())
-            .unwrap();
+        let registry =
+            BlockRegistry::from_facts_json(bundle["facts"].to_string().as_bytes()).unwrap();
         let named = cached_shape_table(&registry).unwrap();
         let bytes = write_named(&named, Limits::tables()).unwrap();
         let file = BlockTableFile::read(&bytes, &registry).unwrap();
-        let cached =
-            CachedCollisionRegistry::from_table(file.table("collision").unwrap()).unwrap();
+        let cached = CachedCollisionRegistry::from_table(file.table("collision").unwrap()).unwrap();
         assert!(cached.has_canonical_identities());
         assert!(cached.cached_state_count() > 0);
         assert!(cached.cached_state_count() <= registry.len());
