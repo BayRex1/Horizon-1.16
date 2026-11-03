@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn generated_chunk_contains_the_sampled_legacy_terrain() {
         let terrain = LegacyTerrain {
-            noise: LegacySurfaceNoise1_16_5::from_seed(0x16_5),
+            noise: LegacySurfaceNoise1_16_5::from_seed(0x0165),
             air: 0,
             bedrock: 1,
             stone: 2,
