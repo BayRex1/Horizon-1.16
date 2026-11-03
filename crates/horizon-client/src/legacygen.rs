@@ -276,7 +276,7 @@ mod tests {
                 let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
                     .rev()
                     .find(|&y| density.is_solid(x, y, z) == Some(true))?;
-                (top >= 4).then_some((x, z, top as i32))
+                (top >= 5).then_some((x, z, top as i32))
             })
             .expect("seed should produce at least one solid surface column");
         let (x, z, top) = column;
