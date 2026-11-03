@@ -101,9 +101,10 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// Accept the native version's bundle, or the explicitly marked 1.16.5
-/// prototype bundle. A client-assets-only verification manifest is never enough:
-/// the legacy bundle must include the exported block registry and tag definitions.
+/// Accept the native version's bundle, or a fully staged 1.16.5 prototype.
+/// Registry-only and client-assets-only manifests are intentionally rejected:
+/// a legacy bundle must include gameplay/behaviour data, biome and dimension
+/// definitions, colormaps, and the cached shape tables used by world loading.
 fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<()> {
     let found = manifest["data_version"].as_i64();
     if found == Some(i64::from(DATA_VERSION)) {
@@ -140,7 +141,7 @@ fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<(
         .map(|version| version.to_string())
         .unwrap_or_else(|| "missing or invalid".to_owned());
     Err(invalid(&format!(
-        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). A 1.16.5 bundle is accepted only when it is marked prototype-1.16.5 and contains facts.json plus block-tags.json; client-assets-only verification is not sufficient.",
+        "resource data version mismatch: bundle has {found}, this build expects {DATA_VERSION} (Minecraft {}). A 1.16.5 bundle is accepted only when it is marked prototype-1.16.5 with status=playable and contains the block registry, gameplay/behaviour exports, overworld biome and dimension data, grass/foliage colormaps, and occlusion table. Registry-only preparation is not playable.",
         horizon_core::version::VERSION_ID
     )))
 }
