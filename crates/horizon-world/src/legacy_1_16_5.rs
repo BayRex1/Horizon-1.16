@@ -543,6 +543,11 @@ impl LegacyBlockSection {
         use crate::compression::invalid;
         use crate::nbt::Tag;
         let Some(Tag::List(entries)) = tag.get("Palette") else {
+            // 1.16.5 may store boundary sections containing only light data.
+            // They have a Y coordinate but no block palette.
+            if matches!(tag.get("Y"), Some(Tag::Byte(-1 | 16))) {
+                return Ok(Self::uniform(LegacyBlockState::new("air")));
+            }
             return Err(invalid("legacy section is missing Palette list"));
         };
         if entries.is_empty() {
@@ -557,9 +562,11 @@ impl LegacyBlockSection {
         }
         if palette.len() == 1 {
             if let Some(Tag::LongArray(words)) = tag.get("BlockStates") {
-                if !words.is_empty() {
+                // 4096 entries at the minimum four bits per entry occupy
+                // exactly 256 longs in the padded 1.16.5 representation.
+                if words.len() != 256 || words.iter().any(|word| *word != 0) {
                     return Err(invalid(
-                        "single-entry legacy palette must not contain BlockStates",
+                        "single-entry legacy palette has invalid BlockStates",
                     ));
                 }
             }
@@ -597,12 +604,11 @@ impl LegacyBlockSection {
             JavaString::from("Palette"),
             Tag::List(self.palette.iter().map(LegacyBlockState::to_nbt).collect()),
         );
-        if let Some(storage) = &self.storage {
-            map.insert(
-                JavaString::from("BlockStates"),
-                Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()),
-            );
-        }
+        let words = self.storage.as_ref().map_or_else(
+            || vec![0_i64; 256],
+            |storage| storage.words().iter().map(|word| *word as i64).collect(),
+        );
+        map.insert(JavaString::from("BlockStates"), Tag::LongArray(words));
         Tag::Compound(map)
     }
 
@@ -754,10 +760,12 @@ pub fn to_client_runtime_chunk(
         let Some(Tag::Byte(y)) = section.get_mut("Y") else {
             return Err(invalid("adapted legacy section is missing Y"));
         };
-        if !(0..SECTION_COUNT as i8).contains(y) {
-            return Err(invalid(format!("legacy section Y outside 0..15: {y}")));
+        // Preserve the light-only boundary sections at Y=-1 and Y=16.
+        // Both coordinates are inside the modern runtime's vertical range.
+        if !(-4..=19).contains(y) {
+            return Err(invalid(format!("legacy section Y outside runtime range: {y}")));
         }
-        // Keep absolute section coordinates; the decoder maps Y=0 to slot 4.
+        // Keep absolute section coordinates; Y=0 remains world Y=0.
     }
     Ok(NamedTag {
         name: adapted.name,
