@@ -261,11 +261,7 @@ mod tests {
         };
         let chunk_x = -2;
         let chunk_z = 3;
-        let density = LegacyTerrainDensityChunk1_16_5::generate(
-            &terrain.noise,
-            chunk_x,
-            chunk_z,
-        );
+        let density = LegacyTerrainDensityChunk1_16_5::generate(&terrain.noise, chunk_x, chunk_z);
         let chunk = terrain.generate(&density, chunk_x, chunk_z);
 
         assert_eq!(chunk.get(chunk_x * 16, 0, chunk_z * 16), terrain.bedrock);
