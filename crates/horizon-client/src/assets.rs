@@ -109,11 +109,20 @@ fn validate_resource_data_version(manifest: &Value, root: &Path) -> io::Result<(
     if found == Some(i64::from(DATA_VERSION)) {
         return Ok(());
     }
+    // Registry-only preparation is deliberately not launchable. The runtime
+    // needs the gameplay, behaviour, biome, environment and shape tables too;
+    // accepting the old marker here only moves the failure deeper into loading.
     let legacy_prototype = found == Some(2586)
         && manifest["minecraft"].as_str() == Some("1.16.5")
         && manifest["bundle_kind"].as_str() == Some("prototype-1.16.5")
+        && manifest["status"].as_str() == Some("playable")
         && root.join("facts.json").is_file()
-        && root.join("block-tags.json").is_file();
+        && root.join("block-tags.json").is_file()
+        && root.join("gameplay-facts.json").is_file()
+        && root.join("block-behaviours.json").is_file()
+        && root.join("biomes.json").is_file()
+        && root.join("environment.json").is_file()
+        && root.join("occlusion.nbt").is_file();
     if legacy_prototype {
         return Ok(());
     }
@@ -297,8 +306,12 @@ mod resource_version_tests {
         let legacy = serde_json::json!({
             "minecraft": "1.16.5",
             "data_version": 2586,
-            "bundle_kind": "prototype-1.16.5"
+            "bundle_kind": "prototype-1.16.5",
+            "status": "playable"
         });
+        for name in ["gameplay-facts.json", "block-behaviours.json", "biomes.json", "environment.json", "occlusion.nbt"] {
+            std::fs::write(root.join(name), "{}").unwrap();
+        }
         assert!(validate_resource_data_version(&legacy, &root).is_ok());
         let client_only = serde_json::json!({
             "minecraft": "1.16.5",
@@ -320,7 +333,8 @@ mod resource_version_tests {
         let legacy = serde_json::json!({
             "minecraft": "1.16.5",
             "data_version": 2586,
-            "bundle_kind": "prototype-1.16.5"
+            "bundle_kind": "prototype-1.16.5",
+            "status": "registry-only-not-playable"
         });
         let error = validate_resource_data_version(&legacy, &root).unwrap_err();
         assert!(error.to_string().contains("prototype-1.16.5"));
