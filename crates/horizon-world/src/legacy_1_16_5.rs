@@ -644,6 +644,25 @@ impl LegacyBlockSection {
     }
 }
 
+fn runtime_biome_name(legacy_name: &str) -> &str {
+    match legacy_name {
+        "mountains" => "windswept_hills",
+        "gravelly_mountains" => "windswept_gravelly_hills",
+        "modified_gravelly_mountains" => "modified_gravelly_hills",
+        "giant_tree_taiga" => "old_growth_pine_taiga",
+        "giant_spruce_taiga" => "old_growth_spruce_taiga",
+        "tall_birch_forest" | "tall_birch_hills" => "old_growth_birch_forest",
+        "shattered_savanna" | "shattered_savanna_plateau" => "windswept_savanna",
+        "snowy_tundra" => "snowy_plains",
+        "jungle_edge" | "modified_jungle_edge" => "sparse_jungle",
+        "stone_shore" => "stony_shore",
+        "snowy_mountains" => "snowy_slopes",
+        "wooded_badlands_plateau" | "modified_wooded_badlands_plateau" => "wooded_badlands",
+        "modified_badlands_plateau" => "badlands",
+        other => other,
+    }
+}
+
 /// Convert the 1.16.5 4x64x4 biome volume into one modern 4x4x4
 /// biome palette for a block section. Legacy ordering is
 /// (quart_y << 4) | (quart_z << 2) | quart_x.
@@ -769,7 +788,12 @@ pub fn to_runtime_chunk(root: &crate::nbt::NamedTag) -> std::io::Result<crate::c
     let biome_names = biomes()
         .map_err(|error| invalid(error.to_string()))?
         .into_iter()
-        .map(|biome| (biome.id as i32, format!("minecraft:{}", biome.name)))
+        .map(|biome| {
+            (
+                biome.id as i32,
+                format!("minecraft:{}", runtime_biome_name(&biome.name)),
+            )
+        })
         .collect::<std::collections::HashMap<_, _>>();
 
     let mut sections = Vec::with_capacity(legacy_sections.len());
