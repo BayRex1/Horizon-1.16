@@ -289,6 +289,51 @@ mod tests {
     }
 
     #[test]
+    fn lod_surface_matches_every_generated_chunk_column() {
+        let terrain = LegacyTerrain {
+            noise: LegacySurfaceNoise1_16_5::from_seed(0x1165),
+            air: 0,
+            bedrock: 1,
+            stone: 2,
+            dirt: 3,
+            grass: 4,
+            water: 5,
+            plains: 6,
+        };
+        let chunk_x = -3;
+        let chunk_z = 5;
+        let density = LegacyTerrainDensityChunk1_16_5::generate(&terrain.noise, chunk_x, chunk_z);
+        let chunk = terrain.generate(&density, chunk_x, chunk_z);
+        let mut worker = terrain.worker();
+
+        for z in 0..16 {
+            for x in 0..16 {
+                let top = (0..LEGACY_CHUNK_HEIGHT_1_16_5)
+                    .rev()
+                    .find(|&y| density.is_solid(x, y, z) == Some(true))
+                    .map_or(-1, |y| y as i16);
+                let world_x = chunk_x * 16 + x as i32;
+                let world_z = chunk_z * 16 + z as i32;
+
+                match terrain.lod_surface(&mut worker, world_x, world_z) {
+                    Some(surface) => {
+                        assert!(top >= 0);
+                        assert_eq!(surface.height, i32::from(top) + 1);
+                        assert_eq!(surface.state.0, terrain.grass);
+                        assert_eq!(chunk.get(world_x, i32::from(top), world_z), terrain.grass);
+                        assert_eq!(surface.biome, terrain.plains);
+                        assert_eq!(
+                            surface.water.map(|(height, state)| (height, state.0)),
+                            (top < 63).then_some((64, terrain.water))
+                        );
+                    }
+                    None => assert!(top < 0),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn legacy_density_chunk_uses_the_requested_chunk_coordinates() {
         let noise = LegacySurfaceNoise1_16_5::from_seed(1234);
         let chunk = LegacyTerrainDensityChunk1_16_5::generate(&noise, -3, 7);
